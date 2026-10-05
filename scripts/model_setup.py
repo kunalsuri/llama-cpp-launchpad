@@ -54,6 +54,13 @@ TRUSTED_AUTHORS = set(FETCH_AUTHORS) | {
 QUANT_ORDER = ["Q4_K_M", "Q4_K_S", "Q5_K_M", "Q4_0", "IQ4_XS", "Q3_K_M", "Q6_K", "Q8_0"]
 MIN_MODEL_BYTES = 300_000_000   # smaller .gguf files are adapters or draft heads, not models
 
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        try:
+            _s.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
 
 # --- Settings (read at call time so tests and users can change the environment) ----------
 def models_dir() -> Path:

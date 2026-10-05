@@ -60,7 +60,7 @@ class TestSourceAudit(unittest.TestCase):
                     self.assertNotIn(f.attr, banned_os, f"{path.name}:{node.lineno} calls os.{f.attr}()")
                 for kw in node.keywords:
                     self.assertNotEqual(kw.arg, "shell", f"{path.name}:{node.lineno} passes shell=")
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             for banned in ("pickle", "marshal", "base64", "socket", "ftplib", "smtplib", "telnetlib"):
                 self.assertNotRegex(text, rf"(?m)^\s*(import|from)\s+{banned}\b", f"{path.name} imports {banned}")
 
@@ -72,7 +72,7 @@ class TestSourceAudit(unittest.TestCase):
                         and isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess"):
                     self.assertTrue(node.args and not isinstance(node.args[0], ast.Constant),
                                     f"{path.name}:{node.lineno} subprocess must take an argument list, not a string")
-        text = (SCRIPTS / "model_setup.py").read_text()
+        text = (SCRIPTS / "model_setup.py").read_text(encoding="utf-8")
         for call in re.findall(r'run_cmd\(\[\s*"([^"]+)"', text):
             self.assertIn(call, ALLOWED_PROGRAMS, f"run_cmd starts unexpected program {call!r}")
 
@@ -85,7 +85,7 @@ class TestSourceAudit(unittest.TestCase):
                         self.assertIn(host, ALLOWED_HOSTS, f"{path.name}:{node.lineno} talks to {host}")
 
     def test_http_goes_through_one_function_and_sends_no_personal_data(self):
-        text = (SCRIPTS / "model_setup.py").read_text()
+        text = (SCRIPTS / "model_setup.py").read_text(encoding="utf-8")
         self.assertEqual(text.count("urllib.request.urlopen("), 2, "only http_get and fetch_file touch the network")
         # request headers are limited to a fixed user-agent and (for resume) a Range header
         headers = set(re.findall(r'headers\[?\s*[\"\']?(?:\[)?"(\w[\w-]*)"', text)) | set(re.findall(r'"(User-Agent|Range)"', text))
@@ -94,19 +94,19 @@ class TestSourceAudit(unittest.TestCase):
         self.assertNotRegex(text, r"urlopen\([^)]*data=", "no request bodies are sent")
 
     def test_no_reads_of_personal_files(self):
-        text = (SCRIPTS / "model_setup.py").read_text()
+        text = (SCRIPTS / "model_setup.py").read_text(encoding="utf-8")
         for needle in (".ssh", ".aws", ".gnupg", "Cookies", "Login Data", "id_rsa", ".netrc", "keychain", ".bash_history"):
             self.assertNotIn(needle, text)
 
     def test_writes_stay_in_models_dir_and_state_file(self):
-        text = (SCRIPTS / "model_setup.py").read_text()
+        text = (SCRIPTS / "model_setup.py").read_text(encoding="utf-8")
         writers = re.findall(r"(write_text|write_bytes|open\([^)]*[\"'][wa]b?[\"']|os\.replace|shutil\.(move|copy|rmtree)|os\.remove|unlink|rmdir)", text)
         found = {w[0].split("(")[0] for w in writers}
         self.assertFalse({"shutil.rmtree", "os.remove", "unlink", "rmdir"} & found, f"unexpected deletes: {found}")
 
     def test_no_obfuscation(self):
         for path in SOURCES:
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             self.assertNotRegex(text, r"\\x[0-9a-fA-F]{2}\\x[0-9a-fA-F]{2}\\x[0-9a-fA-F]{2}", f"{path.name}: hex-escaped strings")
             self.assertFalse(any(len(line) > 200 for line in text.splitlines()), f"{path.name}: very long line (obfuscation?)")
             self.assertNotIn("\x00", text)

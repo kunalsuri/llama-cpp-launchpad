@@ -27,7 +27,7 @@ GB = 1073741824
 
 
 def fixture(name):
-    return (FIX / name).read_text()
+    return (FIX / name).read_text(encoding="utf-8")
 
 
 class Base(unittest.TestCase):
@@ -96,7 +96,7 @@ class TestDatesAndState(Base):
         ms.state_set("a", 3)
         self.assertEqual(ms.state_get("a"), "3")
         self.assertEqual(ms.state_get("b"), "two words")
-        self.assertEqual(Path(os.environ["STATE_FILE"]).read_text().count("a="), 1)
+        self.assertEqual(Path(os.environ["STATE_FILE"]).read_text(encoding="utf-8").count("a="), 1)
 
     def test_state_is_data_never_executed(self):
         marker = self.tmp / "pwned"
@@ -107,7 +107,7 @@ class TestDatesAndState(Base):
     def test_state_strips_newlines_and_tolerates_junk(self):
         ms.state_set("multi", "x\ny")
         self.assertEqual(ms.state_get("multi"), "xy")
-        Path(os.environ["STATE_FILE"]).write_text("garbage line\n=\nk=v\n")
+        Path(os.environ["STATE_FILE"]).write_text("garbage line\n=\nk=v\n", encoding="utf-8")
         self.assertEqual(ms.state_get("k"), "v")
         self.assertEqual(ms.state_int("k"), 0)         # not a number: 0, no crash
 
@@ -597,7 +597,7 @@ class TestCli(Base):
             self.assertIn(needle, out)
         self.assertIn("Downloading Qwen3-4B-Q4_K_M.gguf", err)
         self.assertTrue((self.tmp / "models" / "Qwen3-4B-Q4_K_M.gguf").is_file())
-        state = Path(os.environ["STATE_FILE"]).read_text()
+        state = Path(os.environ["STATE_FILE"]).read_text(encoding="utf-8")
         for needle in ("installed=Qwen3-4B-Q4_K_M", "measured_tps=12", "last_checked=2026-10-05", "use=chat"):
             self.assertIn(needle, state)
         self.assertNotIn(str(Path.home()), state)
