@@ -145,15 +145,25 @@ def state_get(key: str) -> str:
 
 
 def state_set(key: str, value) -> None:
+    state_update({key: value})
+
+
+def state_update(mapping: dict) -> None:
     path = state_path()
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         lines = []
-    value = str(value).replace("\n", "").replace("\r", "")
-    lines = [ln for ln in lines if ln.partition("=")[0] != key] + [f"{key}={value}"]
+    cleaned = {k: str(v).replace("\n", "").replace("\r", "") for k, v in mapping.items()}
+    lines = [ln for ln in lines if ln.partition("=")[0] not in cleaned] + [f"{k}={v}" for k, v in cleaned.items()]
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    for _ in range(10):
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError:
+            pass
     os.replace(tmp, path)
 
 
@@ -166,9 +176,14 @@ def state_int(key: str) -> int:
 
 # --- Hardware (detection lives in hardware.py; this part saves and describes it) -------------
 def save_hw(hw: Hw) -> None:
-    for k, v in (("hw_ram_mb", hw.ram_mb), ("hw_vram_mb", hw.vram_mb), ("hw_kind", hw.gpu_kind),
-                 ("hw_usable", int(hw.gpu_usable)), ("hw_cores", hw.cores), ("hw_sig", hw.sig())):
-        state_set(k, v)
+    state_update({
+        "hw_ram_mb": hw.ram_mb,
+        "hw_vram_mb": hw.vram_mb,
+        "hw_kind": hw.gpu_kind,
+        "hw_usable": int(hw.gpu_usable),
+        "hw_cores": hw.cores,
+        "hw_sig": hw.sig(),
+    })
 
 
 def describe_hw(hw: Hw) -> str:
@@ -466,9 +481,11 @@ def check_model_speed(path: Path, size: int, hw: Hw) -> int:
         say(f"{S.RED}The model did not load or the test failed.{S.R} The model may be too big for this machine.")
         return 1
     v = verdict(tps)
-    state_set("measured_tps", tps)
-    state_set("eff_bw", tps * max(size // 1048576, 1))
-    state_set("eff_mode", fit(size, hw))
+    state_update({
+        "measured_tps": tps,
+        "eff_bw": tps * max(size // 1048576, 1),
+        "eff_mode": fit(size, hw),
+    })
     say(f"{S.GREEN}✔{S.R} Generation speed: {S.B}{tps} t/s{S.R}  {verdict_label(v)}")
     say({"smooth": "  Smooth for chat. You could try a bigger model with --check-updates.",
          "usable": "  Usable. Replies take a moment; a smaller model would feel snappier."}.get(
@@ -477,9 +494,11 @@ def check_model_speed(path: Path, size: int, hw: Hw) -> int:
 
 
 def record_installed(name: str, repo: str, size: int) -> None:
-    state_set("installed", name)
-    state_set("installed_repo", repo)
-    state_set("installed_size_mb", size // 1048576)
+    state_update({
+        "installed": name,
+        "installed_repo": repo,
+        "installed_size_mb": size // 1048576,
+    })
 
 
 # --- Prompts ------------------------------------------------------------------------------------
@@ -585,8 +604,10 @@ def check_updates() -> int:
         say(f"{Style.YELLOW}Could not reach Hugging Face.{Style.R} Check your connection and try again later.")
         return 1
     rows = find_upgrades(since, hw)
-    state_set("last_checked", today().isoformat())
-    state_set("next_prompt", add_days(today().isoformat(), check_days()))
+    state_update({
+        "last_checked": today().isoformat(),
+        "next_prompt": add_days(today().isoformat(), check_days()),
+    })
     if not rows:
         say(f"{Style.GREEN}✔{Style.R} Nothing new fits your hardware at a usable speed. Checked {today()}.")
         return 0
