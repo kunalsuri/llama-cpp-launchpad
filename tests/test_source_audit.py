@@ -1,4 +1,4 @@
-"""Audit tests: they read the source of scripts/*.py and fail if it does anything a reviewer would not expect.
+"""Audit tests: they read the source of utils/*.py and fail if it does anything a reviewer would not expect.
 
 The point is that anyone can verify model_setup.py: standard library only, no shell, no dynamic code,
 network only to Hugging Face, and no reads of personal files.
@@ -11,12 +11,14 @@ import unittest
 from pathlib import Path
 from urllib.parse import urlparse
 
-SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
-SOURCES = sorted(SCRIPTS.glob("*.py"))
+UTILS = Path(__file__).resolve().parent.parent / "utils"
+SOURCES = sorted(UTILS.glob("*.py"))
 
 # Everything the script may import. All of it ships with Python; nothing is installed with pip.
 ALLOWED_IMPORTS = {"__future__", "argparse", "csv", "ctypes", "datetime", "io", "json", "os", "platform",
-                   "re", "shutil", "subprocess", "sys", "urllib", "pathlib"}
+                   "re", "shutil", "subprocess", "sys", "urllib", "pathlib", "winreg",
+                   "hardware"}      # hardware = utils/hardware.py, audited here as well
+LOCAL_MODULES = {p.stem for p in SOURCES}
 ALLOWED_HOSTS = {"huggingface.co", "github.com"}
 # The only programs the script may start (always as an argument list, never through a shell).
 ALLOWED_PROGRAMS = {"nvidia-smi", "sysctl", "--list-devices", "llama-server", "llama-bench"}
@@ -43,7 +45,7 @@ class TestSourceAudit(unittest.TestCase):
                 for m in mods:
                     top = m.split(".")[0]
                     self.assertIn(top, ALLOWED_IMPORTS, f"{path.name}: unexpected import '{m}'")
-                    if stdlib:
+                    if stdlib and top not in LOCAL_MODULES:
                         self.assertIn(top, stdlib, f"{path.name}: '{m}' is not in the standard library")
 
     def test_no_dynamic_code_or_shell(self):
@@ -72,9 +74,10 @@ class TestSourceAudit(unittest.TestCase):
                         and isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess"):
                     self.assertTrue(node.args and not isinstance(node.args[0], ast.Constant),
                                     f"{path.name}:{node.lineno} subprocess must take an argument list, not a string")
-        text = (SCRIPTS / "model_setup.py").read_text(encoding="utf-8")
-        for call in re.findall(r'run_cmd\(\[\s*"([^"]+)"', text):
-            self.assertIn(call, ALLOWED_PROGRAMS, f"run_cmd starts unexpected program {call!r}")
+        for path in SOURCES:
+            text = path.read_text(encoding="utf-8")
+            for call in re.findall(r'run_cmd\(\[\s*"([^"]+)"', text):
+                self.assertIn(call, ALLOWED_PROGRAMS, f"{path.name}: run_cmd starts unexpected program {call!r}")
 
     def test_network_hosts_are_only_huggingface_and_github(self):
         for path, tree in trees():
@@ -85,7 +88,7 @@ class TestSourceAudit(unittest.TestCase):
                         self.assertIn(host, ALLOWED_HOSTS, f"{path.name}:{node.lineno} talks to {host}")
 
     def test_http_goes_through_one_function_and_sends_no_personal_data(self):
-        text = (SCRIPTS / "model_setup.py").read_text(encoding="utf-8")
+        text = (UTILS / "model_setup.py").read_text(encoding="utf-8")
         self.assertEqual(text.count("urllib.request.urlopen("), 2, "only http_get and fetch_file touch the network")
         # request headers are limited to a fixed user-agent and (for resume) a Range header
         headers = set(re.findall(r'headers\[?\s*[\"\']?(?:\[)?"(\w[\w-]*)"', text)) | set(re.findall(r'"(User-Agent|Range)"', text))
@@ -94,12 +97,20 @@ class TestSourceAudit(unittest.TestCase):
         self.assertNotRegex(text, r"urlopen\([^)]*data=", "no request bodies are sent")
 
     def test_no_reads_of_personal_files(self):
-        text = (SCRIPTS / "model_setup.py").read_text(encoding="utf-8")
-        for needle in (".ssh", ".aws", ".gnupg", "Cookies", "Login Data", "id_rsa", ".netrc", "keychain", ".bash_history"):
-            self.assertNotIn(needle, text)
+        for path in SOURCES:
+            text = path.read_text(encoding="utf-8")
+            for needle in (".ssh", ".aws", ".gnupg", "Cookies", "Login Data", "id_rsa", ".netrc", "keychain", ".bash_history"):
+                self.assertNotIn(needle, text, path.name)
+
+    def test_hardware_report_has_no_identity_and_writes_one_file(self):
+        text = (UTILS / "hardware.py").read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"(getpass|gethostname|getlogin|node\(\)|platform\.(node|uname)|os\.environ\.copy|getnode|socket)")
+        self.assertEqual(re.findall(r"(write_text|write_bytes|os\.replace|shutil\.(?:move|copy|rmtree)|unlink|os\.remove)", text),
+                         ["write_text", "os.replace"], "hardware.py writes only its report file")
+        self.assertIn('REPORT_NAME = ".hardware.env"', text)
 
     def test_writes_stay_in_models_dir_and_state_file(self):
-        text = (SCRIPTS / "model_setup.py").read_text(encoding="utf-8")
+        text = (UTILS / "model_setup.py").read_text(encoding="utf-8")
         writers = re.findall(r"(write_text|write_bytes|open\([^)]*[\"'][wa]b?[\"']|os\.replace|shutil\.(move|copy|rmtree)|os\.remove|unlink|rmdir)", text)
         found = {w[0].split("(")[0] for w in writers}
         self.assertFalse({"shutil.rmtree", "os.remove", "unlink", "rmdir"} & found, f"unexpected deletes: {found}")

@@ -65,7 +65,7 @@ fi
 # --- Weekly nudge: offer to check for new models that fit this machine ------------
 # (silent unless interactive, set up before, and the check is due; CHECK_DAYS=0 disables)
 PY="$(command -v python3 || command -v python)"   # model-setup is optional: skipped without Python
-[ -n "$PY" ] && "$PY" "$ROOT_DIR/scripts/model_setup.py" --weekly-prompt
+[ -n "$PY" ] && "$PY" "$ROOT_DIR/utils/model_setup.py" --weekly-prompt
 
 # --- Collect models (skip multimodal projector files) ------------------------
 models=(); sizes=()
@@ -82,7 +82,7 @@ if [ ${#models[@]} -eq 0 ]; then
     echo "  ./scripts/unix/model-setup.sh"
     if [ -t 0 ]; then
       printf 'Run it now? %s[Y/n]%s ' "$D" "$R"; read -r ans
-      case "$ans" in n|N|no) ;; *) exec "$PY" "$ROOT_DIR/scripts/model_setup.py" ;; esac
+      case "$ans" in n|N|no) ;; *) exec "$PY" "$ROOT_DIR/utils/model_setup.py" ;; esac
     fi
   else
     echo "Download one, e.g. from https://huggingface.co/ggml-org (see README.md)."

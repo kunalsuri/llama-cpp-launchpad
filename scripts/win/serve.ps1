@@ -63,7 +63,7 @@ if ($KillExisting -eq '1') {
 }
 
 # --- model-setup is optional: it needs Python 3 (standard library only) ------
-$SetupScript = Join-Path $RootDir 'scripts\model_setup.py'
+$SetupScript = Join-Path $RootDir 'utils\model_setup.py'
 $Py = $null
 foreach ($name in 'py', 'python') {
     $c = Get-Command $name -ErrorAction SilentlyContinue

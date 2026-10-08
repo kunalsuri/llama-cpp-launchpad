@@ -27,3 +27,9 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+
+# Dev environment (scripts/win/dev-setup.ps1)
+.venv/
+.system.env
+.hardware.env
+.pytest_cache/

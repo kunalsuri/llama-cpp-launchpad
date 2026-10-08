@@ -70,7 +70,7 @@ Which model should you run? It tells you.
 Estimates are estimates until the speed test runs. Hugging Face popularity is a hint, not a quality score.
 By default it only suggests uploads from trusted quantizers and official model makers (`INCLUDE_ALL=1` shows everything).
 
-**Safe to read.** One file, `scripts/model_setup.py`. Python standard library only. It talks to `huggingface.co`
+**Safe to read.** One file, `utils/model_setup.py`. Python standard library only. It talks to `huggingface.co`
 and writes only to `models/` and `.launchpad-state`. Tests fail if it ever imports anything else, starts a shell, runs
 dynamic code or contacts another host.
 
@@ -124,12 +124,21 @@ It listens on localhost only and has no API key, so don't expose the port. `Ctrl
 python3 -m unittest discover -s tests -v
 ```
 
-No network, GPU or llama.cpp needed.
+No network, GPU or llama.cpp needed. The app itself is standard library only; `requirements.txt` holds dev tools (pytest).
+
+On Windows, two scripts do the plumbing:
+
+```powershell
+scripts\win\dev-setup.ps1   # creates .venv, installs requirements, detects Python / llama.cpp / Ollama / LM Studio,
+                            # audits imports vs requirements.txt (-Fix appends gaps), writes .system.env
+scripts\win\dev-test.ps1    # runs the whole suite with pytest in .venv (extra args go to pytest, e.g. -k audit -x)
+```
 
 ```
 models/              your .gguf files (git-ignored)
 bin/                 optional llama-server (git-ignored)
-scripts/             serve and model-setup launchers, model_setup.py, models.catalog
+scripts/             serve and model-setup launchers
+utils/               model_setup.py, hardware.py (RAM/CPU/GPU detection), models.catalog
 ui/translation/      the translation interface
 tests/               unit tests and source audit
 ```

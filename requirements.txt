@@ -1,0 +1,3 @@
+# Dev dependencies only. The app itself (utils/model_setup.py) is standard library only.
+# Re-check with: scripts\win\dev-setup.ps1   (add -Fix to append anything missing)
+pytest>=9.1.1

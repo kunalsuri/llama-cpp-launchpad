@@ -1,4 +1,4 @@
-"""Tests for scripts/model_setup.py. Standard library only: python3 -m unittest discover -s tests -v
+"""Tests for utils/model_setup.py. Standard library only: python3 -m unittest discover -s tests -v
 
 No network, GPU or llama.cpp needed: Hugging Face, nvidia-smi, llama-bench and downloads are faked
 with fixtures (tests/fixtures). One test starts a throw-away local HTTP server to check resume.
@@ -19,7 +19,8 @@ from pathlib import Path
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "scripts"))
+sys.path.insert(0, str(HERE.parent / "utils"))
+import hardware as hwmod  # noqa: E402
 import model_setup as ms  # noqa: E402
 
 FIX = HERE / "fixtures"
@@ -204,23 +205,23 @@ class TestHardware(Base):
     @unittest.skipUnless(sys.platform.startswith("linux"), "uses /proc/meminfo format")
     def test_linux_detection_and_gpu(self):
         with mock.patch.dict(os.environ, {"MEMINFO_FILE": str(FIX / "meminfo_16g")}):
-            with mock.patch.object(ms, "run_cmd", return_value=""):
+            with mock.patch.object(hwmod, "run_cmd", return_value=""):
                 h = ms.detect_hw()
                 self.assertEqual((h.ram_mb, h.gpu_kind), (15625, "none"))
             smi = "NVIDIA GeForce RTX 3060, 12288\n"
-            with mock.patch.object(ms, "run_cmd", return_value=smi), \
+            with mock.patch.object(hwmod, "run_cmd", return_value=smi), \
                     mock.patch.dict(os.environ, {"LP_GPU_USABLE": "1"}):
                 h = ms.detect_hw()
                 self.assertEqual((h.gpu_kind, h.gpu_name, h.vram_mb, h.gpu_usable),
                                  ("nvidia", "NVIDIA GeForce RTX 3060", 12288, True))
-            with mock.patch.object(ms, "run_cmd", return_value=smi):       # CPU-only llama.cpp build
+            with mock.patch.object(hwmod, "run_cmd", return_value=smi):       # CPU-only llama.cpp build
                 self.assertFalse(ms.detect_hw().gpu_usable)
-            with mock.patch.object(ms, "run_cmd", return_value="garbage"):
+            with mock.patch.object(hwmod, "run_cmd", return_value="garbage"):
                 self.assertEqual(ms.detect_hw().gpu_kind, "none")
 
     def test_overrides(self):
         with mock.patch.dict(os.environ, {"LP_RAM_MB": "8192", "LP_VRAM_MB": "6144"}), \
-                mock.patch.object(ms, "run_cmd", return_value=""):
+                mock.patch.object(hwmod, "run_cmd", return_value=""):
             h = ms.detect_hw()
         self.assertEqual((h.ram_mb, h.vram_mb, h.gpu_kind), (8192, 6144, "gpu"))
 
@@ -234,13 +235,13 @@ class TestHardware(Base):
         self.assertNotIn(str(Path.home()), text)
 
     def test_gpu_usable_needs_a_gpu_backend(self):
-        with mock.patch.object(ms, "find_llama_server", return_value="/x/llama-server"):
-            with mock.patch.object(ms, "run_cmd", return_value="Available devices:\n  CUDA0: GeForce"):
-                self.assertTrue(ms.gpu_usable())
-            with mock.patch.object(ms, "run_cmd", return_value="Available devices:\n"):
-                self.assertFalse(ms.gpu_usable())
-        with mock.patch.object(ms, "find_llama_server", return_value=""):
-            self.assertFalse(ms.gpu_usable())
+        with mock.patch.object(hwmod, "find_llama_server", return_value="/x/llama-server"):
+            with mock.patch.object(hwmod, "run_cmd", return_value="Available devices:\n  CUDA0: GeForce"):
+                self.assertTrue(hwmod.gpu_usable())
+            with mock.patch.object(hwmod, "run_cmd", return_value="Available devices:\n"):
+                self.assertFalse(hwmod.gpu_usable())
+        with mock.patch.object(hwmod, "find_llama_server", return_value=""):
+            self.assertFalse(hwmod.gpu_usable())
 
 
 class TestParsers(Base):
@@ -334,7 +335,7 @@ class TestPrompt(Base):
     def test_yes_runs_the_check(self):
         ms.state_set("hw_sig", "x")
         ms.state_set("last_checked", "2026-09-01")
-        with mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"}), mock.patch.object(ms, "run_cmd", return_value=""):
+        with mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"}), mock.patch.object(hwmod, "run_cmd", return_value=""):
             rc, out, _ = self.run_main(["--weekly-prompt"], "y\n")
         self.assertIn("Checking Hugging Face", out)
         self.assertEqual(ms.state_get("last_checked"), "2026-10-05")
@@ -394,7 +395,7 @@ class TestUpdates(Base):
             self.assertTrue(url.startswith("https://huggingface.co/"), url)
 
     def test_check_updates_flow(self):
-        with mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"}), mock.patch.object(ms, "run_cmd", return_value=""):
+        with mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"}), mock.patch.object(hwmod, "run_cmd", return_value=""):
             rc, out, _ = self.run_main(["--check-updates", "--yes"])
         self.assertEqual(rc, 0)
         for needle in ("released since 2026-09-01", "NewModel-3B-GGUF", "a hint, not a quality score"):
@@ -405,7 +406,7 @@ class TestUpdates(Base):
 
     def test_offline_does_not_advance_last_checked(self):
         self.offline = True
-        with mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"}), mock.patch.object(ms, "run_cmd", return_value=""):
+        with mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"}), mock.patch.object(hwmod, "run_cmd", return_value=""):
             rc, out, _ = self.run_main(["--check-updates"])
         self.assertEqual(rc, 1)
         self.assertIn("Could not reach Hugging Face", out)
@@ -413,14 +414,14 @@ class TestUpdates(Base):
 
     def test_nothing_new(self):
         self.list_json = "[]"
-        with mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"}), mock.patch.object(ms, "run_cmd", return_value=""):
+        with mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"}), mock.patch.object(hwmod, "run_cmd", return_value=""):
             rc, out, _ = self.run_main(["--check-updates"])
         self.assertIn("Nothing new fits", out)
 
     def test_hardware_change_is_noticed(self):
         ms.state_set("hw_sig", "1-0-none-0-4")
         ms.state_set("eff_bw", 9999)
-        with mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"}), mock.patch.object(ms, "run_cmd", return_value=""):
+        with mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"}), mock.patch.object(hwmod, "run_cmd", return_value=""):
             rc, out, _ = self.run_main(["--check-updates"])
         self.assertIn("hardware changed", out)
         self.assertEqual(ms.state_get("eff_bw"), "")
@@ -430,7 +431,7 @@ class TestUpdates(Base):
             part.parent.mkdir(parents=True, exist_ok=True)
             with open(part, "wb") as f:
                 f.truncate(size)
-        with mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"}), mock.patch.object(ms, "run_cmd", return_value=""), \
+        with mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"}), mock.patch.object(hwmod, "run_cmd", return_value=""), \
                 mock.patch.object(ms, "fetch_file", fake_fetch), mock.patch.object(ms, "run_bench", return_value=12):
             rc, out, err = self.run_main(["--check-updates"], "1\n")
         self.assertIn("Generation speed: 12 t/s", out)
@@ -567,9 +568,10 @@ class TestCli(Base):
         p = mock.patch.dict(os.environ, {"LP_RAM_MB": "16384"})
         p.start()
         self.addCleanup(p.stop)
-        for target, kw in (("run_cmd", {"return_value": ""}), ("run_bench", {"return_value": 12}),
-                           ("find_llama_server", {"return_value": ""})):
-            q = mock.patch.object(ms, target, **kw)
+        for module, target, kw in ((hwmod, "run_cmd", {"return_value": ""}), (ms, "run_bench", {"return_value": 12}),
+                                   (hwmod, "find_llama_server", {"return_value": ""}),
+                                   (ms, "find_llama_server", {"return_value": ""})):
+            q = mock.patch.object(module, target, **kw)
             q.start()
             self.addCleanup(q.stop)
         self.fetches = []
@@ -640,7 +642,7 @@ class TestCli(Base):
             rc, out, _ = self.run_main(["--yes", "--use", "chat"])
         self.assertEqual(rc, 1)
         self.assertIn("No catalog model fits", out)
-        with mock.patch.dict(os.environ, {"LP_RAM_MB": ""}), mock.patch.object(ms, "read_ram_mb", return_value=0):
+        with mock.patch.dict(os.environ, {"LP_RAM_MB": ""}), mock.patch.object(hwmod, "read_ram_mb", return_value=0):
             rc, out, _ = self.run_main(["--yes"])
         self.assertEqual(rc, 1)
         self.assertIn("Could not read your RAM", out)

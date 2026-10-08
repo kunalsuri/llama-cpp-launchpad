@@ -38,7 +38,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from hardware import Hw, detect_hw, find_llama_server
+
+ROOT =Path(__file__).resolve().parent.parent
 HF_API = os.environ.get("HF_API", "https://huggingface.co/api")
 HF_BASE = os.environ.get("HF_BASE", "https://huggingface.co")
 USER_AGENT = "llama-cpp-launchpad"
@@ -68,7 +70,7 @@ def models_dir() -> Path:
 
 
 def catalog_path() -> Path:
-    return Path(os.environ.get("CATALOG") or ROOT / "scripts" / "models.catalog")
+    return Path(os.environ.get("CATALOG") or ROOT / "utils" / "models.catalog")
 
 
 def state_path() -> Path:
@@ -162,93 +164,7 @@ def state_int(key: str) -> int:
         return 0
 
 
-# --- Hardware --------------------------------------------------------------------------------
-class Hw:
-    def __init__(self, ram_mb=0, cores=1, gpu_kind="none", gpu_name="", vram_mb=0, gpu_usable=False):
-        self.ram_mb, self.cores = ram_mb, cores
-        self.gpu_kind, self.gpu_name = gpu_kind, gpu_name        # none | nvidia | apple | gpu
-        self.vram_mb, self.gpu_usable = vram_mb, gpu_usable
-
-    def sig(self) -> str:
-        return f"{self.ram_mb}-{self.vram_mb}-{self.gpu_kind}-{int(self.gpu_usable)}-{self.cores}"
-
-
-def run_cmd(args: list, timeout: int = 20) -> str:
-    """Run a program (never through a shell) and return its stdout, or '' on any failure."""
-    try:
-        done = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-        return done.stdout + done.stderr
-    except (OSError, subprocess.SubprocessError):
-        return ""
-
-
-def find_llama_server() -> str:
-    cands = [os.environ.get("LLAMA_SERVER", ""), shutil.which("llama-server") or "",
-             str(ROOT / "bin" / "llama-server"), str(ROOT / "bin" / "llama-server.exe"),
-             str(Path.home() / "llama.cpp" / "build" / "bin" / "llama-server")]
-    for c in cands:
-        if c and os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
-    return ""
-
-
-def gpu_usable() -> bool:
-    """Does the installed llama.cpp build offer a GPU backend?"""
-    srv = find_llama_server()
-    if not srv:
-        return False
-    return bool(re.search(r"CUDA|Vulkan|ROCm|HIP|SYCL|Metal", run_cmd([srv, "--list-devices"]), re.I))
-
-
-def read_ram_mb() -> int:
-    system = platform.system()
-    try:
-        if system == "Linux":
-            path = os.environ.get("MEMINFO_FILE", "/proc/meminfo")
-            for line in Path(path).read_text().splitlines():
-                if line.startswith("MemTotal:"):
-                    return int(line.split()[1]) // 1024
-        elif system == "Darwin":
-            return int(run_cmd(["sysctl", "-n", "hw.memsize"]).strip()) // 1048576
-        elif system == "Windows":
-            import ctypes
-
-            class MemStatus(ctypes.Structure):
-                _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong),
-                            ("total", ctypes.c_ulonglong), ("avail", ctypes.c_ulonglong),
-                            ("totpage", ctypes.c_ulonglong), ("availpage", ctypes.c_ulonglong),
-                            ("totvirt", ctypes.c_ulonglong), ("availvirt", ctypes.c_ulonglong),
-                            ("ext", ctypes.c_ulonglong)]
-            st = MemStatus()
-            st.length = ctypes.sizeof(MemStatus)
-            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
-            return int(st.total) // 1048576
-    except (OSError, ValueError, IndexError):
-        pass
-    return 0
-
-
-def detect_hw() -> Hw:
-    hw = Hw(ram_mb=read_ram_mb(), cores=os.cpu_count() or 1)
-    if platform.system() == "Darwin" and platform.machine() == "arm64":
-        hw.gpu_kind, hw.gpu_name, hw.gpu_usable = "apple", "Apple Silicon (unified memory)", True
-    else:
-        out = run_cmd(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
-        line = out.strip().splitlines()[0] if out.strip() else ""
-        name, _, vram = line.rpartition(", ")
-        if name and vram.strip().isdigit() and int(vram) > 0:
-            hw.gpu_kind, hw.gpu_name, hw.vram_mb = "nvidia", name, int(vram)
-            forced = os.environ.get("LP_GPU_USABLE")
-            hw.gpu_usable = (forced == "1") if forced is not None else gpu_usable()
-    if os.environ.get("LP_RAM_MB", "").isdigit():
-        hw.ram_mb = int(os.environ["LP_RAM_MB"])
-    if os.environ.get("LP_VRAM_MB", "").isdigit():
-        hw.vram_mb = int(os.environ["LP_VRAM_MB"])
-        if hw.gpu_kind == "none":
-            hw.gpu_kind, hw.gpu_name, hw.gpu_usable = "gpu", "GPU (set by you)", True
-    return hw
-
-
+# --- Hardware (detection lives in hardware.py; this part saves and describes it) -------------
 def save_hw(hw: Hw) -> None:
     for k, v in (("hw_ram_mb", hw.ram_mb), ("hw_vram_mb", hw.vram_mb), ("hw_kind", hw.gpu_kind),
                  ("hw_usable", int(hw.gpu_usable)), ("hw_cores", hw.cores), ("hw_sig", hw.sig())):
