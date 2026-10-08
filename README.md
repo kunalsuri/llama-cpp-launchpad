@@ -57,6 +57,18 @@ Needs Python 3. Prefer to do it by hand? Drop any `.gguf` file into `models/` ([
 
 Which model should you run? It tells you.
 
+**Easiest: the setup page.** One question ("What will you use it for?"), one recommended model, one button.
+It downloads, speed-tests and tells you how to start it. Nothing to install, and it only listens on your own computer.
+
+```powershell
+scripts\win\dev-run-ui.ps1        # Windows: finds Python, starts the page, opens your browser (-Port 9000, -NoBrowser)
+```
+```bash
+./scripts/unix/ui.sh              # Linux / macOS (or double-click scripts/mac/ui.command or scripts\win\ui.bat)
+```
+
+The command-line version below does the same with more control.
+
 - **First run:** detects RAM and GPU, asks what you'll use it for, shows up to five models that fit with an estimated speed, downloads your pick, and measures the real speed.
 - **Every week:** `serve` offers to check for new models that fit your hardware and beat what you run now. Say `y`, `n`, `later` or `never`.
 - **On demand:**
@@ -67,10 +79,26 @@ Which model should you run? It tells you.
 ./scripts/unix/model-setup.sh --list            # recommendations only
 ```
 
+**Discover.** `--discover` searches all of Hugging Face for GGUF models your machine can run, not just the built-in list.
+For each popular repo it reads the file sizes (no model is downloaded), picks the best quantization that fits your
+RAM/VRAM, and estimates memory (weights + context cache + overhead), speed and where it runs (GPU, GPU+CPU split, CPU).
+Gated repos and architectures llama.cpp may not know are flagged or skipped.
+
+```bash
+./scripts/unix/model-setup.sh --discover                          # best fits from trusted authors, then pick one to download
+./scripts/unix/model-setup.sh --discover --search coder --list    # only repos matching "coder", no download prompt
+./scripts/unix/model-setup.sh --discover --ctx 16384 --all        # plan for a 16k context, include unknown authors
+./scripts/unix/model-setup.sh --discover --json --top 20          # machine-readable
+```
+
+Other options: `--sort popular|size|speed`, `--hub downloads|trending|recent`, `--author NAME`, `--min-tps N`,
+`--max-lookups N` (one request each). Memory fit is an estimate: the Hub does not publish layer counts, so the context
+cache is a rough guess; use `--ctx` to match how you run it.
+
 Estimates are estimates until the speed test runs. Hugging Face popularity is a hint, not a quality score.
 By default it only suggests uploads from trusted quantizers and official model makers (`INCLUDE_ALL=1` shows everything).
 
-**Safe to read.** One file, `utils/model_setup.py`. Python standard library only. It talks to `huggingface.co`
+**Safe to read.** `utils/model_setup.py` (plus `hf_discover.py`, which has no network or file access, and `ui_server.py`, a localhost-only server for the setup page). Python standard library only. It talks to `huggingface.co`
 and writes only to `models/` and `.launchpad-state`. Tests fail if it ever imports anything else, starts a shell, runs
 dynamic code or contacts another host.
 
@@ -138,7 +166,8 @@ scripts\win\dev-test.ps1    # runs the whole suite with pytest in .venv (extra a
 models/              your .gguf files (git-ignored)
 bin/                 optional llama-server (git-ignored)
 scripts/             serve and model-setup launchers
-utils/               model_setup.py, hardware.py (RAM/CPU/GPU detection), models.catalog
+ui/setup/            the setup page (one HTML file)
+utils/               model_setup.py, hf_discover.py (--discover rules), ui_server.py (the page's local server), hardware.py (RAM/CPU/GPU detection), models.catalog
 ui/translation/      the translation interface
 tests/               unit tests and source audit
 ```

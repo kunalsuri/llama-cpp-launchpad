@@ -17,9 +17,10 @@ SOURCES = sorted(UTILS.glob("*.py"))
 # Everything the script may import. All of it ships with Python; nothing is installed with pip.
 ALLOWED_IMPORTS = {"__future__", "argparse", "csv", "ctypes", "datetime", "io", "json", "os", "platform",
                    "re", "shutil", "subprocess", "sys", "urllib", "pathlib", "winreg",
-                   "hardware"}      # hardware = utils/hardware.py, audited here as well
+                   "http", "secrets", "threading", "webbrowser",     # ui_server.py: the localhost-only setup page
+                   "hardware", "hf_discover", "ui_server"}      # local modules in utils/, audited here as well
 LOCAL_MODULES = {p.stem for p in SOURCES}
-ALLOWED_HOSTS = {"huggingface.co", "github.com"}
+ALLOWED_HOSTS = {"huggingface.co", "github.com", "127.0.0.1"}   # 127.0.0.1 = the setup page itself (ui_server.py)
 # The only programs the script may start (always as an argument list, never through a shell).
 ALLOWED_PROGRAMS = {"nvidia-smi", "sysctl", "--list-devices", "llama-server", "llama-bench"}
 

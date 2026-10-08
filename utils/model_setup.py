@@ -12,7 +12,11 @@ Usage:
   model_setup.py --check-updates   look for new Hugging Face models that fit this machine
   model_setup.py --test [file]     speed-test an installed model
   model_setup.py --list            show recommendations only (no download)
+  model_setup.py --discover        search all of Hugging Face for GGUF models this machine can run
+  model_setup.py --ui              the same thing as a simple page in your browser (--port N, --no-browser)
   Options: --use chat|translation|coding|fast   --yes (accept defaults)
+  Discover options: --search TEXT  --author NAME  --all  --hub downloads|trending|recent  --sort popular|size|speed
+                    --ctx N  --min-tps N  --top N  --max-lookups N  --json   (--list = show only, no download)
 
 Settings (optional environment variables):
   MODELS_DIR   folder for .gguf files                 (default: <project>/models)
@@ -38,6 +42,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import hf_discover
 from hardware import Hw, detect_hw, find_llama_server
 
 ROOT =Path(__file__).resolve().parent.parent
@@ -379,8 +384,8 @@ def find_upgrades(since: str, hw: Hw) -> list:
 
 
 # --- Download and speed test ------------------------------------------------------------------
-def fetch_file(url: str, dest_part: Path, size: int) -> None:
-    """Download with resume (HTTP Range) and a progress bar on stderr."""
+def fetch_file(url: str, dest_part: Path, size: int, on_progress=None) -> None:
+    """Download with resume (HTTP Range) and a progress bar on stderr. on_progress(done_bytes) is optional."""
     have = dest_part.stat().st_size if dest_part.exists() else 0
     headers = {"User-Agent": USER_AGENT}
     if have:
@@ -396,6 +401,8 @@ def fetch_file(url: str, dest_part: Path, size: int) -> None:
                     break
                 out.write(chunk)
                 done += len(chunk)
+                if on_progress:
+                    on_progress(done)
                 if size and sys.stderr.isatty():
                     sys.stderr.write(f"\r  {done * 100 // size:3d}%  {human_size(done)} / {human_size(size)}")
                     sys.stderr.flush()
@@ -403,7 +410,7 @@ def fetch_file(url: str, dest_part: Path, size: int) -> None:
         sys.stderr.write("\n")
 
 
-def download(repo: str, file: str, size: int):
+def download(repo: str, file: str, size: int, on_progress=None):
     """Download into models/. Returns the final path, or None on failure (a partial file is kept for resume)."""
     dest = models_dir() / Path(file).name              # never write outside models/
     part = dest.with_name(dest.name + ".part")
@@ -415,7 +422,7 @@ def download(repo: str, file: str, size: int):
         return None
     err(f"{Style.ORANGE}●{Style.R} Downloading {dest.name} ({human_size(size)})")
     try:
-        fetch_file(f"{HF_BASE}/{repo}/resolve/main/{file}", part, size)
+        fetch_file(f"{HF_BASE}/{repo}/resolve/main/{file}", part, size, *([on_progress] if on_progress else []))
     except (urllib.error.URLError, OSError) as e:
         err(f"{Style.RED}Download failed{Style.R} ({e}). Run the command again to resume.")
         return None
@@ -633,6 +640,138 @@ def check_updates() -> int:
     return 0
 
 
+# --- Discover: search the whole Hub for models this machine can run ---------------------------------
+def mode_label(r: dict) -> str:
+    if r["mode"] == "gpu":
+        return "all on GPU"
+    if r["mode"] == "partial":
+        return f"GPU+CPU split, ~{int(r['gpu_share'] * 100)}% on GPU"
+    return "CPU"
+
+
+def discover_candidates(a, hw: Hw, note) -> list | None:
+    """Hub list queries -> repos worth looking at, most popular first. None = Hugging Face unreachable."""
+    urls = hf_discover.list_urls(HF_API, a.hub, a.search or "", a.author or [], FETCH_AUTHORS)
+    seen, reached = {}, False
+    for url in urls:
+        data = http_json(url)
+        reached = reached or data is not None
+        for row in hf_discover.parse_list(data):
+            seen.setdefault(row["id"], row)
+    if not reached:
+        return None
+    exclude = re.compile(os.environ.get("EXCLUDE_RE", "abliterated|uncensored|nsfw"), re.I)
+    open_door = a.all or a.author or os.environ.get("INCLUDE_ALL") == "1"
+    min_dl = int(os.environ.get("MIN_DL", "100"))
+    rows = [r for r in seen.values()
+            if r["downloads"] >= min_dl and hf_discover.plausibly_fits(r["id"], hw)
+            and (open_door or (is_trusted(r["id"]) and not exclude.search(r["id"])))]
+    rows.sort(key=hf_discover.popularity, reverse=True)
+    note(f"{len(seen)} GGUF repos found, {len(rows)} worth checking against your hardware.")
+    return rows[: a.max_lookups]
+
+
+def discover_check(cands: list, hw: Hw, a, on_progress=None):
+    """Inspect each candidate repo (one request each) -> (results, skipped-reason counts)."""
+    def tps_fn(size, mode):
+        return est_tps(size, mode, hw)
+
+    results, skipped = [], {}
+    for i, row in enumerate(cands, 1):
+        if on_progress:
+            on_progress(i - 1, len(cands))
+        found, why = hf_discover.evaluate_repo(row["id"], http_json(f"{HF_API}/models/{row['id']}?blobs=true"),
+                                               hw, tps_fn, a.ctx, a.min_tps)
+        if found:
+            found["downloads"] = found["downloads"] or row["downloads"]
+            found["likes"] = found["likes"] or row["likes"]
+            results.append(found)
+        else:
+            skipped[why] = skipped.get(why, 0) + 1
+    if on_progress:
+        on_progress(len(cands), len(cands))
+    return results, skipped
+
+
+def discover_cmd(a) -> int:
+    quiet = a.json                                   # --json: only the JSON goes to stdout
+    note = err if quiet else say
+    if not quiet:
+        banner()
+    hw = detect_hw()
+    save_hw(hw)
+    note(describe_hw(hw))
+    if hw.ram_mb <= 0:
+        note(f"{Style.RED}Could not read your RAM.{Style.R} Set LP_RAM_MB=<megabytes> and run again.")
+        return 1
+    note(f"{Style.ORANGE}●{Style.R} Searching Hugging Face for GGUF models "
+         f"(assuming a {a.ctx}-token context)...")
+    cands = discover_candidates(a, hw, note)
+    if cands is None:
+        note(f"{Style.YELLOW}Could not reach Hugging Face.{Style.R} Check your connection and try again later.")
+        return 1
+
+    def progress(i, n):
+        if sys.stderr.isatty():
+            sys.stderr.write(f"\r  checking {i}/{n}  " if i < n else "\r" + " " * 30 + "\r")
+            sys.stderr.flush()
+
+    results, skipped = discover_check(cands, hw, a, progress)
+    rows = hf_discover.rank(results, a.sort)[: a.top]
+    if quiet:
+        print(json.dumps({"hardware": {"ram_mb": hw.ram_mb, "vram_mb": hw.vram_mb, "gpu": hw.gpu_kind,
+                                       "gpu_usable": hw.gpu_usable},
+                          "ctx": a.ctx, "checked": len(cands), "skipped": skipped, "models": rows}, indent=2))
+        return 0
+    why_not = ", ".join(f"{n} {k}" for k, n in sorted(skipped.items())) or "none"
+    if not rows:
+        say(f"{Style.RED}Nothing from the {len(cands)} repos checked runs well here{Style.R} ({why_not}). "
+            "Try --search, --all, or a smaller --ctx.")
+        return 1
+    say(f"\n{len(results)} of {len(cands)} repos checked can run here. Best quantization of each:\n")
+    print_discovered(rows)
+    say(f"{Style.D}Skipped: {why_not}. Memory and speed are estimates (the context cache is a rough guess); "
+        f"the speed test after download shows the real number.{Style.R}\n")
+    return 0 if a.list else install_discovered(rows, hw)
+
+
+def print_discovered(rows: list) -> None:
+    for i, r in enumerate(rows, 1):
+        say(f"  {Style.B}{i}){Style.R} {r['repo']:<44} {r['quant'] or '?':<8} {human_size(r['size']):>8}  "
+            f"{verdict_label(verdict(r['tps']))}  {Style.D}~{r['tps']} t/s · {mode_label(r)}{Style.R}")
+        bits = [r["arch"] or "unknown arch", f"{r['params_b']}B" + (" MoE" if r["moe"] else ""),
+                f"{r['downloads']:,} downloads", f"{r['likes']} likes",
+                f"needs ~{human_size(r['need_mb'] * 1048576)} at {r['ctx']} ctx"]
+        if r["other_quants"]:
+            bits.append(f"+{r['other_quants']} other quants fit")
+        say(f"       {Style.D}{' · '.join(bits)}{Style.R}")
+        if r["compat"] != "ok":
+            say(f"       {Style.YELLOW}▲ architecture not in the known list: may need a newer llama.cpp{Style.R}")
+        if r["low_quality"]:
+            say(f"       {Style.YELLOW}▲ very low-bit quantization: expect poor answers{Style.R}")
+
+
+def install_discovered(rows: list, hw: Hw) -> int:
+    choice = ask(f"Download which one? (1-{len(rows)}, or n to skip)", "n")
+    if choice.lower() in ("n", "no", ""):
+        return 0
+    if not choice.isdigit() or not 1 <= int(choice) <= len(rows):
+        say(f"{Style.RED}Invalid choice.{Style.R}")
+        return 1
+    r = rows[int(choice) - 1]
+    first = None
+    for f, size in r["files"]:                       # split models: every part, into the same folder
+        dest = models_dir() / Path(f).name
+        path = dest if dest.is_file() else download(r["repo"], f, size)
+        if not path:
+            return 1
+        first = first or path
+    record_installed(r["name"], r["repo"], r["size"])
+    check_model_speed(first, r["size"], hw)
+    say(f"Start it with: {Style.B}./scripts/unix/serve.sh{Style.R}  (Windows: scripts\\win\\serve.bat)")
+    return 0
+
+
 def should_prompt(interactive: bool | None = None) -> bool:
     """Weekly nudge rule: True = ask the user now."""
     if interactive is None:
@@ -687,6 +826,21 @@ def main(argv: list | None = None) -> int:
     p.add_argument("--check-updates", action="store_true", help="look for new models that fit this machine")
     p.add_argument("--test", nargs="?", const="", metavar="FILE", help="speed-test an installed model")
     p.add_argument("--list", action="store_true", help="show recommendations only (no download)")
+    p.add_argument("--discover", action="store_true", help="search all of Hugging Face for GGUF models that run here")
+    p.add_argument("--search", metavar="TEXT", help="--discover: only repos matching this text (e.g. coder)")
+    p.add_argument("--author", action="append", metavar="NAME", help="--discover: only this Hub author (repeatable)")
+    p.add_argument("--all", action="store_true", help="--discover: include unknown authors and fine-tunes")
+    p.add_argument("--hub", choices=list(hf_discover.HUB_SORTS), default="downloads",
+                   help="--discover: which Hub ranking to scan")
+    p.add_argument("--sort", choices=["popular", "size", "speed"], default="popular", help="--discover: result order")
+    p.add_argument("--ctx", type=int, default=hf_discover.DEFAULT_CTX, help="--discover: context tokens to plan memory for")
+    p.add_argument("--min-tps", type=int, default=3, help="--discover: drop models slower than this estimate")
+    p.add_argument("--top", type=int, default=10, help="--discover: how many results to show")
+    p.add_argument("--max-lookups", type=int, default=30, help="--discover: repos to inspect (one request each)")
+    p.add_argument("--json", action="store_true", help="--discover: print JSON instead of a table")
+    p.add_argument("--ui", action="store_true", help="open the simple setup page in your browser (localhost only)")
+    p.add_argument("--port", type=int, default=8765, help="--ui: port to listen on (next free one is used)")
+    p.add_argument("--no-browser", action="store_true", help="--ui: do not open the browser")
     p.add_argument("--weekly-prompt", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--use", choices=["chat", "translation", "coding", "fast"])
     p.add_argument("--yes", "-y", action="store_true", help="accept the defaults")
@@ -695,6 +849,11 @@ def main(argv: list | None = None) -> int:
     Ctx.assume_yes = a.yes
     if a.weekly_prompt:
         return weekly_prompt()
+    if a.ui:
+        import ui_server
+        return ui_server.serve(sys.modules[__name__], a.port, not a.no_browser)
+    if a.discover:
+        return discover_cmd(a)
     if a.check_updates:
         return check_updates()
     if a.test is not None:

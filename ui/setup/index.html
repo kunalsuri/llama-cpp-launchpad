@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model setup</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4'/%3E%3C/svg%3E">
+<style>
+  /* Same design tokens as the translation page and llama.cpp's own web UI. */
+  :root {
+    --radius: .75rem;
+    --background: oklch(100% 0 0);
+    --foreground: oklch(14.5% 0 0);
+    --muted: oklch(97% 0 0);
+    --muted-foreground: oklch(55.6% 0 0);
+    --secondary: oklch(95% 0 0);
+    --primary: oklch(20.5% 0 0);
+    --primary-foreground: oklch(98.5% 0 0);
+    --border: oklch(87.5% 0 0);
+    --good: oklch(55% .15 150);
+    --warn: oklch(62% .15 75);
+    --bad: oklch(57.7% .245 27.325);
+    --shadow: 0 1px 3px rgb(0 0 0 / .1), 0 1px 2px rgb(0 0 0 / .06);
+    --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: oklch(16% 0 0);
+      --foreground: oklch(98.5% 0 0);
+      --muted: oklch(23.9% 0 0);
+      --muted-foreground: oklch(70.8% 0 0);
+      --secondary: oklch(29% 0 0);
+      --primary: oklch(92.2% 0 0);
+      --primary-foreground: oklch(20.5% 0 0);
+      --border: oklch(100% 0 0 / .22);
+      --good: oklch(75% .17 150);
+      --warn: oklch(80% .15 80);
+      --bad: oklch(70.4% .191 22.216);
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--background); color: var(--foreground); font: 16px/1.5 var(--font); }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  :focus-visible { outline: 2px solid var(--muted-foreground); outline-offset: 2px; border-radius: 8px; }
+
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 18px 24px; font-size: 14px; color: var(--muted-foreground); }
+  header b { color: var(--foreground); font-weight: 600; }
+  .chip { background: var(--muted); border-radius: 999px; padding: 4px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  main { max-width: 640px; margin: 0 auto; padding: 6vh 20px 64px; }
+  h1 { margin: 0; font-size: 32px; line-height: 1.25; font-weight: 700; letter-spacing: -.01em; text-align: center; }
+  .sub { margin: 8px 0 28px; text-align: center; font-size: 18px; color: var(--muted-foreground); }
+  .view[hidden] { display: none; }
+
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .tile { border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 18px; text-align: left; display: flex; flex-direction: column; gap: 6px; transition: background .12s, transform .12s; }
+  .tile:hover { background: var(--muted); }
+  .tile:active { transform: scale(.985); }
+  .tile svg { font-size: 22px; }
+  .tile b { font-size: 17px; }
+  .tile span { font-size: 14px; color: var(--muted-foreground); }
+
+  .card { border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow); }
+  .card h2 { margin: 0; font-size: 24px; line-height: 1.25; overflow-wrap: anywhere; }
+  .meta { margin: 6px 0 0; color: var(--muted-foreground); }
+  .verdict { font-weight: 600; }
+  .smooth { color: var(--good); } .usable { color: var(--warn); } .tight, .slow { color: var(--bad); }
+  .note { margin: 14px 0 0; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: var(--primary); color: var(--primary-foreground); border-radius: 999px; padding: 12px 26px; font-weight: 600; }
+  .btn:hover { opacity: .88; }
+  .btn.small { padding: 6px 16px; font-size: 14px; }
+  .btn.ghost { background: var(--secondary); color: var(--foreground); }
+  .card .btn { margin-top: 22px; }
+  .link { color: var(--muted-foreground); text-decoration: underline; text-underline-offset: 3px; font-size: 14px; }
+  .link:hover { color: var(--foreground); }
+  .center { text-align: center; margin-top: 22px; }
+
+  .rows { margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 18px; }
+  .row + .row { border-top: 1px solid var(--border); }
+  .row .t { min-width: 0; } .row .t b { display: block; overflow-wrap: anywhere; }
+  .row .t span { font-size: 14px; color: var(--muted-foreground); }
+  .rows-title { margin: 28px 0 0; font-size: 14px; color: var(--muted-foreground); }
+
+  .bar { height: 10px; border-radius: 999px; background: var(--secondary); overflow: hidden; margin: 22px 0 10px; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--primary); border-radius: 999px; transition: width .3s; }
+  .bar.busy i { width: 35%; animation: slide 1.1s ease-in-out infinite alternate; }
+  @keyframes slide { from { margin-left: 0; } to { margin-left: 65%; } }
+  .spin { width: 28px; height: 28px; border: 3px solid var(--secondary); border-top-color: var(--primary); border-radius: 50%; margin: 40px auto 16px; animation: rot .8s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin, .bar.busy i { animation: none; } }
+
+  .tick { width: 56px; height: 56px; border-radius: 50%; background: var(--good); color: var(--background); display: grid; place-items: center; font-size: 30px; margin: 0 auto 18px; }
+  .code { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--muted); border-radius: 10px; padding: 12px 14px; margin-top: 12px; font-family: var(--mono); font-size: 14px; overflow-wrap: anywhere; }
+  .warn { margin: 0 0 18px; padding: 10px 14px; border-radius: 10px; background: var(--muted); color: var(--muted-foreground); font-size: 14px; }
+  .back { margin-bottom: 14px; }
+  @media (max-width: 480px) { .tiles { grid-template-columns: 1fr; } h1 { font-size: 26px; } }
+</style>
+</head>
+<body>
+<header>
+  <span><b>&#10043; llama-cpp-launchpad</b> &nbsp;model setup</span>
+  <span class="chip" id="hw" hidden></span>
+</header>
+<main>
+  <div id="warn"></div>
+
+  <section class="view" id="v-use">
+    <h1>What will you use it for?</h1>
+    <p class="sub">We'll find the best model for your computer.</p>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section class="view" id="v-wait" hidden>
+    <div class="spin"></div>
+    <p class="sub" id="wait-text">Finding the best model for your computer&hellip;</p>
+  </section>
+
+  <section class="view" id="v-pick" hidden>
+    <button class="link back" id="back">&larr; Change</button>
+    <div id="top"></div>
+    <p class="center" id="more-wrap"><button class="link" id="more-btn">See other options</button></p>
+    <div id="others"></div>
+  </section>
+
+  <section class="view" id="v-install" hidden>
+    <h1 id="i-title">Downloading&hellip;</h1>
+    <div class="bar" id="bar"><i id="bar-i"></i></div>
+    <p class="sub" id="i-text" style="margin:0"></p>
+  </section>
+
+  <section class="view" id="v-done" hidden>
+    <div class="tick">&#10003;</div>
+    <h1>Ready</h1>
+    <p class="sub" id="d-text"></p>
+    <p class="center" style="margin-top:0">To start chatting, run:</p>
+    <div class="code"><span id="cmd"></span><button class="btn small ghost" id="copy">Copy</button></div>
+    <p class="center"><button class="link" id="again">Get another model</button></p>
+  </section>
+
+  <section class="view" id="v-error" hidden>
+    <h1>That didn't work</h1>
+    <p class="sub" id="e-text"></p>
+    <p class="center"><button class="btn" id="retry">Try again</button></p>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+let S = {}, use = "", lastId = "";
+const ICONS = {
+  chat: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+  coding: "m16 18 6-6-6-6M8 6l-6 6 6 6",
+  translation: "m5 8 6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6",
+  fast: "M13 2 3 14h9l-1 8 10-12h-9l1-8z",
+};
+const USES = [
+  ["chat", "General chat", "Ask questions, write, brainstorm"],
+  ["coding", "Writing code", "Help with programming"],
+  ["translation", "Translation", "Between many languages"],
+  ["fast", "Fastest", "Smallest model, instant replies"],
+];
+
+function h(tag, props, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (k === "class") el.className = v; else if (k.startsWith("on")) el.addEventListener(k.slice(2), v); else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid != null) el.append(kid.nodeType ? kid : document.createTextNode(kid));
+  return el;
+}
+function icon(path) {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", "0 0 24 24");
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  p.setAttribute("d", path); s.append(p); return s;
+}
+function show(id) {
+  document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== id));
+  window.scrollTo(0, 0);
+}
+async function api(path, body) {
+  const opts = body ? { method: "POST", headers: { "Content-Type": "application/json", "X-LP-Token": S.token }, body: JSON.stringify(body) } : {};
+  const r = await fetch(path, opts);
+  return r.json();
+}
+const fmt = (n) => (n >= 1073741824 ? (n / 1073741824).toFixed(1) + " GB" : Math.round(n / 1048576) + " MB");
+
+const VERDICT = {
+  smooth: "Runs smoothly", usable: "Works, replies take a moment",
+  slow: "Slow on this computer", tight: "Tight fit, may crash",
+};
+function where(m) {
+  if (m.where === "gpu") return "on your graphics card";
+  if (m.where === "partial") return "split between graphics card and processor";
+  return "on your processor";
+}
+function meta(m) {
+  return h("span", {}, h("span", { class: "verdict " + m.verdict }, VERDICT[m.verdict] || ""), " " + where(m) + " · " + m.size_h);
+}
+
+// --- Screens -------------------------------------------------------------------------------------
+function renderUse() {
+  const t = $("#tiles"); t.replaceChildren();
+  for (const [id, title, text] of USES)
+    t.append(h("button", { class: "tile", onclick: () => pick(id) }, icon(ICONS[id]), h("b", {}, title), h("span", {}, text)));
+  show("v-use");
+}
+
+async function pick(u) {
+  use = u;
+  $("#wait-text").textContent = "Finding the best model for your computer…";
+  show("v-wait");
+  const data = await api("/api/recommend?use=" + u);
+  const ms = data.models || [];
+  $("#top").replaceChildren(); $("#others").replaceChildren();
+  $("#more-wrap").hidden = false; $("#more-btn").textContent = "See other options";
+  if (ms.length) {
+    const m = ms[0];
+    $("#top").append(h("div", { class: "card" },
+      h("h2", {}, m.title), h("p", { class: "meta" }, meta(m)),
+      m.note ? h("p", { class: "note" }, m.note) : null,
+      h("button", { class: "btn", onclick: () => install(m) }, m.have ? "Use this model" : "Get this model")));
+    if (ms.length > 1) $("#others").append(list("Also good for your computer", ms.slice(1)));
+  } else {
+    $("#top").append(h("div", { class: "card" }, h("h2", {}, "Nothing built in fits well"),
+      h("p", { class: "meta" }, "Let's look through Hugging Face for something smaller or newer.")));
+  }
+  show("v-pick");
+  if (!ms.length) more(false);
+}
+
+function list(title, ms) {
+  const box = h("div", {}, h("p", { class: "rows-title" }, title));
+  const rows = h("div", { class: "rows" });
+  for (const m of ms)
+    rows.append(h("div", { class: "row" }, h("div", { class: "t" }, h("b", {}, m.title), meta(m)),
+      h("button", { class: "btn small", onclick: () => install(m) }, m.have ? "Use" : "Get")));
+  box.append(rows); return box;
+}
+
+let moreBusy = false;
+async function more(everything) {
+  if (moreBusy) return;
+  moreBusy = true;
+  const b = $("#more-btn"); b.textContent = "Searching Hugging Face… (about 20 seconds)";
+  const d = await api("/api/more?use=" + use + "&all=" + (everything ? 1 : 0));
+  moreBusy = false;
+  const o = $("#others"); o.querySelector(".found")?.remove();
+  const wrap = h("div", { class: "found" });
+  if (d.error) wrap.append(h("p", { class: "rows-title" }, d.error));
+  else if (!d.models.length) wrap.append(h("p", { class: "rows-title" }, "No more matches."));
+  else wrap.append(list(everything ? "From all of Hugging Face" : "From Hugging Face", d.models));
+  if (!everything) wrap.append(h("p", { class: "center" }, h("button", { class: "link", onclick: () => more(true) }, "Include community uploads")));
+  o.append(wrap);
+  b.textContent = "Search again"; $("#more-wrap").hidden = true;
+}
+
+async function install(m) {
+  lastId = m.id;
+  const r = await api("/api/install", { id: m.id });
+  if (r.error) return fail(r.error);
+  watch();
+}
+
+let timer = null;
+function watch() {
+  clearTimeout(timer);
+  const tick = async () => {
+    const j = await api("/api/progress");
+    if (j.state === "downloading") {
+      show("v-install");
+      $("#i-title").textContent = "Downloading " + j.title;
+      $("#bar").classList.remove("busy");
+      $("#bar-i").style.width = (j.total ? Math.min(100, (j.done * 100) / j.total) : 0) + "%";
+      $("#i-text").textContent = fmt(j.done) + " of " + fmt(j.total);
+    } else if (j.state === "testing") {
+      show("v-install");
+      $("#i-title").textContent = "Testing speed…";
+      $("#bar").classList.add("busy");
+      $("#i-text").textContent = "About 10 seconds";
+    } else if (j.state === "done") return done(j);
+    else if (j.state === "error") return fail(j.error);
+    else return;
+    timer = setTimeout(tick, 500);
+  };
+  tick();
+}
+
+function done(j) {
+  let text = j.title + " is installed.";
+  if (j.bench === "ok") text += " Your computer writes about " + j.tps + " tokens a second" + (j.tps >= 15 ? ": smooth." : j.tps >= 5 ? ": usable." : ": slow, a smaller model would feel snappier.");
+  else if (j.bench === "skipped") text += " The speed test was skipped because llama.cpp isn't installed yet.";
+  else text += " The speed test could not load it; the model may be too big for this computer.";
+  $("#d-text").textContent = text;
+  $("#cmd").textContent = S.serve_cmd;
+  show("v-done");
+}
+function fail(msg) { $("#e-text").textContent = msg; show("v-error"); }
+
+$("#back").onclick = renderUse;
+$("#more-btn").onclick = () => more(false);
+$("#again").onclick = renderUse;
+$("#retry").onclick = () => (lastId ? install({ id: lastId }) : renderUse());
+$("#copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(S.serve_cmd); $("#copy").textContent = "Copied"; } catch (e) { $("#copy").textContent = "Select and copy"; }
+  setTimeout(() => ($("#copy").textContent = "Copy"), 1800);
+};
+
+(async function init() {
+  S = await api("/api/state");
+  const gpu = S.gpu && S.mode === "gpu" ? S.gpu + ", " + S.vram_gb + " GB" : "";
+  const chip = $("#hw"); chip.hidden = false;
+  chip.textContent = S.ram_gb + " GB memory" + (gpu ? " · " + gpu : " · no graphics card used");
+  const warn = $("#warn");
+  if (!S.llama_server) warn.append(h("p", { class: "warn" }, "llama.cpp isn't installed yet, so the speed test will be skipped. See step 1 in the README."));
+  else if (S.gpu_unused) warn.append(h("p", { class: "warn" }, "Your llama.cpp build can't use your graphics card, so models will run on the processor."));
+  renderUse();
+  const j = await api("/api/progress");           // page reloaded during a download: pick it back up
+  if (j.state === "downloading" || j.state === "testing") watch();
+})();
+</script>
+</body>
+</html>
