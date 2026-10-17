@@ -8,6 +8,7 @@
 If you add a feature and one of these fails, that is the point: write its tests (first).
 """
 import ast
+import importlib.util
 import re
 import subprocess
 import sys
@@ -69,6 +70,14 @@ class TestLaunchers(unittest.TestCase):
             self.assertTrue(any((scripts / "win" / f"{stem}{ext}").is_file() for ext in (".bat", ".ps1")),
                             f"win/{stem}.(bat|ps1) missing")
 
+    def test_mac_launcher_that_pauses_returns_the_tools_exit_status(self):
+        """Regression: `read` after the tool made the launcher return read's status, so a failed --strict
+        check looked like success (and closed stdin made a good run look like a failure)."""
+        text = source(ROOT / "scripts" / "mac" / "detect-tools.command")
+        self.assertIn("status=$?", text, "save the tool's exit status before prompting")
+        self.assertRegex(text, r"(?m)^exit \"?\$status\"?\s*$", "and return it at the end")
+        self.assertLess(text.index("status=$?"), text.index("read "), "save it before the prompt, not after")
+
     def test_launchers_only_start_python_utils(self):
         for sh in (ROOT / "scripts" / "unix").glob("*.sh"):
             text = source(sh)
@@ -97,6 +106,19 @@ class TestRunnerAndWorkflow(unittest.TestCase):
                               capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("test_harness", done.stdout)
+
+    def test_coverage_child_arguments_do_not_depend_on_how_options_were_spelled(self):
+        """Regression: `--cov --min=85` raised ValueError because the child command was rebuilt by
+        looking for the two-token spelling `--min 85` in the original arguments."""
+        spec = importlib.util.spec_from_file_location("lp_run", HERE / "run.py")
+        run = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(run)
+        for spelling in (["--min", "85"], ["--min=85"]):
+            args = run.parse_args(["--cov", *spelling, "-k", "ollama", "--repeat=2", "--failfast", "-q"])
+            self.assertEqual((args.cov, args.min), (True, 85))
+            self.assertEqual(run.child_args(args), ["-k", "ollama", "--repeat", "2", "--failfast", "--quiet"], spelling)
+        self.assertEqual(run.child_args(run.parse_args([])), [])
+        self.assertEqual(run.child_args(run.parse_args(["--list"])), ["--list"])
 
     def test_runner_exit_code_reflects_failure(self):
         done = subprocess.run([sys.executable, "-I", str(HERE / "run.py"), "-k", "no_such_test_name_xyz"],

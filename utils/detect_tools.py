@@ -246,8 +246,7 @@ def check_tool(spec: dict, p: Probe, want_version: bool = True) -> dict:
         for pattern in env_site_packages(p):
             full = p.join(pattern, _dist_glob_name(package) + "-*.dist-info")
             matches = p.glob(full)
-            if matches:
-                note("python-package", full, matches[0])
+            note("python-package", full, matches[0] if matches else "")
             for m in matches:
                 dv = _dist_version(m, package)
                 add("python-package", m, STRONG, dv)

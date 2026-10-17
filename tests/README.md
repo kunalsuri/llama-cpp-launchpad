@@ -32,6 +32,8 @@ reason, and CI runs on all three OSes. `test_source_audit.py` guards what the co
 
 - `fakes.py`: `FakeProbe`, a whole fake computer (virtual files, PATH, program output, record of programs run) so
   Windows, macOS and Linux paths are tested on any host and nothing real is executed.
+- `page_harness.js`: runs the setup page's real script under Node with a fake DOM, fetch and timers, so page behaviour
+  (screens, polling, Back) is tested without a browser. Skipped, with a reason, if Node is not installed.
 - `fixtures/`: canned Hugging Face responses, a `/proc/meminfo`, benchmark output.
 - Tests that start the real server use a random localhost port; none needs network, GPU or llama.cpp.
 

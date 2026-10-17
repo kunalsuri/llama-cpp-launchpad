@@ -198,7 +198,9 @@ function icon(path) {
   const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
   p.setAttribute("d", path); s.append(p); return s;
 }
+let view = "", jobLive = false;       // which screen is showing; has a download been started or picked back up?
 function show(id) {
+  view = id;
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== id));
   window.scrollTo(0, 0);
 }
@@ -224,6 +226,7 @@ function meta(m) {
 
 // --- Screens -------------------------------------------------------------------------------------
 function renderUse() {
+  jobLive = false;
   const t = $("#tiles"); t.replaceChildren();
   for (const [id, title, text] of USES)
     t.append(h("button", { class: "tile", onclick: () => pick(id) }, icon(ICONS[id]), h("b", {}, title), h("span", {}, text)));
@@ -289,20 +292,23 @@ async function install(m) {
 let timer = null;
 function watch() {
   clearTimeout(timer);
+  jobLive = true;
   const tick = async () => {
     const j = await api("/api/progress");
+    const away = view === "v-tools";        // the user is looking at Installed tools: keep polling, but never switch screens
     if (j.state === "downloading") {
-      show("v-install");
+      if (!away) show("v-install");
       $("#i-title").textContent = "Downloading " + j.title;
       $("#bar").classList.remove("busy");
       $("#bar-i").style.width = (j.total ? Math.min(100, (j.done * 100) / j.total) : 0) + "%";
       $("#i-text").textContent = fmt(j.done) + " of " + fmt(j.total);
     } else if (j.state === "testing") {
-      show("v-install");
+      if (!away) show("v-install");
       $("#i-title").textContent = "Testing speed…";
       $("#bar").classList.add("busy");
       $("#i-text").textContent = "About 10 seconds";
-    } else if (j.state === "done") return done(j);
+    } else if (away) return;                // finished while away: "Back" shows the result
+    else if (j.state === "done") return done(j);
     else if (j.state === "error") return fail(j.error);
     else return;
     timer = setTimeout(tick, 500);
@@ -329,6 +335,7 @@ function toolCard(t) {
   const first = t.evidence[0];
   if (first) card.append(h("p", {}, first.path));
   if (t.status === "installed" && t.hint.start) card.append(h("p", {}, "Start it with: " + t.hint.start));
+  if (t.status === "installed" && !t.hint.start && t.hint.setup) card.append(h("p", {}, t.hint.setup));
   if (t.status !== "installed") card.append(h("p", {}, t.hint.install));
   const rows = (t.searched || []).map((s) => h("li", { class: s.found ? "hit" : "" }, (s.found ? "found  " : "no     ") + s.check + ": " + s.target));
   card.append(h("details", {}, h("summary", {}, "Why we think so (" + t.evidence.length + " found, " + rows.length + " places checked)"),
@@ -345,7 +352,10 @@ async function loadTools() {
 }
 $("#tools-btn").onclick = () => { show("v-tools"); loadTools(); };
 $("#tools-recheck").onclick = loadTools;
-$("#tools-back").onclick = renderUse;
+$("#tools-back").onclick = async () => {        // back to the running download / its result, else the first screen
+  const j = await api("/api/progress");
+  if (jobLive && ["downloading", "testing", "done", "error"].includes(j.state)) { view = ""; watch(); } else renderUse();
+};
 
 $("#back").onclick = renderUse;
 $("#more-btn").onclick = () => more(false);

@@ -38,9 +38,26 @@ INSTALL_HINTS = {
     "lmstudio": "Download it from lmstudio.ai",
     "unsloth": "pip install unsloth",
 }
-START_HINTS = {"ollama": "ollama serve", "lmstudio": "lms server start"}      # llama.cpp: the project's serve script
+# A start command is only offered when the program it runs was really found (not just an app bundle, a Python
+# package or a sibling program): tool id -> (program the command needs, what to say when it is missing).
+START_NEEDS = {
+    "ollama": ("ollama", "The ollama command was not found. Open the Ollama app, or add ollama to your PATH."),
+    "llama-cpp": ("llama-server", "llama-server was not found, and the serve script needs it. {install}"),
+    "lmstudio": ("lms", "The lms command was not found. Start the server from the LM Studio app instead."),
+}
+START_CMD = {"ollama": "ollama serve", "lmstudio": "lms server start"}      # llama.cpp: the project's serve script
 CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
        "img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+
+
+def has_program(tool: dict, program: str) -> bool:
+    """Was the executable `program` found (on PATH, in a known location, or named by an env variable)?"""
+    for e in tool["evidence"]:
+        stem = re.split(r"[\\/]", e["path"])[-1].lower()
+        stem = stem[:-4] if stem.endswith(".exe") else stem
+        if e["kind"].startswith("env-") or (e["kind"] in ("on-PATH", "known-location") and stem == program):
+            return True
+    return False
 
 
 def serve_cmd(system: str) -> str:
@@ -85,9 +102,12 @@ class App:
                 del tool["searched"]
             install = INSTALL_HINTS[tool["id"]]
             hint = {"install": install.get(system, install["default"]) if isinstance(install, dict) else install}
-            start = serve_cmd(system) if tool["id"] == "llama-cpp" else START_HINTS.get(tool["id"])
-            if tool["status"] == "installed" and start:
-                hint["start"] = start
+            if tool["status"] == "installed" and tool["id"] in START_NEEDS:
+                program, missing = START_NEEDS[tool["id"]]
+                if has_program(tool, program):
+                    hint["start"] = serve_cmd(system) if tool["id"] == "llama-cpp" else START_CMD[tool["id"]]
+                else:
+                    hint["setup"] = missing.format(install=hint["install"])
             tool["hint"] = hint
         return result
 

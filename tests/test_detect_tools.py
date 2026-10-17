@@ -156,6 +156,21 @@ class TestUnsloth(unittest.TestCase):
         self.assertEqual(t["status"], "installed")
         self.assertEqual(p.ran, [], "importing unsloth loads PyTorch; we must not run it")
 
+    def test_failed_environment_searches_are_recorded_too(self):
+        """Regression: only successful conda/virtualenv searches were logged, so --verbose and the dashboard
+        could not show where Unsloth had been looked for."""
+        t = tool(dt.detect(FakeProbe("Linux")), "unsloth")
+        env_checks = [s for s in t["searched"] if s["check"] == "python-package" and "site-packages" in s["target"]]
+        self.assertGreaterEqual(len(env_checks), 10)
+        self.assertTrue(all(not s["found"] for s in env_checks))
+        self.assertIn("/home/me/miniconda3/envs/*/lib/python3*/site-packages/unsloth-*.dist-info",
+                      [s["target"] for s in env_checks])
+
+    def test_a_hit_is_still_recorded_as_found(self):
+        sp = "/home/me/miniconda3/envs/llm/lib/python3.11/site-packages/"
+        t = tool(dt.detect(FakeProbe("Linux", dirs=[sp + "unsloth-2025.8.2.dist-info"])), "unsloth")
+        self.assertEqual(sum(1 for s in t["searched"] if s["found"] and "site-packages" in s["target"]), 1)
+
     def test_home_dir_alone_is_data_only(self):
         t = tool(dt.detect(FakeProbe("Linux", dirs=["/home/me/.unsloth"])), "unsloth")
         self.assertEqual(t["status"], "data-only")

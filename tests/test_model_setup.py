@@ -52,6 +52,11 @@ class Base(unittest.TestCase):
         patcher = mock.patch.object(ms, "http_get", self.fake_http_get)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Results must not depend on the machine running the tests: on an Apple Silicon Mac (the macOS CI
+        # runner) real detection reports unified-memory "apple" hardware and changes which model is picked.
+        chip = mock.patch.object(hwmod.platform, "machine", return_value="x86_64")
+        chip.start()
+        self.addCleanup(chip.stop)
         ms.Ctx.assume_yes = False
         ms.init_style(io.StringIO())          # no colours
 

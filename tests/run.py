@@ -80,7 +80,7 @@ def run_with_coverage(argv: list, minimum: int) -> int:
     return rc or report
 
 
-def main(argv: list | None = None) -> int:
+def parse_args(argv: list | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Run the llama-cpp-launchpad tests.")
     ap.add_argument("-k", action="append", default=[], metavar="TEXT", help="only tests whose name contains TEXT")
     ap.add_argument("--repeat", type=int, default=1, metavar="N", help="run the suite N times (flaky-test hunt)")
@@ -92,12 +92,27 @@ def main(argv: list | None = None) -> int:
     args = ap.parse_args(argv)
     if args.repeat < 1:
         ap.error("--repeat must be at least 1")
+    return args
+
+
+def child_args(args: argparse.Namespace) -> list:
+    """The options to hand to the coverage child process, rebuilt from the parsed values so that any spelling
+    the user typed (`--min 85`, `--min=85`, `-q`, `--repeat=2`) works. --cov and --min are for the parent."""
+    out = []
+    for text in args.k:
+        out += ["-k", text]
+    if args.repeat != 1:
+        out += ["--repeat", str(args.repeat)]
+    for flag, on in (("--failfast", args.failfast), ("--list", args.list), ("--quiet", args.quiet)):
+        if on:
+            out.append(flag)
+    return out
+
+
+def main(argv: list | None = None) -> int:
+    args = parse_args(argv)
     if args.cov:
-        forward = [a for a in (argv if argv is not None else sys.argv[1:]) if a != "--cov"]
-        if args.min:
-            i = forward.index("--min")
-            del forward[i:i + 2]
-        return run_with_coverage(forward, args.min)
+        return run_with_coverage(child_args(args), args.min)
 
     warnings.simplefilter("default")
     for category in (SyntaxWarning, FutureWarning):
