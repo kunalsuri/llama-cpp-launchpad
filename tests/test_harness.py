@@ -98,6 +98,69 @@ def code_lines(path):
     return out
 
 
+class TestServeMenuSplitModels(unittest.TestCase):
+    """A split model (-00001-of-00003.gguf ...) is ONE model that loads from its first part. The serve menu
+    must list it once, and never list its other parts or a set that is missing a part."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+        self.models = self.tmp / "models"
+        self.models.mkdir()
+        for name in ("a-Q4_K_M-00001-of-00002.gguf", "a-Q4_K_M-00002-of-00002.gguf", "b-Q4_K_M.gguf",
+                     "c-Q4_K_M-00001-of-00003.gguf", "c-Q4_K_M-00003-of-00003.gguf", "mmproj-b.gguf"):
+            (self.models / name).write_bytes(b"x" * 1000)
+        if sys.platform == "win32":
+            self.server = self.tmp / "llama-server.cmd"
+            self.server.write_text("@echo SERVED %*\r\n", encoding="utf-8")
+        else:
+            self.server = self.tmp / "llama-server"
+            self.server.write_text("#!/bin/sh\necho SERVED \"$@\"\n", encoding="utf-8")
+            self.server.chmod(0o755)
+
+    def serve(self, choice):
+        scripts = ROOT / "scripts"
+        if sys.platform == "win32":
+            cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(scripts / "win" / "serve.ps1")]
+        else:
+            cmd = ["bash", str(scripts / "unix" / "serve.sh")]
+        env = dict(os.environ, MODELS_DIR=str(self.models), LLAMA_SERVER=str(self.server), KILL_EXISTING="0",
+                   OPEN_BROWSER="0", CHECK_DAYS="0", UI="default", EXTRA_ARGS="")
+        return subprocess.run(cmd, input=f"{choice}\n", env=env, capture_output=True, text=True, timeout=120)
+
+    def served(self, choice):
+        done = self.serve(choice)
+        return done.returncode, (done.stdout + done.stderr)
+
+    def test_first_part_of_a_complete_set_is_listed_once(self):
+        _, out = self.served(1)
+        self.assertIn("a-Q4_K_M-00001-of-00002.gguf", out)
+
+    def test_other_parts_and_incomplete_sets_are_not_models(self):
+        _, out = self.served(2)
+        self.assertIn("b-Q4_K_M.gguf", out, "the second entry is the next real model, not the second part")
+        self.assertIn("SERVED", out)
+        rc, out = self.served(3)
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("Invalid model choice", out)
+
+
+class TestPowerShellVariables(unittest.TestCase):
+    def test_dev_setup_reads_only_variables_it_assigns(self):
+        """A misspelt variable ($LmCli for $LmsCli) is $null in PowerShell: LM Studio was reported missing."""
+        text = source(ROOT / "scripts" / "win" / "dev-setup.ps1")
+        assigned = {m.lower() for m in re.findall(r"\$(\w+)\s*(?:\+|-)?=", text)}
+        assigned |= {m.lower() for m in re.findall(r"\bforeach\s*\(\s*\$(\w+)", text)}
+        assigned |= {m.lower() for m in re.findall(r"\$(\w+)", " ".join(re.findall(r"param\s*\([^)]*\)", text, re.S)))}
+        for fn_args in re.findall(r"function\s+\S+\s*\(([^)]*)\)", text):
+            assigned |= {m.lower() for m in re.findall(r"\$(\w+)", fn_args)}
+        builtin = {"env", "true", "false", "null", "_", "args", "lastexitcode", "matches", "psscriptroot", "pshome",
+                   "erroractionpreference", "progresspreference", "home", "host", "input", "error", "pid", "iswindows", "psversiontable"}
+        used = {m.lower() for m in re.findall(r"\$(\w+)", re.sub(r"'[^'\n]*'", "''", text))}
+        self.assertEqual(sorted(used - assigned - builtin), [])
+
+
 class TestLauncherExitStatus(unittest.TestCase):
     """Rule 7: a launcher returns the tool's exit status. Anything that runs after the tool (a pause, cleanup,
     `if errorlevel`) must not replace it. Seen in PR #1: the mac launcher returned `read`'s status."""

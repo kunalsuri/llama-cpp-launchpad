@@ -68,12 +68,27 @@ PY="$(command -v python3 || command -v python)"   # model-setup is optional: ski
 [ -n "$PY" ] && "$PY" "$ROOT_DIR/utils/model_setup.py" --weekly-prompt
 
 # --- Collect models (skip multimodal projector files) ------------------------
+# A split model (name-00001-of-00003.gguf ...) is one model: list its first part once, sized as the whole set,
+# and leave out the other parts and any set that is missing a part (llama-server must start from part 1).
 models=(); sizes=()
+shard_re='^(.*)-([0-9]{5})-of-([0-9]{5})\.gguf$'
 for f in "$MODELS_DIR"/*.gguf; do
   [ -f "$f" ] || continue
-  case "$(basename "$f")" in mmproj*) continue ;; esac
-  models+=("$(basename "$f")")
-  sizes+=("$(du -h "$f" | cut -f1)")
+  base="$(basename "$f")"
+  case "$base" in mmproj*) continue ;; esac
+  parts=("$f")
+  if [[ $base =~ $shard_re ]]; then
+    stem="${BASH_REMATCH[1]}"; n=$((10#${BASH_REMATCH[2]})); total=$((10#${BASH_REMATCH[3]}))
+    [ "$n" -eq 1 ] || continue
+    parts=()
+    for ((i = 1; i <= total; i++)); do
+      part="$MODELS_DIR/$(printf '%s-%05d-of-%05d.gguf' "$stem" "$i" "$total")"
+      [ -f "$part" ] && parts+=("$part")
+    done
+    [ "${#parts[@]}" -eq "$total" ] || continue
+  fi
+  models+=("$base")
+  sizes+=("$(du -ch "${parts[@]}" | tail -n 1 | cut -f1)")
 done
 if [ ${#models[@]} -eq 0 ]; then
   echo "${RED}No .gguf models found in $MODELS_DIR${R}"

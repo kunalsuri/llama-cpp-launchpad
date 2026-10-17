@@ -45,19 +45,38 @@ START_NEEDS = {
     "llama-cpp": ("llama-server", "llama-server was not found, and the serve script needs it. {install}"),
     "lmstudio": ("lms", "The lms command was not found. Start the server from the LM Studio app instead."),
 }
+# Found, but not where the start command will look: say where it is instead of showing a command that fails.
+OFF_PATH = {
+    "ollama": "ollama was found at {path}, but it is not on your PATH, so 'ollama serve' would fail. "
+              "Add its folder to your PATH.",
+    "llama-cpp": "llama-server was found at {path}, but the serve script does not look there. "
+                 "Set LLAMA_SERVER to that path, or copy it into this project's bin folder.",
+    "lmstudio": "lms was found at {path}, but it is not on your PATH, so 'lms server start' would fail. "
+                "Add its folder to your PATH.",
+}
 START_CMD = {"ollama": "ollama serve", "lmstudio": "lms server start"}      # llama.cpp: the project's serve script
 CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
        "img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
 
-def has_program(tool: dict, program: str) -> bool:
-    """Was the executable `program` found (on PATH, in a known location, or named by an env variable)?"""
+def find_program(tool: dict, program: str, probe) -> tuple:
+    """Where is the executable `program`? -> (path or "", runnable: will the start command reach it?).
+    Found in a known location is not enough: `lms server start` needs lms on PATH. The serve script (llama.cpp)
+    also looks in $LLAMA_SERVER, the project's bin folder and ~/llama.cpp/build/bin."""
+    j = probe.join
+    serve_dirs = [j(probe.root, "bin")] + ([] if probe.system == "Windows" else [j(probe.home, "llama.cpp", "build", "bin")])
+    serve_dirs = [probe.norm(d) for d in serve_dirs]
+    found = ""
     for e in tool["evidence"]:
         stem = re.split(r"[\\/]", e["path"])[-1].lower()
         stem = stem[:-4] if stem.endswith(".exe") else stem
-        if e["kind"].startswith("env-") or (e["kind"] in ("on-PATH", "known-location") and stem == program):
-            return True
-    return False
+        if not (e["kind"].startswith("env-") or (e["kind"] in ("on-PATH", "known-location") and stem == program)):
+            continue
+        found = found or e["path"]
+        parent = probe.norm(e["path"]).rsplit("/", 1)[0]
+        if e["kind"] == "on-PATH" or (tool["id"] == "llama-cpp" and (e["kind"].startswith("env-") or parent in serve_dirs)):
+            return e["path"], True
+    return found, False
 
 
 def serve_cmd(system: str) -> str:
@@ -104,8 +123,11 @@ class App:
             hint = {"install": install.get(system, install["default"]) if isinstance(install, dict) else install}
             if tool["status"] == "installed" and tool["id"] in START_NEEDS:
                 program, missing = START_NEEDS[tool["id"]]
-                if has_program(tool, program):
+                where, runnable = find_program(tool, program, self.probe)
+                if runnable:
                     hint["start"] = serve_cmd(system) if tool["id"] == "llama-cpp" else START_CMD[tool["id"]]
+                elif where:
+                    hint["setup"] = OFF_PATH[tool["id"]].format(path=where)
                 else:
                     hint["setup"] = missing.format(install=hint["install"])
             tool["hint"] = hint
@@ -128,7 +150,7 @@ class App:
                 "size_h": ms.human_size(int(m["size"])), "tps": tps,
                 "verdict": "tight" if m.get("mode") == "tight" else ms.verdict(tps),
                 "where": m.get("mode", "cpu"), "gpu_share": m.get("gpu_share", 0), "note": m.get("note", ""),
-                "have": all((ms.models_dir() / Path(f).name).is_file() for f, _ in files)}
+                "have": all(ms.local_path(m["repo"], f, sz)[1] for f, sz in files)}
 
     def recommend(self, use: str) -> dict:
         """The best catalog models for this machine (instant, no network)."""
@@ -172,8 +194,8 @@ class App:
         try:
             base, paths = 0, []
             for f, size in offer["files"]:                  # split models: every part, into the same folder
-                dest = ms.models_dir() / Path(f).name
-                path = dest if dest.is_file() else ms.download(
+                dest, have = ms.local_path(offer["repo"], f, size)
+                path = dest if have else ms.download(
                     offer["repo"], f, size, lambda d, b=base: self._set(done=b + d))
                 if not path:
                     self._set(state="error", error="The download did not finish (disk space or connection). "

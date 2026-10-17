@@ -209,6 +209,8 @@ async function api(path, body) {
   const r = await fetch(path, opts);
   return r.json();
 }
+const UNREACHABLE = "Could not reach the setup server. Is the launcher still running in your terminal? Then try again.";
+let gen = 0;          // bumped whenever the user picks or changes what they want; answers to older requests are dropped
 const fmt = (n) => (n >= 1073741824 ? (n / 1073741824).toFixed(1) + " GB" : Math.round(n / 1048576) + " MB");
 
 const VERDICT = {
@@ -227,6 +229,7 @@ function meta(m) {
 // --- Screens -------------------------------------------------------------------------------------
 function renderUse() {
   jobLive = false;
+  gen++; moreBusy = false;
   const t = $("#tiles"); t.replaceChildren();
   for (const [id, title, text] of USES)
     t.append(h("button", { class: "tile", onclick: () => pick(id) }, icon(ICONS[id]), h("b", {}, title), h("span", {}, text)));
@@ -235,9 +238,12 @@ function renderUse() {
 
 async function pick(u) {
   use = u;
+  const g = ++gen; moreBusy = false;
   $("#wait-text").textContent = "Finding the best model for your computer…";
   show("v-wait");
-  const data = await api("/api/recommend?use=" + u);
+  let data;
+  try { data = await api("/api/recommend?use=" + u); } catch (e) { if (g === gen) fail(UNREACHABLE); return; }
+  if (g !== gen) return;
   const ms = data.models || [];
   $("#top").replaceChildren(); $("#others").replaceChildren();
   $("#more-wrap").hidden = false; $("#more-btn").textContent = "See other options";
@@ -269,22 +275,27 @@ let moreBusy = false;
 async function more(everything) {
   if (moreBusy) return;
   moreBusy = true;
+  const g = gen;
   const b = $("#more-btn"); b.textContent = "Searching Hugging Face… (about 20 seconds)";
-  const d = await api("/api/more?use=" + use + "&all=" + (everything ? 1 : 0));
+  let d, failed = false;
+  try { d = await api("/api/more?use=" + use + "&all=" + (everything ? 1 : 0)); } catch (e) { failed = true; }
+  if (g !== gen) return;                          // the user chose something else meanwhile: this answer is not theirs
   moreBusy = false;
   const o = $("#others"); o.querySelector(".found")?.remove();
   const wrap = h("div", { class: "found" });
-  if (d.error) wrap.append(h("p", { class: "rows-title" }, d.error));
+  if (failed) wrap.append(h("p", { class: "rows-title" }, "Could not search Hugging Face. Check your connection and try again."));
+  else if (d.error) wrap.append(h("p", { class: "rows-title" }, d.error));
   else if (!d.models.length) wrap.append(h("p", { class: "rows-title" }, "No more matches."));
   else wrap.append(list(everything ? "From all of Hugging Face" : "From Hugging Face", d.models));
-  if (!everything) wrap.append(h("p", { class: "center" }, h("button", { class: "link", onclick: () => more(true) }, "Include community uploads")));
+  if (!everything && !failed) wrap.append(h("p", { class: "center" }, h("button", { class: "link", onclick: () => more(true) }, "Include community uploads")));
   o.append(wrap);
-  b.textContent = "Search again"; $("#more-wrap").hidden = true;
+  b.textContent = failed ? "Try again" : "Search again"; $("#more-wrap").hidden = !failed;
 }
 
 async function install(m) {
   lastId = m.id;
-  const r = await api("/api/install", { id: m.id });
+  let r;
+  try { r = await api("/api/install", { id: m.id }); } catch (e) { return fail(UNREACHABLE); }
   if (r.error) return fail(r.error);
   watch();
 }
@@ -293,8 +304,14 @@ let timer = null;
 function watch() {
   clearTimeout(timer);
   jobLive = true;
+  let misses = 0;                         // consecutive failed polls: a blip is retried, a dead server is reported
   const tick = async () => {
-    const j = await api("/api/progress");
+    let j;
+    try { j = await api("/api/progress"); misses = 0; } catch (e) {
+      if (++misses >= 20) return fail(UNREACHABLE);
+      timer = setTimeout(tick, 500);
+      return;
+    }
     const away = view === "v-tools";        // the user is looking at Installed tools: keep polling, but never switch screens
     if (j.state === "downloading") {
       if (!away) show("v-install");
@@ -353,7 +370,8 @@ async function loadTools() {
 $("#tools-btn").onclick = () => { show("v-tools"); loadTools(); };
 $("#tools-recheck").onclick = loadTools;
 $("#tools-back").onclick = async () => {        // back to the running download / its result, else the first screen
-  const j = await api("/api/progress");
+  let j = { state: "idle" };
+  try { j = await api("/api/progress"); } catch (e) { /* cannot tell: fall through to the first screen */ }
   if (jobLive && ["downloading", "testing", "done", "error"].includes(j.state)) { view = ""; watch(); } else renderUse();
 };
 
@@ -367,7 +385,7 @@ $("#copy").onclick = async () => {
 };
 
 (async function init() {
-  S = await api("/api/state");
+  try { S = await api("/api/state"); } catch (e) { return fail(UNREACHABLE); }
   const gpu = S.gpu && S.mode === "gpu" ? S.gpu + ", " + S.vram_gb + " GB" : "";
   const chip = $("#hw"); chip.hidden = false;
   chip.textContent = S.ram_gb + " GB memory" + (gpu ? " · " + gpu : " · no graphics card used");
@@ -376,7 +394,8 @@ $("#copy").onclick = async () => {
   else if (S.gpu_unused) warn.append(h("p", { class: "warn" }, "Your llama.cpp build can't use your graphics card, so models will run on the processor."));
   renderUse();
   if (location.hash === "#tools") $("#tools-btn").click();
-  const j = await api("/api/progress");           // page reloaded during a download: pick it back up
+  let j = { state: "idle" };
+  try { j = await api("/api/progress"); } catch (e) { /* the first screen is usable without it */ }   // page reloaded during a download: pick it back up
   if (j.state === "downloading" || j.state === "testing") watch();
 })();
 </script>

@@ -48,8 +48,10 @@ function makePage({ hash = "", routes }) {
     console,
     fetch: async (path, opts) => {
       state.calls.push(path);
-      const body = state.routes(path.split("?")[0], opts);
-      return { json: async () => body };
+      // A route may return a Promise (a slow server), {__reject} (the request fails) or {__badjson} (not JSON).
+      const body = await state.routes(path.split("?")[0], opts, path);
+      if (body && body.__reject) throw new TypeError(body.__reject);
+      return { json: async () => { if (body && body.__badjson) throw new SyntaxError("Unexpected token <"); return body; } };
     },
     setTimeout: (fn, ms) => { const id = nextId++; timers.push({ id, at: now + (ms || 0), fn }); return id; },
     clearTimeout: (id) => { const i = timers.findIndex((t) => t.id === id); if (i >= 0) timers.splice(i, 1); },
@@ -61,6 +63,13 @@ function makePage({ hash = "", routes }) {
     el: (id) => els.get(id),
     visible: () => views.filter((v) => !v.hidden).map((v) => v.id).join(","),
     text: (id) => els.get(id).text(),
+    // The n-th button (0-based) with this label, found anywhere under element `id`.
+    button(id, label, n = 0) {
+      const found = [];
+      const walk = (e) => { if (e.handlers && e.handlers.click && e.text().includes(label)) found.push(e); (e.children || []).forEach(walk); };
+      walk(els.get(id));
+      return found[n];
+    },
     settle,
     async start() { vm.runInContext(script, ctx); await settle(); },
     async click(id) { els.get(id).click(); await settle(); },
@@ -169,6 +178,107 @@ const scenarios = {
     if (!text.includes("Start it with: ollama serve")) return "start command missing: " + text;
     if (!text.includes("llama-server was not found")) return "setup step missing: " + text;
     if (text.includes("Start it with: undefined")) return "undefined leaked into the page";
+  },
+  async "a slow Hub search that finishes after the user chose something else is discarded"() {
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const model = (id, title) => ({ id, title, verdict: "smooth", where: "cpu", size_h: "1 GB", have: false, note: "" });
+    const p = makePage({
+      routes: (path, _o, full) => {
+        if (path === "/api/state") return STATE;
+        if (path === "/api/progress") return { state: "idle" };
+        if (path === "/api/recommend") return { models: [full.includes("use=chat") ? model("c1", "Chat Model") : model("k1", "Code Model")] };
+        if (path === "/api/more") return full.includes("use=chat") ? gate.then(() => ({ models: [model("s1", "Stale Hub Model")] })) : { models: [model("n1", "Fresh Hub Model")] };
+        return {};
+      },
+    });
+    await p.start();
+    await p.click("tiles");                                    // no-op: the container itself
+    p.button("tiles", "General chat").click(); await p.settle();
+    if (p.visible() !== "v-pick") return "chat recommendations did not open: " + p.visible();
+    await p.click("more-btn");                                 // search starts, answer is held back
+    await p.click("back");                                     // "Change"
+    p.button("tiles", "Writing code").click(); await p.settle();
+    release(); await p.settle();
+    if (p.text("others").includes("Stale Hub Model")) return "old search results were added to the new recommendations";
+    if (p.el("more-wrap").hidden) return "the new selection lost its search button";
+    await p.click("more-btn");
+    if (!p.state.calls.some((c) => c.startsWith("/api/more?use=coding"))) return "search was blocked by the old request: " + p.state.calls.join(" ");
+    if (!p.text("others").includes("Fresh Hub Model")) return "new search results missing: " + p.text("others");
+  },
+
+  async "a failed Hub search shows a message and can be tried again"() {
+    let n = 0;
+    const p = makePage({
+      routes: (path) => {
+        if (path === "/api/state") return STATE;
+        if (path === "/api/progress") return { state: "idle" };
+        if (path === "/api/recommend") return { models: [{ id: "c1", title: "Chat Model", verdict: "smooth", where: "cpu", size_h: "1 GB", have: false, note: "" }] };
+        if (path === "/api/more") return ++n === 1 ? { __reject: "Failed to fetch" } : { models: [{ id: "h1", title: "Hub Model", verdict: "usable", where: "cpu", size_h: "2 GB", have: false, note: "" }] };
+        return {};
+      },
+    });
+    await p.start();
+    p.button("tiles", "General chat").click(); await p.settle();
+    await p.click("more-btn");
+    if (p.visible() !== "v-pick") return "a failed search should stay on the picks, got " + p.visible();
+    if (!/could not|couldn't|try again/i.test(p.text("others"))) return "no message after the failure: " + p.text("others");
+    if (p.el("more-wrap").hidden) return "no way to search again";
+    await p.click("more-btn");
+    if (n !== 2) return "second search never ran (stuck busy): " + n;
+    if (!p.text("others").includes("Hub Model")) return "results missing after retry";
+  },
+
+  async "a failed progress request does not stop the progress updates"() {
+    for (const failure of [{ __reject: "Failed to fetch" }, { __badjson: true }]) {
+      let calls = 0;
+      const p = makePage({
+        routes: (path) => {
+          if (path === "/api/state") return STATE;
+          if (path !== "/api/progress") return {};
+          calls++;
+          if (calls === 2) return failure;                 // 1 = page load, 2 = first poll
+          return calls < 5 ? DOWNLOADING : { state: "done", title: "Qwen", bench: "ok", tps: 20 };
+        },
+      });
+      await p.start();
+      await p.advance(5000);
+      if (p.visible() !== "v-done") return `after ${Object.keys(failure)[0]}: polling stopped, showing ${p.visible()} (${calls} requests)`;
+    }
+  },
+
+  async "a server that stays unreachable ends in an error, not an endless wait"() {
+    let calls = 0;
+    const p = makePage({
+      routes: (path) => {
+        if (path === "/api/state") return STATE;
+        if (path !== "/api/progress") return {};
+        return ++calls === 1 ? DOWNLOADING : { __reject: "Failed to fetch" };
+      },
+    });
+    await p.start();
+    await p.advance(60000);
+    if (p.visible() !== "v-error") return "expected v-error, got " + p.visible();
+  },
+
+  async "a failed start of the download and a failed page load both show an error"() {
+    const rec = { models: [{ id: "c1", title: "Chat Model", verdict: "smooth", where: "cpu", size_h: "1 GB", have: false, note: "" }] };
+    const p = makePage({
+      routes: (path) => {
+        if (path === "/api/state") return STATE;
+        if (path === "/api/progress") return { state: "idle" };
+        if (path === "/api/recommend") return rec;
+        if (path === "/api/install") return { __reject: "Failed to fetch" };
+        return {};
+      },
+    });
+    await p.start();
+    p.button("tiles", "General chat").click(); await p.settle();
+    p.button("top", "Get this model").click(); await p.settle();
+    if (p.visible() !== "v-error") return "install failure: expected v-error, got " + p.visible();
+    const q = makePage({ routes: (path) => (path === "/api/state" ? { __reject: "Failed to fetch" } : {}) });
+    await q.start();
+    if (q.visible() !== "v-error") return "page load failure: expected v-error, got " + q.visible();
   },
 };
 

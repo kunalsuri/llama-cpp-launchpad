@@ -498,6 +498,74 @@ class TestDownload(Base):
         self.assertFalse((self.tmp / "evil.gguf").exists())
 
 
+class TestSameNameFromTwoRepos(Base):
+    """Two repos can both ship `model.gguf`. A file is reused only if it came from this repo (or, when nothing
+    says where it came from, only if its size is the expected one); otherwise it is stored under a separate name."""
+
+    def put(self, name, data=b"x", source=None):
+        d = ms.models_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(data)
+        if source:
+            ms.claim_file(d / name, source)
+
+    def test_download_records_where_the_file_came_from(self):
+        def fake(url, part, size):
+            part.write_bytes(b"x" * size)
+        with mock.patch.object(ms, "fetch_file", fake), contextlib.redirect_stderr(io.StringIO()):
+            path = ms.download("o/a", "model.gguf", 10)
+        self.assertEqual(ms.local_path("o/a", "model.gguf", 10), (path, True))
+        self.assertEqual(ms.local_path("o/b", "model.gguf", 10)[1], False)
+
+    def test_same_repo_reuses_its_file(self):
+        self.put("model.gguf", source="o/a")
+        self.assertEqual(ms.local_path("o/a", "model.gguf", 10), (ms.models_dir() / "model.gguf", True))
+
+    def test_other_repo_gets_its_own_name_and_does_not_see_the_first_as_installed(self):
+        self.put("model.gguf", source="o/a")
+        path, have = ms.local_path("o/b", "model.gguf", 10)
+        self.assertFalse(have)
+        self.assertNotEqual(path.name, "model.gguf")
+        self.assertTrue(path.name.endswith("model.gguf"))
+        self.assertEqual(path.parent, ms.models_dir())
+
+    def test_download_does_not_overwrite_the_other_repos_file(self):
+        self.put("model.gguf", b"AAAA", source="o/a")
+
+        def fake(url, part, size):
+            part.write_bytes(b"B" * size)
+        with mock.patch.object(ms, "fetch_file", fake), contextlib.redirect_stderr(io.StringIO()):
+            path = ms.download("o/b", "model.gguf", 10)
+        self.assertEqual((ms.models_dir() / "model.gguf").read_bytes(), b"AAAA")
+        self.assertEqual(path.read_bytes(), b"B" * 10)
+        self.assertEqual(ms.local_path("o/b", "model.gguf", 10), (path, True))
+        self.assertEqual(ms.local_path("o/a", "model.gguf", 4), (ms.models_dir() / "model.gguf", True))
+
+    def test_file_of_unknown_origin_is_reused_only_if_the_size_matches(self):
+        self.put("model.gguf", b"x" * 10)
+        self.assertTrue(ms.local_path("o/a", "model.gguf", 10)[1])
+        self.assertFalse(ms.local_path("o/a", "model.gguf", 11)[1])
+
+    def test_partial_download_of_another_repo_is_not_resumed(self):
+        d = ms.models_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "model.gguf.part").write_bytes(b"AAAA")
+        ms.claim_file(d / "model.gguf", "o/a")
+        path, have = ms.local_path("o/b", "model.gguf", 10)
+        self.assertFalse(have)
+        self.assertNotEqual(path.name, "model.gguf")
+
+    def test_install_discovered_downloads_when_only_the_other_repos_file_exists(self):
+        self.put("model.gguf", source="o/a")
+        row = {"repo": "o/b", "name": "model", "size": 10, "files": [("model.gguf", 10)]}
+        calls = []
+        with mock.patch.object(ms, "download", lambda repo, f, size: calls.append((repo, f)) or ms.models_dir() / "x.gguf"), \
+                mock.patch.object(ms, "check_model_speed", lambda *a: 0), \
+                mock.patch.object(ms, "ask", lambda *a, **k: "1"), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ms.install_discovered([row], ms.Hw(ram_mb=16384, cores=8)), 0)
+        self.assertEqual(calls, [("o/b", "model.gguf")])
+
+
 class RangeHandler(http.server.BaseHTTPRequestHandler):
     """Minimal static server that honours Range (or ignores it when ignore_range is set)."""
     payload = b""

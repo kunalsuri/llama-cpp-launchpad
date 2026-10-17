@@ -410,9 +410,35 @@ def fetch_file(url: str, dest_part: Path, size: int, on_progress=None) -> None:
         sys.stderr.write("\n")
 
 
+def source_file(path: Path) -> Path:
+    return path.with_name(path.name + ".source")
+
+
+def claim_file(path: Path, repo: str) -> None:
+    """Remember which Hugging Face repo a model file (or its partial download) belongs to."""
+    source_file(path).write_text(repo, encoding="utf-8")
+
+
+def local_path(repo: str, file: str, size: int):
+    """Where this repo's copy of `file` lives -> (path, already_there). Two repos may both ship `model.gguf`:
+    a file is only this repo's if it was downloaded from it (or, with no record, if its size is the expected one).
+    Otherwise this repo's copy gets a repo-prefixed name, so neither overwrites or stands in for the other."""
+    name = Path(file).name                              # never write outside models/
+    plain = models_dir() / name
+    prefixed = models_dir() / f"{repo.replace('/', '--')}--{name}"
+    for p in (plain, prefixed):
+        src = source_file(p)
+        owner = src.read_text(encoding="utf-8").strip() if src.is_file() else ""
+        if owner == repo or (not owner and p.is_file() and (not size or p.stat().st_size == size)):
+            return p, p.is_file()
+    if not plain.exists() and not source_file(plain).exists() and not plain.with_name(name + ".part").exists():
+        return plain, False
+    return prefixed, False
+
+
 def download(repo: str, file: str, size: int, on_progress=None):
     """Download into models/. Returns the final path, or None on failure (a partial file is kept for resume)."""
-    dest = models_dir() / Path(file).name              # never write outside models/
+    dest, _ = local_path(repo, file, size)
     part = dest.with_name(dest.name + ".part")
     models_dir().mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(models_dir()).free
@@ -421,6 +447,7 @@ def download(repo: str, file: str, size: int, on_progress=None):
             f"have {human_size(free)}.")
         return None
     err(f"{Style.ORANGE}●{Style.R} Downloading {dest.name} ({human_size(size)})")
+    claim_file(dest, repo)                              # so a resume, or another repo, knows whose bytes these are
     try:
         fetch_file(f"{HF_BASE}/{repo}/resolve/main/{file}", part, size, *([on_progress] if on_progress else []))
     except (urllib.error.URLError, OSError) as e:
@@ -557,8 +584,8 @@ def pick_and_install(rows: list, hw: Hw) -> int:
         say(f"{Style.RED}Invalid choice.{Style.R}")
         return 1
     m = rows[int(choice) - 1]
-    path = models_dir() / Path(m["file"]).name
-    if path.is_file():
+    path, have = local_path(m["repo"], m["file"], m["size"])
+    if have:
         say(f"{Style.GREEN}✔{Style.R} {path.name} is already in {models_dir()}")
     else:
         path = download(m["repo"], m["file"], m["size"])
@@ -761,8 +788,8 @@ def install_discovered(rows: list, hw: Hw) -> int:
     r = rows[int(choice) - 1]
     first = None
     for f, size in r["files"]:                       # split models: every part, into the same folder
-        dest = models_dir() / Path(f).name
-        path = dest if dest.is_file() else download(r["repo"], f, size)
+        dest, have = local_path(r["repo"], f, size)
+        path = dest if have else download(r["repo"], f, size)
         if not path:
             return 1
         first = first or path

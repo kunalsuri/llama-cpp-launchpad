@@ -77,8 +77,26 @@ function Invoke-ModelSetup([string[]]$Arguments) {
 if ($Py -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) { Invoke-ModelSetup @('--weekly-prompt') }
 
 # --- Collect models (skip multimodal projector files) ------------------------
-$models = @(Get-ChildItem -Path $ModelsDir -Filter '*.gguf' -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -notlike 'mmproj*' } | Sort-Object Name)
+# A split model (name-00001-of-00003.gguf ...) is one model: list its first part once, sized as the whole set,
+# and leave out the other parts and any set that is missing a part (llama-server must start from part 1).
+$allGguf = @(Get-ChildItem -Path $ModelsDir -Filter '*.gguf' -File -ErrorAction SilentlyContinue |
+             Where-Object { $_.Name -notlike 'mmproj*' } | Sort-Object Name)
+$models = @()
+foreach ($f in $allGguf) {
+    if ($f.Name -match '^(?<stem>.+)-(?<n>\d{5})-of-(?<total>\d{5})\.gguf$') {
+        if ([int]$Matches.n -ne 1) { continue }
+        $stem = $Matches.stem; $total = [int]$Matches.total; $parts = @()
+        for ($i = 1; $i -le $total; $i++) {
+            $want = '{0}-{1:D5}-of-{2:D5}.gguf' -f $stem, $i, $total
+            $parts += @($allGguf | Where-Object { $_.Name -eq $want })
+        }
+        if ($parts.Count -ne $total) { continue }
+        $size = [long]0; foreach ($p in $parts) { $size += $p.Length }
+        $models += [pscustomobject]@{ Name = $f.Name; FullName = $f.FullName; Length = $size }
+    } else {
+        $models += [pscustomobject]@{ Name = $f.Name; FullName = $f.FullName; Length = $f.Length }
+    }
+}
 if ($models.Count -eq 0) {
     Write-Host "No .gguf models found in $ModelsDir" -ForegroundColor Red
     if ($Py) {

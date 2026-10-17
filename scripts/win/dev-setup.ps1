@@ -112,8 +112,8 @@ if (-not $LmApp) {   # fall back to the per-user uninstall entry
            Where-Object { $_.DisplayName -like 'LM Studio*' } | Select-Object -First 1
     if ($reg -and $reg.InstallLocation) { $cand = Join-Path $reg.InstallLocation 'LM Studio.exe'; if (Test-Path $cand) { $LmApp = $cand } }
 }
-$LmFound = [bool]($LmApp -or $LmCli)
-if ($LmFound) { Ok 'LM Studio' ((@($LmApp, $LmCli) | Where-Object { $_ }) -join '  +  ') } else { Miss 'LM Studio' 'not found   (winget install ElementLabs.LMStudio)' }
+$LmFound = [bool]($LmApp -or $LmsCli)
+if ($LmFound) { Ok 'LM Studio' ((@($LmApp, $LmsCli) | Where-Object { $_ }) -join '  +  ') } else { Miss 'LM Studio' 'not found   (winget install ElementLabs.LMStudio)' }
 
 # --- Hardware report (detection lives in utils\hardware.py) -------------------------------------
 Step 'Hardware'

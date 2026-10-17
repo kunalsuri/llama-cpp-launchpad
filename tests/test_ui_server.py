@@ -51,9 +51,10 @@ class UiBase(tms.Base):
         raise urllib.error.HTTPError(url, 404, "nf", None, None)
 
     def fake_download(self, repo, f, size, on_progress=None):
-        path = ms.models_dir() / Path(f).name
+        path, _ = ms.local_path(repo, f, size)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"x")
+        ms.claim_file(path, repo)
         if on_progress:
             on_progress(size)
         return path
@@ -134,7 +135,7 @@ class TestPageScript(unittest.TestCase):
         done = subprocess.run(["node", str(HERE / "page_harness.js"), str(ui_server.PAGE)],
                               capture_output=True, text=True, timeout=120)
         results = [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")]
-        self.assertGreaterEqual(len(results), 7, done.stdout + done.stderr)
+        self.assertGreaterEqual(len(results), 12, done.stdout + done.stderr)
         for r in results:
             with self.subTest(r["name"]):
                 self.assertTrue(r["ok"], r["detail"])
@@ -249,7 +250,18 @@ class TestToolsApi(UiBase):
             ("ollama", FakeProbe("Darwin", dirs=["/Applications/Ollama.app"]), False),
             ("ollama", FakeProbe("Linux", files=["/usr/local/bin/ollama"],
                                  path={"ollama": "/usr/local/bin/ollama"}), True),
-            ("ollama", FakeProbe("Windows", files=[r"C:\Users\me\AppData\Local\Programs\Ollama\ollama.exe"]), True),
+            ("ollama", FakeProbe("Windows", files=[r"C:\Users\me\AppData\Local\Programs\Ollama\ollama.exe"],
+                                 path={"ollama": r"C:\Users\me\AppData\Local\Programs\Ollama\ollama.exe"}), True),
+            # found, but not where the command will look: a bare command would fail
+            ("ollama", FakeProbe("Windows", files=[r"C:\Users\me\AppData\Local\Programs\Ollama\ollama.exe"]), False),
+            ("lmstudio", FakeProbe("Darwin", files=["/Users/me/.lmstudio/bin/lms"]), False),
+            ("llama-cpp", FakeProbe("Linux", files=["/usr/local/bin/llama-server"]), False),
+            ("llama-cpp", FakeProbe("Linux", files=["/home/me/.local/bin/llama-server"]), False),
+            # the serve script itself looks in the project's bin folder and ~/llama.cpp/build/bin
+            ("llama-cpp", FakeProbe("Linux", files=["/home/me/proj/bin/llama-server"]), True),
+            ("llama-cpp", FakeProbe("Linux", files=["/home/me/llama.cpp/build/bin/llama-server"]), True),
+            ("llama-cpp", FakeProbe("Windows", files=[r"C:\proj\bin\llama-server.exe"]), True),
+            ("llama-cpp", FakeProbe("Linux", files=["/opt/x/llama-server"], env={"LLAMA_SERVER": "/opt/x/llama-server"}), True),
         ]
         for tool_id, probe, expect_start in cases:
             with self.subTest(tool=tool_id, machine=probe.system, expect_start=expect_start):
@@ -266,6 +278,14 @@ class TestToolsApi(UiBase):
         self.assertIn("lms", hint["setup"])
         _, hint = self.hint_for("ollama", FakeProbe("Darwin", dirs=["/Applications/Ollama.app"]))
         self.assertIn("ollama", hint["setup"])
+
+    def test_setup_hint_says_where_the_program_is_when_it_is_not_reachable(self):
+        _, hint = self.hint_for("lmstudio", FakeProbe("Darwin", files=["/Users/me/.lmstudio/bin/lms"]))
+        self.assertIn("/Users/me/.lmstudio/bin/lms", hint["setup"])
+        self.assertIn("PATH", hint["setup"])
+        _, hint = self.hint_for("llama-cpp", FakeProbe("Linux", files=["/usr/local/bin/llama-server"]))
+        self.assertIn("/usr/local/bin/llama-server", hint["setup"])
+        self.assertIn("LLAMA_SERVER", hint["setup"])
 
     def test_nothing_to_set_up_when_not_installed_or_when_there_is_nothing_to_start(self):
         _, hint = self.hint_for("ollama", FakeProbe("Linux"))
@@ -359,6 +379,22 @@ class TestInstall(UiBase):
         self.assertTrue(any(ms.models_dir().glob("*.gguf")))
         self.assertEqual(ms.state_get("installed_repo"), top["repo"])
         self.assertTrue(self.get_json("/api/recommend?use=chat")["models"][0]["have"])
+
+    def test_same_filename_from_another_repo_is_downloaded_not_reused(self):
+        row = {"name": "Same-Q4", "size": 5, "tps": 20, "mode": "gpu", "files": [("model.gguf", 5)]}
+        a = self.app.card({**row, "repo": "o/A-GGUF"})
+        b = self.app.card({**row, "repo": "o/B-GGUF"})
+        self.post("/api/install", {"id": a["id"]})
+        self.wait_for("done")
+        self.assertTrue(self.app.card({**row, "repo": "o/A-GGUF"})["have"])
+        self.assertFalse(self.app.card({**row, "repo": "o/B-GGUF"})["have"])
+        parts = []
+        unittest.mock.patch.object(ms, "download", lambda repo, f, size, on_progress=None: parts.append(repo) or self.fake_download(repo, f, size, on_progress)).start()
+        self.addCleanup(unittest.mock.patch.stopall)
+        self.post("/api/install", {"id": b["id"]})
+        self.wait_for("done")
+        self.assertEqual(parts, ["o/B-GGUF"])
+        self.assertEqual(len(list(ms.models_dir().glob("*.gguf"))), 2)
 
     def test_one_download_at_a_time(self):
         gate = threading.Event()
