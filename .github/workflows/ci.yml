@@ -33,3 +33,19 @@ jobs:
       - run: python -m pip install coverage
       - name: Coverage of utils/ (line + branch)
         run: python tests/run.py --quiet --cov --min 85
+
+  # Runs the suite while pretending to be another machine (tests/run.py --as NAME). Catches tests that quietly
+  # depend on the machine they run on. Real macOS and Windows are covered by the matrix above.
+  personas:
+    name: as ${{ matrix.persona }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        persona: [mac, mac-intel, linux, linux-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python tests/run.py --quiet --as ${{ matrix.persona }}

@@ -6,6 +6,7 @@
   python tests/run.py --repeat 5       run the whole suite 5 times; any failure fails (finds flaky tests)
   python tests/run.py --failfast       stop at the first failure
   python tests/run.py --list           print the tests that would run, run nothing
+  python tests/run.py --as mac         pretend to be an Apple Silicon Mac (also: mac-intel, linux, linux-arm)
   python tests/run.py --cov            measure line+branch coverage of utils/ (needs: pip install coverage)
   python tests/run.py --cov --min 85   ... and fail if coverage is below 85 %
 
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -25,6 +27,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
+# Machines the suite can pretend to be (--as NAME). No Windows persona: ctypes.windll and winreg cannot be faked on
+# another OS, and CI already runs the real thing on windows-latest.
+PERSONAS = {"mac": ("Darwin", "arm64"), "mac-intel": ("Darwin", "x86_64"),
+            "linux": ("Linux", "x86_64"), "linux-arm": ("Linux", "aarch64")}
 
 
 class TimedResult(unittest.TextTestResult):
@@ -87,6 +93,8 @@ def parse_args(argv: list | None = None) -> argparse.Namespace:
     ap.add_argument("--failfast", action="store_true")
     ap.add_argument("--list", action="store_true", help="list the selected tests and exit")
     ap.add_argument("--quiet", "-q", action="store_true")
+    ap.add_argument("--as", dest="persona", choices=sorted(PERSONAS), metavar="NAME",
+                    help="pretend to be another machine (%s) so host-dependent tests fail here, not on CI" % ", ".join(sorted(PERSONAS)))
     ap.add_argument("--cov", action="store_true", help="measure coverage of utils/")
     ap.add_argument("--min", type=int, default=0, metavar="PCT", help="with --cov: fail below this percentage")
     args = ap.parse_args(argv)
@@ -98,7 +106,7 @@ def parse_args(argv: list | None = None) -> argparse.Namespace:
 def child_args(args: argparse.Namespace) -> list:
     """The options to hand to the coverage child process, rebuilt from the parsed values so that any spelling
     the user typed (`--min 85`, `--min=85`, `-q`, `--repeat=2`) works. --cov and --min are for the parent."""
-    out = []
+    out = ["--as", args.persona] if args.persona else []
     for text in args.k:
         out += ["-k", text]
     if args.repeat != 1:
@@ -109,11 +117,39 @@ def child_args(args: argparse.Namespace) -> list:
     return out
 
 
+def apply_persona(name: str):
+    """Make platform.system() / platform.machine() report another machine. Returns a function that undoes it.
+    LP_TEST_PERSONA is set so a test can tell it is running as a persona. sys.platform is left alone on purpose:
+    the standard library (os.path, subprocess) needs the real value."""
+    system, machine = PERSONAS[name]
+    real = (platform.system, platform.machine, os.environ.get("LP_TEST_PERSONA"))
+    platform.system, platform.machine = (lambda: system), (lambda: machine)
+    os.environ["LP_TEST_PERSONA"] = name
+
+    def undo() -> None:
+        platform.system, platform.machine = real[0], real[1]
+        if real[2] is None:
+            os.environ.pop("LP_TEST_PERSONA", None)
+        else:
+            os.environ["LP_TEST_PERSONA"] = real[2]
+    return undo
+
+
 def main(argv: list | None = None) -> int:
     args = parse_args(argv)
     if args.cov:
         return run_with_coverage(child_args(args), args.min)
+    if not args.persona:
+        return run_selected(args)
+    print(f"pretending to be {PERSONAS[args.persona][0]} {PERSONAS[args.persona][1]}")
+    undo = apply_persona(args.persona)
+    try:
+        return run_selected(args)
+    finally:
+        undo()
 
+
+def run_selected(args: argparse.Namespace) -> int:
     warnings.simplefilter("default")
     for category in (SyntaxWarning, FutureWarning):
         warnings.simplefilter("error", category)

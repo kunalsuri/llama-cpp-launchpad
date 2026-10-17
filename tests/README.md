@@ -6,6 +6,7 @@ One command, same on Windows, macOS, Linux and in CI (standard library only):
 python tests/run.py                 # everything
 python tests/run.py -k ollama       # tests whose name contains "ollama"
 python tests/run.py --repeat 5      # run the suite 5 times: any random failure fails (flaky-test hunt)
+python tests/run.py --as mac        # pretend to be another machine: mac, mac-intel, linux, linux-arm
 python tests/run.py --list          # what would run
 python tests/run.py --cov --min 85  # line + branch coverage of utils/ (pip install coverage)
 ```

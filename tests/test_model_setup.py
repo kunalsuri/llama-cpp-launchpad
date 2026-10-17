@@ -208,9 +208,10 @@ class TestRecommend(Base):
 
 
 class TestHardware(Base):
-    @unittest.skipUnless(sys.platform.startswith("linux"), "uses /proc/meminfo format")
     def test_linux_detection_and_gpu(self):
-        with mock.patch.dict(os.environ, {"MEMINFO_FILE": str(FIX / "meminfo_16g")}):
+        # Pretend to be Linux so this runs (and means the same thing) on every host: it used to be skipped elsewhere.
+        with mock.patch.object(hwmod.platform, "system", return_value="Linux"), \
+                mock.patch.dict(os.environ, {"MEMINFO_FILE": str(FIX / "meminfo_16g")}):
             with mock.patch.object(hwmod, "run_cmd", return_value=""):
                 h = ms.detect_hw()
                 self.assertEqual((h.ram_mb, h.gpu_kind), (15625, "none"))
