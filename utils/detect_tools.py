@@ -164,18 +164,16 @@ def env_site_packages(p: Probe) -> list:
     roots = [j(h, d) for d in ("miniconda3", "anaconda3", "miniforge3", "mambaforge", "micromamba", ".conda",
                                ".virtualenvs", ".venv", "venv")]
     roots += [j(p.root, ".venv")]
-    if p.system == "Windows":
+    windows = p.system == "Windows"
+    lib = ("Lib",) if windows else ("lib", "python3*")
+    if windows:
         roots += [j(p.env.get("ProgramData", r"C:\ProgramData"), d) for d in ("miniconda3", "anaconda3")]
-        pats = [j(r, "Lib", "site-packages") for r in roots]
-        pats += [j(r, "envs", "*", "Lib", "site-packages") for r in roots]
-        pats += [j(r, "*", "Lib", "site-packages") for r in roots]
+    pats = [j(r, *lib, "site-packages") for r in roots]
+    pats += [j(r, "envs", "*", *lib, "site-packages") for r in roots]
+    pats += [j(r, "*", *lib, "site-packages") for r in roots]
+    if windows:
         pats += [j(_local_appdata(p), "Programs", "Python", "Python3*", "Lib", "site-packages")]
-        pats += [j(h, ".unsloth", "*", "*", "Lib", "site-packages")]
-    else:
-        pats = [j(r, "lib", "python3*", "site-packages") for r in roots]
-        pats += [j(r, "envs", "*", "lib", "python3*", "site-packages") for r in roots]
-        pats += [j(r, "*", "lib", "python3*", "site-packages") for r in roots]
-        pats += [j(h, ".unsloth", "*", "*", "lib", "python3*", "site-packages")]
+    pats += [j(h, ".unsloth", "*", "*", *lib, "site-packages")]
     return pats
 
 
@@ -200,6 +198,28 @@ def parse_version(output: str, pattern: str) -> str:
         if line.strip():
             return line.strip()[:80]
     return ""
+
+
+def _check_packages(packages: list, p: Probe, add, note) -> str:
+    """Look for each Python package in this Python and in common env folders; returns the first version seen."""
+    if not packages:
+        return ""
+    version, patterns = "", env_site_packages(p)
+    for package in packages:
+        v = p.py_package(package)
+        note("python-package", package + " (this Python)", v)
+        if v:
+            add("python-package", "python:" + package, STRONG, v)
+            version = version or v
+        for pattern in patterns:
+            full = p.join(pattern, _dist_glob_name(package) + "-*.dist-info")
+            matches = p.glob(full)
+            note("python-package", full, matches[0] if matches else "")
+            for m in matches:
+                dv = _dist_version(m, package)
+                add("python-package", m, STRONG, dv)
+                version = version or dv
+    return version
 
 
 def check_tool(spec: dict, p: Probe, want_version: bool = True) -> dict:
@@ -236,21 +256,7 @@ def check_tool(spec: dict, p: Probe, want_version: bool = True) -> dict:
         note("app", pattern, matches[0] if matches else "")
         for m in matches:
             add("app", m, STRONG)
-    pkg_version = ""
-    for package in spec["packages"]:
-        v = p.py_package(package)
-        note("python-package", package + " (this Python)", v)
-        if v:
-            add("python-package", "python:" + package, STRONG, v)
-            pkg_version = pkg_version or v
-        for pattern in env_site_packages(p):
-            full = p.join(pattern, _dist_glob_name(package) + "-*.dist-info")
-            matches = p.glob(full)
-            note("python-package", full, matches[0] if matches else "")
-            for m in matches:
-                dv = _dist_version(m, package)
-                add("python-package", m, STRONG, dv)
-                pkg_version = pkg_version or dv
+    pkg_version = _check_packages(spec["packages"], p, add, note)
     for path in spec["data_dirs"]:
         hit = path if p.is_dir(path) else ""
         note("dir", path, hit)

@@ -294,6 +294,22 @@ class TestToolsApi(UiBase):
         self.assertEqual(self.call("GET", "/api/state")[0], 200, "server still alive")
 
 
+class TestToolHintsCoverEveryTool(unittest.TestCase):
+    def test_every_detected_tool_has_an_install_hint(self):
+        self.assertEqual(set(ui_server.INSTALL_HINTS), set(ui_server.detect_tools.SPECS))
+
+    def test_every_tool_gets_a_text_install_hint_on_every_system(self):
+        """The page shows hint.install as-is: a missing 'default' key or a non-text value would break /api/tools."""
+        for system in ("Windows", "Darwin", "Linux"):
+            app = ui_server.App.__new__(ui_server.App)
+            app.probe = FakeProbe(system)
+            for tool in app.tools()["tools"]:
+                with self.subTest(system=system, tool=tool["id"]):
+                    install = tool["hint"]["install"]
+                    self.assertIsInstance(install, str)
+                    self.assertTrue(install.strip())
+
+
 class TestApi(UiBase):
     def test_state(self):
         s = self.get_json("/api/state")

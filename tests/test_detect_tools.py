@@ -175,6 +175,45 @@ class TestUnsloth(unittest.TestCase):
         t = tool(dt.detect(FakeProbe("Linux", dirs=["/home/me/.unsloth"])), "unsloth")
         self.assertEqual(t["status"], "data-only")
 
+    def test_macos_conda_env_and_unsloth_studio_env(self):
+        for sp in ("/Users/me/miniconda3/envs/llm/lib/python3.11/site-packages/",
+                   "/Users/me/.unsloth/studio/unsloth_studio/lib/python3.12/site-packages/"):
+            with self.subTest(sp):
+                t = tool(dt.detect(FakeProbe("Darwin", dirs=[sp + "unsloth-2025.8.2.dist-info"])), "unsloth")
+                self.assertEqual((t["status"], t["version"]), ("installed", "2025.8.2"))
+
+    def test_tools_without_python_packages_do_not_search_environments(self):
+        for tool_id in ("ollama", "llama-cpp", "lmstudio"):
+            t = tool(dt.detect(FakeProbe("Linux")), tool_id)
+            looked = [s for s in t["searched"] if "site-packages" in s["target"]]
+            self.assertEqual(looked == [], tool_id != "llama-cpp", tool_id)
+
+
+class TestEnvSitePackagesPatterns(unittest.TestCase):
+    """Pins the exact folders searched (and their order: the first match supplies the version) on each system."""
+
+    def test_windows(self):
+        pats = dt.env_site_packages(FakeProbe("Windows"))
+        self.assertEqual(len(pats), 38)
+        self.assertEqual(pats[0], r"C:\Users\me\miniconda3\Lib\site-packages")
+        self.assertEqual(pats[11], r"C:\ProgramData\anaconda3\Lib\site-packages")
+        self.assertEqual(pats[12], r"C:\Users\me\miniconda3\envs\*\Lib\site-packages")
+        self.assertEqual(pats[24], r"C:\Users\me\miniconda3\*\Lib\site-packages")
+        self.assertEqual(pats[-2], r"C:\Users\me\AppData\Local\Programs\Python\Python3*\Lib\site-packages")
+        self.assertEqual(pats[-1], r"C:\Users\me\.unsloth\*\*\Lib\site-packages")
+
+    def test_linux_and_macos(self):
+        for system, home, root in (("Linux", "/home/me", "/home/me/proj"), ("Darwin", "/Users/me", "/Users/me/proj")):
+            with self.subTest(system):
+                pats = dt.env_site_packages(FakeProbe(system))
+                self.assertEqual(len(pats), 31)
+                self.assertEqual(pats[0], f"{home}/miniconda3/lib/python3*/site-packages")
+                self.assertEqual(pats[9], f"{root}/.venv/lib/python3*/site-packages")
+                self.assertEqual(pats[10], f"{home}/miniconda3/envs/*/lib/python3*/site-packages")
+                self.assertEqual(pats[20], f"{home}/miniconda3/*/lib/python3*/site-packages")
+                self.assertEqual(pats[-1], f"{home}/.unsloth/*/*/lib/python3*/site-packages")
+                self.assertFalse(any("ProgramData" in p or "Programs" in p for p in pats))
+
 
 class TestVersionHandling(unittest.TestCase):
     def test_parse_version(self):

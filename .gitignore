@@ -17,7 +17,11 @@ Thumbs.db
 
 # Logs and local Claude Code state
 *.log
-.claude/
+# .claude/: share settings.json and skills; keep personal settings and anything else local
+.claude/*
+!.claude/settings.json
+!.claude/skills/
+.webui_secret_key
 
 # Personal setup profile written by model-setup (hardware, installed model, last check)
 .launchpad-state
