@@ -154,13 +154,15 @@ def place(need_mb: int, hw):
 
 def speed(size_bytes: int, mode: str, share: float, tps_fn, moe_ratio: float = 1.0) -> int:
     """Estimated tokens/s. tps_fn(size_bytes, mode) is model_setup.est_tps. A split model is limited by its
-    slow half, so the GPU and CPU times add up. A mixture-of-experts model only reads its active experts."""
+    slow half, so the GPU and CPU times add up. A mixture-of-experts model only reads its active experts,
+    so the bytes read per token shrink BEFORE tps_fn truncates to an integer (18 GiB dense = 0 t/s, 5 as MoE)."""
+    size_bytes = int(size_bytes / max(moe_ratio * 0.7, 1.0))
     if mode == "partial":
         t = share / max(tps_fn(size_bytes, "gpu"), 1) + (1 - share) / max(tps_fn(size_bytes, "cpu"), 1)
         tps = 1 / t
     else:
         tps = tps_fn(size_bytes, mode)
-    return int(tps * max(moe_ratio * 0.7, 1.0))
+    return int(tps)
 
 
 # --- One repo ------------------------------------------------------------------------------------------

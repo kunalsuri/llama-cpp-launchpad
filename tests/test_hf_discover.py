@@ -152,6 +152,14 @@ class TestEvaluate(unittest.TestCase):
         self.assertTrue(moe["moe"])
         self.assertGreater(moe["tps"], dense["tps"])
 
+    def test_moe_reduction_is_applied_before_speed_is_truncated_to_an_integer(self):
+        """A dense estimate of 0 t/s times the MoE factor is still 0: the model was rejected as too slow."""
+        hw = ms.Hw(ram_mb=65536, cores=8)
+        d = detail([("M-Q4_K_M.gguf", 18 * GB)], total=30_000_000_000)
+        r, why = hd.evaluate_repo("o/Qwen3-30B-A3B", d, hw, tps_for(hw), min_tps=3)
+        self.assertEqual(why, "", why)
+        self.assertGreaterEqual(r["tps"], 3)
+
     def test_context_changes_the_answer(self):
         d = detail([("M-Q4_K_M.gguf", 4 * GB)], total=7_000_000_000)
         short, _ = self.ev("o/M-7B", d, ctx=2048)

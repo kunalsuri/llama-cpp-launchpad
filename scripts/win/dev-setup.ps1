@@ -112,8 +112,8 @@ if (-not $LmApp) {   # fall back to the per-user uninstall entry
            Where-Object { $_.DisplayName -like 'LM Studio*' } | Select-Object -First 1
     if ($reg -and $reg.InstallLocation) { $cand = Join-Path $reg.InstallLocation 'LM Studio.exe'; if (Test-Path $cand) { $LmApp = $cand } }
 }
-$LmFound = [bool]($LmApp -or $LmCli)
-if ($LmFound) { Ok 'LM Studio' ((@($LmApp, $LmCli) | Where-Object { $_ }) -join '  +  ') } else { Miss 'LM Studio' 'not found   (winget install ElementLabs.LMStudio)' }
+$LmFound = [bool]($LmApp -or $LmsCli)
+if ($LmFound) { Ok 'LM Studio' ((@($LmApp, $LmsCli) | Where-Object { $_ }) -join '  +  ') } else { Miss 'LM Studio' 'not found   (winget install ElementLabs.LMStudio)' }
 
 # --- Hardware report (detection lives in utils\hardware.py) -------------------------------------
 Step 'Hardware'
@@ -139,7 +139,7 @@ $audit = @'
 import ast, importlib.metadata as md, json, re, sys
 from pathlib import Path
 root = Path(sys.argv[1])
-TOOLING = {"pytest"}                      # used by dev-test.ps1 although no file imports it
+TOOLING = {"pytest", "coverage"}          # used by dev-test.ps1 / tests/run.py --cov although no file imports them
 dirs = [d for d in ("scripts", "tests", "utils") if (root / d).is_dir()]
 files = [f for d in dirs for f in (root / d).rglob("*.py")]
 local = {f.stem for f in files} | {p.name for d in dirs for p in (root / d).iterdir() if p.is_dir()}

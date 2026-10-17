@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python tests/run.py:*)",
+      "Bash(python -m unittest:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)"
+    ],
+    "deny": [
+      "Read(./.webui_secret_key)",
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  }
+}

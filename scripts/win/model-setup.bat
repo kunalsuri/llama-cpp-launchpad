@@ -6,4 +6,6 @@ echo model-setup needs Python 3 (standard library only, nothing to pip install).
 echo Install it with:  winget install Python.Python.3.12   (or https://www.python.org/downloads/)
 exit /b 1
 :done
-if errorlevel 1 pause
+set "rc=%errorlevel%"
+if not "%rc%"=="0" pause
+exit /b %rc%
