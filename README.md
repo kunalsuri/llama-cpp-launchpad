@@ -28,6 +28,15 @@ Pick a model. Pick an interface. Start chatting. Everything runs on your machine
 
 ## Start
 
+**0. See what you already have** (optional, 2 seconds)
+
+```bash
+./scripts/unix/detect-tools.sh         # Windows: scripts\win\detect-tools.bat
+```
+
+Lists Ollama, llama.cpp, LM Studio and Unsloth: installed or not, which version, and where it was found.
+Everything it needs is Python 3 ([install](#troubleshooting) if the command says it is missing).
+
 **1. Get llama.cpp**
 
 ```bash
@@ -67,6 +76,9 @@ scripts\win\dev-run-ui.ps1        # Windows: finds Python, starts the page, open
 ./scripts/unix/ui.sh              # Linux / macOS (or double-click scripts/mac/ui.command or scripts\win\ui.bat)
 ```
 
+The page's **Installed tools** button (or open `/#tools`) shows the same check as `detect-tools`, with the evidence behind
+each answer and the command to start each tool.
+
 The command-line version below does the same with more control.
 
 - **First run:** detects RAM and GPU, asks what you'll use it for, shows up to five models that fit with an estimated speed, downloads your pick, and measures the real speed.
@@ -101,6 +113,21 @@ By default it only suggests uploads from trusted quantizers and official model m
 **Safe to read.** `utils/model_setup.py` (plus `hf_discover.py`, which has no network or file access, and `ui_server.py`, a localhost-only server for the setup page). Python standard library only. It talks to `huggingface.co`
 and writes only to `models/` and `.launchpad-state`. Tests fail if it ever imports anything else, starts a shell, runs
 dynamic code or contacts another host.
+
+## detect-tools
+
+Is Ollama, llama.cpp, LM Studio or Unsloth installed on this computer? One line per tool, no tokens spent:
+
+```
+scripts\win\detect-tools.bat            # Windows
+./scripts/unix/detect-tools.sh           # Linux / macOS (scripts/mac/detect-tools.command to double-click)
+```
+
+`--json` for scripts, `--verbose` to see every path that was checked (the evidence), `--tool ollama` to limit it,
+`--strict` to exit 1 if anything selected is missing, `--no-version` to run no programs. Status is `installed`,
+`data-only` (only a leftover folder such as `~/.ollama`) or `not-found`. Read-only, standard library only, no network.
+It runs `<tool> --version` on CLIs it finds, never on Unsloth. Python packages are searched in the running Python and
+in common conda/virtualenv folders under your home directory. Tests: `tests/test_detect_tools.py`.
 
 ## Interfaces
 
@@ -149,10 +176,11 @@ It listens on localhost only and has no API key, so don't expose the port. `Ctrl
 ## Develop
 
 ```bash
-python3 -m unittest discover -s tests -v
+python tests/run.py                    # the same command on every OS and in CI (-k NAME, --repeat 5, --cov)
 ```
 
-No network, GPU or llama.cpp needed. The app itself is standard library only; `requirements.txt` holds dev tools (pytest).
+No network, GPU or llama.cpp needed. The app itself is standard library only; `requirements.txt` holds dev tools
+(pytest, coverage). Changes are made test-first: see [tests/README.md](tests/README.md).
 
 On Windows, two scripts do the plumbing:
 
@@ -165,11 +193,11 @@ scripts\win\dev-test.ps1    # runs the whole suite with pytest in .venv (extra a
 ```
 models/              your .gguf files (git-ignored)
 bin/                 optional llama-server (git-ignored)
-scripts/             serve and model-setup launchers
+scripts/             serve, model-setup, ui and detect-tools launchers (win / mac / unix)
 ui/setup/            the setup page (one HTML file)
-utils/               model_setup.py, hf_discover.py (--discover rules), ui_server.py (the page's local server), hardware.py (RAM/CPU/GPU detection), models.catalog
+utils/               model_setup.py, hf_discover.py (--discover rules), ui_server.py (the page's local server), hardware.py (RAM/CPU/GPU detection), detect_tools.py (installed-tool check), models.catalog
 ui/translation/      the translation interface
-tests/               unit tests and source audit
+tests/               unit tests, source audit, runner (run.py), fake machine (fakes.py)
 ```
 
 ## License

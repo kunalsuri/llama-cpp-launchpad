@@ -24,21 +24,35 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import detect_tools
 import hf_discover
 
 PAGE = Path(__file__).resolve().parent.parent / "ui" / "setup" / "index.html"
 USES = ("chat", "coding", "translation", "fast")
 SEARCH_FOR_USE = {"coding": "coder"}            # extra Hub search text per use
 MAX_BODY = 4096
+# What to tell the user about each local-LLM tool. Plain text on purpose: the page never links elsewhere.
+INSTALL_HINTS = {
+    "ollama": "Download it from ollama.com/download",
+    "llama-cpp": {"Windows": "winget install ggml.llamacpp", "default": "brew install llama.cpp"},
+    "lmstudio": "Download it from lmstudio.ai",
+    "unsloth": "pip install unsloth",
+}
+START_HINTS = {"ollama": "ollama serve", "lmstudio": "lms server start"}      # llama.cpp: the project's serve script
 CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
        "img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+
+
+def serve_cmd(system: str) -> str:
+    return "scripts\\win\\serve.bat" if system == "Windows" else "./scripts/unix/serve.sh"
 
 
 class App:
     """Everything the page can ask for. `ms` is the model_setup module (passed in, so there is one copy of it)."""
 
-    def __init__(self, ms):
+    def __init__(self, ms, probe=None):
         self.ms = ms
+        self.probe = probe or detect_tools.Probe()          # tests pass a fake computer
         self.token = secrets.token_urlsafe(24)
         self.hw = ms.detect_hw()
         ms.save_hw(self.hw)
@@ -59,8 +73,23 @@ class App:
             "mode": "gpu" if gpu or hw.gpu_kind == "apple" else "cpu",
             "llama_server": bool(ms.find_llama_server()),
             "installed": ms.state_get("installed"),
-            "serve_cmd": "scripts\\win\\serve.bat" if platform.system() == "Windows" else "./scripts/unix/serve.sh",
+            "serve_cmd": serve_cmd(platform.system()),
         }
+
+    def tools(self, ids=None, verbose: bool = False) -> dict:
+        """Which of Ollama / llama.cpp / LM Studio / Unsloth are installed: detect_tools.py, plus next-step hints."""
+        result = detect_tools.detect(self.probe, ids)
+        system = self.probe.system
+        for tool in result["tools"]:
+            if not verbose:
+                del tool["searched"]
+            install = INSTALL_HINTS[tool["id"]]
+            hint = {"install": install.get(system, install["default"]) if isinstance(install, dict) else install}
+            start = serve_cmd(system) if tool["id"] == "llama-cpp" else START_HINTS.get(tool["id"])
+            if tool["status"] == "installed" and start:
+                hint["start"] = start
+            tool["hint"] = hint
+        return result
 
     def card(self, m: dict) -> dict:
         ms = self.ms
@@ -190,9 +219,26 @@ def make_handler(app: App):
                 return self.reply(200, app.more(use, (q.get("all") or ["0"])[0] == "1"))
             if url.path == "/api/progress":
                 return self.reply(200, app.snapshot())
+            if url.path == "/api/tools":
+                ids = q.get("tool") or None
+                if ids and any(i not in detect_tools.SPECS for i in ids):
+                    return self.reply(400, {"error": "unknown tool"})
+                try:
+                    return self.reply(200, app.tools(ids, (q.get("verbose") or ["0"])[0] == "1"))
+                except Exception:                           # noqa: BLE001 - a failed check must not take the page down
+                    return self.reply(500, {"error": "Could not check for installed tools."})
             self.reply(404, {"error": "not found"})
 
         def do_POST(self):
+            # Read the body first, even if we are about to refuse the request: answering without reading it
+            # makes the client's connection reset (WinError 10054) instead of showing our 403.
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            raw = self.rfile.read(length) if 0 < length <= MAX_BODY else b""
+            if length < 0 or length > MAX_BODY:
+                self.close_connection = True                # the unread rest of a huge body is not worth draining
             if not self.host_ok():
                 return self.reply(403, {"error": "forbidden"})
             origin = self.headers.get("Origin")
@@ -201,8 +247,7 @@ def make_handler(app: App):
             if not secrets.compare_digest(self.headers.get("X-LP-Token") or "", app.token):
                 return self.reply(403, {"error": "forbidden"})
             try:
-                length = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(length) if 0 < length <= MAX_BODY else b"{}")
+                body = json.loads(raw or b"{}")
             except (ValueError, OSError):
                 return self.reply(400, {"error": "bad request"})
             if urlparse(self.path).path == "/api/install" and isinstance(body, dict) and isinstance(body.get("id"), str):

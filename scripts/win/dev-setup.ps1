@@ -139,7 +139,7 @@ $audit = @'
 import ast, importlib.metadata as md, json, re, sys
 from pathlib import Path
 root = Path(sys.argv[1])
-TOOLING = {"pytest"}                      # used by dev-test.ps1 although no file imports it
+TOOLING = {"pytest", "coverage"}          # used by dev-test.ps1 / tests/run.py --cov although no file imports them
 dirs = [d for d in ("scripts", "tests", "utils") if (root / d).is_dir()]
 files = [f for d in dirs for f in (root / d).rglob("*.py")]
 local = {f.stem for f in files} | {p.name for d in dirs for p in (root / d).iterdir() if p.is_dir()}

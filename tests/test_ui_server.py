@@ -5,6 +5,8 @@ Run: python3 -m unittest discover -s tests -v
 import http.client
 import json
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -21,6 +23,7 @@ import model_setup as ms  # noqa: E402
 import test_hf_discover as thd  # noqa: E402  (module import: its test classes are not collected twice)
 import test_model_setup as tms  # noqa: E402
 import ui_server  # noqa: E402
+from fakes import FakeProbe  # noqa: E402
 
 
 class UiBase(tms.Base):
@@ -105,6 +108,20 @@ class TestPage(UiBase):
         self.assertNotRegex(text, r"@import|url\(\s*[\"']?https?:")
         self.assertEqual(re.findall(r"fetch\(([^,)]*)", text), ["path"])        # one place talks to the server
 
+    def test_page_has_the_installed_tools_view(self):
+        text = ui_server.PAGE.read_text(encoding="utf-8")
+        for needle in ('id="v-tools"', 'id="tools-btn"', 'id="tools-list"', 'id="tools-recheck"', "/api/tools"):
+            self.assertIn(needle, text)
+        self.assertIn('location.hash === "#tools"', text, "the view can be opened by link: /#tools")
+        self.assertNotIn("innerHTML", text, "text from the server is only ever inserted as text")
+
+    @unittest.skipUnless(shutil.which("node"), "node is needed to syntax-check the page script")
+    def test_page_script_is_valid_javascript(self):
+        text = ui_server.PAGE.read_text(encoding="utf-8")
+        script = text[text.index("<script>") + 8:text.index("</script>")]
+        done = subprocess.run(["node", "--check", "-"], input=script, capture_output=True, text=True, timeout=30)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
     def test_unknown_paths_are_404_and_there_is_no_file_serving(self):
         for path in ("/etc/passwd", "/../README.md", "/utils/model_setup.py", "/ui/setup/index.html"):
             self.assertEqual(self.call("GET", path)[0], 404, path)
@@ -120,6 +137,15 @@ class TestGuards(UiBase):
         self.assertEqual(self.post("/api/install", {"id": "x"}, token=False)[0], 403)
         self.assertEqual(self.post("/api/install", {"id": "x"}, headers={"X-LP-Token": "wrong"})[0], 403)
 
+    def test_refused_post_with_a_body_is_answered_cleanly(self):
+        """Regression: the server used to answer 403 without reading the body, so the client got a
+        connection reset (WinError 10054) instead of the 403. Seen as a random failure of the suite."""
+        body = {"id": "x" * 3000}
+        for i in range(40):
+            self.assertEqual(self.post("/api/install", body, token=False)[0], 403, i)
+            self.assertEqual(self.post("/api/install", body, headers={"Origin": "https://evil.example"})[0], 403, i)
+            self.assertEqual(self.call("POST", "/api/install", body, host="evil.example")[0], 403, i)
+
     def test_post_from_another_origin_is_refused(self):
         self.assertEqual(self.post("/api/install", {"id": "x"}, headers={"Origin": "https://evil.example"})[0], 403)
 
@@ -132,6 +158,81 @@ class TestGuards(UiBase):
     def test_bad_bodies(self):
         status, _, _ = self.call("POST", "/api/install", None, {"X-LP-Token": self.app.token})
         self.assertEqual(status, 404)           # empty body: nothing to install
+
+
+class TestToolsApi(UiBase):
+    """/api/tools: the dashboard's view of utils/detect_tools.py (same code as the command line)."""
+
+    def setUp(self):
+        super().setUp()
+        self.probe = FakeProbe("Linux", files=["/usr/local/bin/ollama"], path={"ollama": "/usr/local/bin/ollama"},
+                               output={"/usr/local/bin/ollama": "ollama version is 0.5.1"},
+                               pkgs={"unsloth": "2025.9.1"}, dirs=["/home/me/.lmstudio"])
+        self.app.probe = self.probe
+
+    def tools(self, query=""):
+        data = self.get_json("/api/tools" + query)
+        return data, {t["id"]: t for t in data["tools"]}
+
+    def test_reports_every_tool_with_status_and_version(self):
+        data, by_id = self.tools()
+        self.assertEqual(data["schema"], 1)
+        self.assertEqual(list(by_id), ["ollama", "llama-cpp", "lmstudio", "unsloth"])
+        self.assertEqual((by_id["ollama"]["status"], by_id["ollama"]["version"]), ("installed", "0.5.1"))
+        self.assertEqual(by_id["unsloth"]["status"], "installed")
+        self.assertEqual(by_id["lmstudio"]["status"], "data-only")
+        self.assertEqual(by_id["llama-cpp"]["status"], "not-found")
+
+    def test_same_answer_as_the_command_line(self):
+        import detect_tools
+        cli = detect_tools.detect(FakeProbe("Linux", files=["/usr/local/bin/ollama"],
+                                            path={"ollama": "/usr/local/bin/ollama"},
+                                            output={"/usr/local/bin/ollama": "ollama version is 0.5.1"},
+                                            pkgs={"unsloth": "2025.9.1"}, dirs=["/home/me/.lmstudio"]))
+        _, by_id = self.tools()
+        for t in cli["tools"]:
+            for key in ("status", "version", "evidence"):
+                self.assertEqual(by_id[t["id"]][key], t[key], (t["id"], key))
+
+    def test_evidence_is_included_and_checked_locations_only_on_request(self):
+        _, by_id = self.tools()
+        self.assertEqual(by_id["ollama"]["evidence"][0]["kind"], "on-PATH")
+        self.assertNotIn("searched", by_id["ollama"])
+        _, verbose = self.tools("?verbose=1")
+        self.assertIn({"check": "PATH", "target": "lms", "found": False}, verbose["lmstudio"]["searched"])
+
+    def test_tool_filter(self):
+        data, by_id = self.tools("?tool=unsloth&tool=ollama")
+        self.assertEqual([t["id"] for t in data["tools"]], ["unsloth", "ollama"])
+        self.assertEqual(self.call("GET", "/api/tools?tool=nope")[0], 400)
+
+    def test_hints_tell_the_user_what_to_do_next(self):
+        _, by_id = self.tools()
+        for t in by_id.values():
+            self.assertTrue(t["hint"]["install"], t["id"])
+            self.assertNotRegex(t["hint"]["install"], r"https?://", "hints are plain text, never links")
+        self.assertTrue(by_id["ollama"]["hint"]["start"], "installed: how to start it")
+        self.assertNotIn("start", by_id["llama-cpp"]["hint"], "not installed: nothing to start")
+
+    def test_checking_only_runs_version_flags(self):
+        self.tools()
+        self.assertEqual(self.probe.ran, [["/usr/local/bin/ollama", "--version"]])
+
+    def test_it_is_read_only(self):
+        self.assertEqual(self.post("/api/tools", {})[0], 404)
+        self.assertEqual(self.probe.ran, [])
+
+    def test_wrong_host_is_refused(self):
+        self.assertEqual(self.call("GET", "/api/tools", host="evil.example")[0], 403)
+
+    def test_a_crash_in_detection_is_a_clean_error_not_a_dead_page(self):
+        def boom(name):
+            raise RuntimeError("disk on fire")
+        self.probe.which = boom
+        status, _, raw = self.call("GET", "/api/tools")
+        self.assertEqual(status, 500)
+        self.assertIn("error", json.loads(raw))
+        self.assertEqual(self.call("GET", "/api/state")[0], 200, "server still alive")
 
 
 class TestApi(UiBase):

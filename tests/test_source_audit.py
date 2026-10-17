@@ -18,7 +18,8 @@ SOURCES = sorted(UTILS.glob("*.py"))
 ALLOWED_IMPORTS = {"__future__", "argparse", "csv", "ctypes", "datetime", "io", "json", "os", "platform",
                    "re", "shutil", "subprocess", "sys", "urllib", "pathlib", "winreg",
                    "http", "secrets", "threading", "webbrowser",     # ui_server.py: the localhost-only setup page
-                   "hardware", "hf_discover", "ui_server"}      # local modules in utils/, audited here as well
+                   "glob", "importlib",   # detect_tools.py: file-system globbing and installed-package metadata (read-only)
+                   "hardware", "hf_discover", "ui_server", "detect_tools"}      # local modules in utils/, audited here as well
 LOCAL_MODULES = {p.stem for p in SOURCES}
 ALLOWED_HOSTS = {"huggingface.co", "github.com", "127.0.0.1"}   # 127.0.0.1 = the setup page itself (ui_server.py)
 # The only programs the script may start (always as an argument list, never through a shell).
