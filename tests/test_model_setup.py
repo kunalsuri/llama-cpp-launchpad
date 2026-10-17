@@ -10,6 +10,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -51,6 +52,11 @@ class Base(unittest.TestCase):
         patcher = mock.patch.object(ms, "http_get", self.fake_http_get)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Results must not depend on the machine running the tests: on an Apple Silicon Mac (the macOS CI
+        # runner) real detection reports unified-memory "apple" hardware and changes which model is picked.
+        chip = mock.patch.object(hwmod.platform, "machine", return_value="x86_64")
+        chip.start()
+        self.addCleanup(chip.stop)
         ms.Ctx.assume_yes = False
         ms.init_style(io.StringIO())          # no colours
 
@@ -202,9 +208,10 @@ class TestRecommend(Base):
 
 
 class TestHardware(Base):
-    @unittest.skipUnless(sys.platform.startswith("linux"), "uses /proc/meminfo format")
     def test_linux_detection_and_gpu(self):
-        with mock.patch.dict(os.environ, {"MEMINFO_FILE": str(FIX / "meminfo_16g")}):
+        # Pretend to be Linux so this runs (and means the same thing) on every host: it used to be skipped elsewhere.
+        with mock.patch.object(hwmod.platform, "system", return_value="Linux"), \
+                mock.patch.dict(os.environ, {"MEMINFO_FILE": str(FIX / "meminfo_16g")}):
             with mock.patch.object(hwmod, "run_cmd", return_value=""):
                 h = ms.detect_hw()
                 self.assertEqual((h.ram_mb, h.gpu_kind), (15625, "none"))
@@ -507,7 +514,10 @@ class RangeHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        # Small writes on purpose: one 1.3 MB write stalls ~19 s and then resets on Windows loopback in about
+        # 1 run in 4 (measured: 9 of 40 runs; 0 of 40 with 64 KB writes). That was the "random" suite failure.
+        for i in range(0, len(body), 65536):
+            self.wfile.write(body[i:i + 65536])
 
     def log_message(self, *a):
         pass
@@ -537,6 +547,91 @@ class TestRealFetch(Base):
         part.write_bytes(data[:300_000])
         ms.fetch_file(url2, part, len(data))
         self.assertEqual(part.read_bytes(), data, "server ignored Range: restarted cleanly, no corruption")
+
+
+class TestBenchRunner(Base):
+    """find_bench / run_bench with a fake llama-bench: where it is looked for and what is passed to it."""
+
+    def make_exe(self, name="llama-bench"):
+        exe = self.tmp / "bin" / name
+        exe.parent.mkdir(exist_ok=True)
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(0o755)
+        return exe
+
+    def isolate(self):
+        for target, value in (("find_llama_server", lambda: ""), ("ROOT", self.tmp / "no-project")):
+            p = mock.patch.object(ms, target, value)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(ms.shutil, "which", return_value=None)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_find_bench_prefers_the_env_variable(self):
+        self.isolate()
+        exe = self.make_exe()
+        with mock.patch.dict(os.environ, {"LLAMA_BENCH": str(exe)}):
+            self.assertEqual(ms.find_bench(), str(exe))
+
+    def test_find_bench_looks_next_to_llama_server(self):
+        self.isolate()
+        exe = self.make_exe()
+        with mock.patch.object(ms, "find_llama_server", lambda: str(exe.parent / "llama-server")):
+            self.assertEqual(ms.find_bench(), str(exe))
+
+    def test_find_bench_missing_is_empty_string(self):
+        self.isolate()
+        with mock.patch.dict(os.environ, {"LLAMA_BENCH": str(self.tmp / "nope")}):
+            self.assertEqual(ms.find_bench(), "")
+
+    def test_run_bench_passes_fixed_arguments_and_library_path(self):
+        exe = self.make_exe()
+        csv_text = "n_prompt,n_gen,avg_ts\n32,0,500.0\n0,24,41.6\n"
+        seen = {}
+
+        def fake_run(args, **kw):
+            seen.update(args=args, env=kw["env"], timeout=kw["timeout"])
+            return mock.Mock(stdout=csv_text)
+        with mock.patch.object(ms, "find_bench", lambda: str(exe)), mock.patch.object(ms.subprocess, "run", fake_run),                 mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/old"}):
+            self.assertEqual(ms.run_bench(Path("m.gguf")), 42)
+        self.assertEqual(seen["args"], [str(exe), "-m", "m.gguf", "-p", "32", "-n", "24", "-r", "1", "-o", "csv"])
+        self.assertEqual(seen["env"]["LD_LIBRARY_PATH"], str(exe.parent) + os.pathsep + "/old")
+        self.assertEqual(seen["timeout"], 300)
+
+    def test_run_bench_returns_none_when_the_program_cannot_run(self):
+        exe = self.make_exe()
+        for boom in (OSError("exec format error"), subprocess.TimeoutExpired("llama-bench", 300)):
+            with mock.patch.object(ms, "find_bench", lambda: str(exe)),                     mock.patch.object(ms.subprocess, "run", side_effect=boom):
+                self.assertIsNone(ms.run_bench(Path("m.gguf")), boom)
+
+    def test_parse_bench_csv_ignores_junk_rows(self):
+        self.assertIsNone(ms.parse_bench_csv(""))
+        self.assertIsNone(ms.parse_bench_csv("n_gen,avg_ts\n0,12.0\n"))
+        self.assertEqual(ms.parse_bench_csv("n_gen,avg_ts\nx,y\n24,7.4\n"), 7)
+
+
+class TestConsoleColours(Base):
+    def test_colours_only_on_a_terminal_and_never_with_no_color(self):
+        tty = mock.Mock(isatty=lambda: True)
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(ms.platform, "system", return_value="Linux"):
+            os.environ.pop("NO_COLOR", None)
+            ms.init_style(tty)
+            self.assertTrue(ms.Style.on)
+            self.assertEqual(ms.Style.R, chr(27) + "[0m")
+            os.environ["NO_COLOR"] = "1"
+            ms.init_style(tty)
+            self.assertEqual((ms.Style.on, ms.Style.B), (False, ""))
+        ms.init_style(io.StringIO())
+
+    def test_windows_console_failure_turns_colours_off(self):
+        tty = mock.Mock(isatty=lambda: True)
+        with mock.patch.object(ms.platform, "system", return_value="Windows"),                 mock.patch.dict(sys.modules, {"ctypes": mock.Mock(windll=mock.Mock(kernel32=mock.Mock(
+                    GetStdHandle=mock.Mock(side_effect=OSError("no console")))))}):
+            os.environ.pop("NO_COLOR", None)
+            ms.init_style(tty)
+            self.assertFalse(ms.Style.on)
+        ms.init_style(io.StringIO())
 
 
 class TestBench(Base):

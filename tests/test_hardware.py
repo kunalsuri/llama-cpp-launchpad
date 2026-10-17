@@ -79,5 +79,135 @@ class TestReport(unittest.TestCase):
             self.assertEqual(hwmod.main(["--out", str(self.tmp / "x.env")]), 1)
 
 
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+class TestDetection(unittest.TestCase):
+    """detect_hw() and its helpers on every platform, with the operating system faked."""
+
+    def system(self, name, machine="x86_64"):
+        for attr, value in (("system", name), ("machine", machine)):
+            p = mock.patch.object(hwmod.platform, attr, return_value=value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def env(self, **values):
+        base = {"LP_RAM_MB": "", "LP_VRAM_MB": "", "LP_GPU_USABLE": "", "LLAMA_SERVER": "", "MEMINFO_FILE": ""}
+        p = mock.patch.dict(os.environ, {**base, **values})
+        p.start()
+        self.addCleanup(p.stop)
+        if "LP_GPU_USABLE" not in values:
+            os.environ.pop("LP_GPU_USABLE", None)
+
+    def commands(self, outputs):
+        """Fake run_cmd: look the program up by its first argument."""
+        p = mock.patch.object(hwmod, "run_cmd", side_effect=lambda args, timeout=20: outputs.get(args[0], ""))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_linux_ram_from_meminfo(self):
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "meminfo_16g"))
+        self.assertEqual(hwmod.read_ram_mb(), 15625)        # 16000000 kB / 1024
+
+    def test_linux_unreadable_meminfo_is_zero(self):
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "does-not-exist"))
+        self.assertEqual(hwmod.read_ram_mb(), 0)
+
+    def test_macos_ram_from_sysctl(self):
+        self.system("Darwin", "arm64")
+        self.commands({"sysctl": "17179869184\n"})
+        self.assertEqual(hwmod.read_ram_mb(), 16384)
+
+    def test_macos_garbage_from_sysctl_is_zero(self):
+        self.system("Darwin")
+        self.commands({"sysctl": "not a number"})
+        self.assertEqual(hwmod.read_ram_mb(), 0)
+
+    def test_cpu_name_linux_and_macos_and_fallback(self):
+        self.system("Linux")
+        with mock.patch.object(Path, "read_text", return_value="processor\t: 0\nmodel name\t:  AMD  Ryzen 7 5800X\n"):
+            self.assertEqual(hwmod.read_cpu_name(), "AMD Ryzen 7 5800X")
+        self.system("Darwin")
+        self.commands({"sysctl": "Apple M2\n"})
+        self.assertEqual(hwmod.read_cpu_name(), "Apple M2")
+        self.system("Plan9")
+        with mock.patch.object(hwmod.platform, "processor", return_value="mystery cpu"):
+            self.assertEqual(hwmod.read_cpu_name(), "mystery cpu")
+
+    def test_apple_silicon_uses_unified_memory(self):
+        self.system("Darwin", "arm64")
+        self.env()
+        self.commands({"sysctl": "17179869184"})
+        hw = hwmod.detect_hw()
+        self.assertEqual((hw.gpu_kind, hw.gpu_usable, hw.ram_mb), ("apple", True, 16384))
+
+    def test_nvidia_gpu_usable_when_build_supports_it(self):
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "meminfo_16g"), LP_GPU_USABLE="1")
+        self.commands({"nvidia-smi": "NVIDIA GeForce RTX 3060, 12288\n"})
+        hw = hwmod.detect_hw()
+        self.assertEqual((hw.gpu_kind, hw.gpu_name, hw.vram_mb, hw.gpu_usable), ("nvidia", "NVIDIA GeForce RTX 3060", 12288, True))
+
+    def test_nvidia_gpu_present_but_build_cannot_use_it(self):
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "meminfo_16g"), LP_GPU_USABLE="0")
+        self.commands({"nvidia-smi": "RTX 3060, 12288\n"})
+        hw = hwmod.detect_hw()
+        self.assertEqual((hw.gpu_kind, hw.gpu_usable), ("nvidia", False))
+
+    def test_gpu_usable_is_asked_of_llama_server_when_not_forced(self):
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "meminfo_16g"))
+        self.commands({"nvidia-smi": "RTX 3060, 12288\n", "/x/llama-server": "Device 0: CUDA0 (RTX 3060)"})
+        with mock.patch.object(hwmod, "find_llama_server", return_value="/x/llama-server"):
+            self.assertTrue(hwmod.detect_hw().gpu_usable)
+        self.commands({"nvidia-smi": "RTX 3060, 12288\n", "/x/llama-server": "Device 0: CPU"})
+        with mock.patch.object(hwmod, "find_llama_server", return_value="/x/llama-server"):
+            self.assertFalse(hwmod.detect_hw().gpu_usable)
+        with mock.patch.object(hwmod, "find_llama_server", return_value=""):
+            self.assertFalse(hwmod.gpu_usable())
+
+    def test_garbage_from_nvidia_smi_means_no_gpu(self):
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "meminfo_16g"))
+        for out in ("", "No devices were found", "name only"):
+            self.commands({"nvidia-smi": out})
+            self.assertEqual(hwmod.detect_hw().gpu_kind, "none", out)
+
+    def test_overrides(self):
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "meminfo_16g"), LP_RAM_MB="4096", LP_VRAM_MB="6144")
+        self.commands({})
+        hw = hwmod.detect_hw()
+        self.assertEqual((hw.ram_mb, hw.vram_mb, hw.gpu_kind, hw.gpu_usable), (4096, 6144, "gpu", True))
+
+    def test_find_llama_server_honours_env_and_ignores_missing_files(self):
+        exe = Path(tempfile.mkdtemp()) / "llama-server"
+        self.addCleanup(shutil.rmtree, exe.parent, True)
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(0o755)
+        with mock.patch.dict(os.environ, {"LLAMA_SERVER": str(exe)}):
+            self.assertEqual(hwmod.find_llama_server(), str(exe))
+        with mock.patch.dict(os.environ, {"LLAMA_SERVER": str(exe.parent / "nope")}),                 mock.patch.object(hwmod.shutil, "which", return_value=None),                 mock.patch.object(hwmod, "ROOT", exe.parent / "no-project"),                 mock.patch.object(hwmod.Path, "home", return_value=exe.parent / "no-home"):
+            self.assertEqual(hwmod.find_llama_server(), "")
+
+    def test_run_cmd_never_raises(self):
+        self.assertEqual(hwmod.run_cmd(["definitely-not-a-program-xyz"]), "")
+
+    def test_print_mode_prints_and_writes_nothing(self):
+        self.system("Linux")
+        self.env(LP_RAM_MB="2048")
+        self.commands({})
+        out = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, out, True)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(hwmod.main(["--print", "--out", str(out / "r.env")]), 0)
+        self.assertIn('HW_RAM_MB="2048"', buf.getvalue())
+        self.assertEqual(list(out.iterdir()), [])
+
+
 if __name__ == "__main__":
     unittest.main()

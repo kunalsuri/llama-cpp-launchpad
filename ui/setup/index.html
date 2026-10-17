@@ -96,13 +96,25 @@
   .code { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--muted); border-radius: 10px; padding: 12px 14px; margin-top: 12px; font-family: var(--mono); font-size: 14px; overflow-wrap: anywhere; }
   .warn { margin: 0 0 18px; padding: 10px 14px; border-radius: 10px; background: var(--muted); color: var(--muted-foreground); font-size: 14px; }
   .back { margin-bottom: 14px; }
+  .nav { color: var(--muted-foreground); text-decoration: underline; text-underline-offset: 3px; }
+  .nav:hover { color: var(--foreground); }
+  .tool { border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; margin-top: 12px; }
+  .tool-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .tool-head b { font-size: 17px; }
+  .status { font-size: 13px; font-weight: 600; border-radius: 999px; padding: 2px 10px; background: var(--muted); }
+  .status.installed { color: var(--good); } .status.data-only { color: var(--warn); } .status.not-found { color: var(--muted-foreground); }
+  .tool p { margin: 6px 0 0; font-size: 14px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+  .tool details { margin-top: 8px; font-size: 13px; color: var(--muted-foreground); }
+  .tool summary { cursor: pointer; }
+  .tool ul { margin: 6px 0 0; padding-left: 18px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+  .tool .hit { color: var(--good); }
   @media (max-width: 480px) { .tiles { grid-template-columns: 1fr; } h1 { font-size: 26px; } }
 </style>
 </head>
 <body>
 <header>
   <span><b>&#10043; llama-cpp-launchpad</b> &nbsp;model setup</span>
-  <span class="chip" id="hw" hidden></span>
+  <span><button class="nav" id="tools-btn">Installed tools</button> <span class="chip" id="hw" hidden></span></span>
 </header>
 <main>
   <div id="warn"></div>
@@ -138,6 +150,14 @@
     <p class="center" style="margin-top:0">To start chatting, run:</p>
     <div class="code"><span id="cmd"></span><button class="btn small ghost" id="copy">Copy</button></div>
     <p class="center"><button class="link" id="again">Get another model</button></p>
+  </section>
+
+  <section class="view" id="v-tools" hidden>
+    <button class="link back" id="tools-back">&larr; Back</button>
+    <h1>Installed tools</h1>
+    <p class="sub">What is already on this computer.</p>
+    <div id="tools-list"></div>
+    <p class="center"><button class="btn ghost" id="tools-recheck">Check again</button></p>
   </section>
 
   <section class="view" id="v-error" hidden>
@@ -178,7 +198,9 @@ function icon(path) {
   const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
   p.setAttribute("d", path); s.append(p); return s;
 }
+let view = "", jobLive = false;       // which screen is showing; has a download been started or picked back up?
 function show(id) {
+  view = id;
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== id));
   window.scrollTo(0, 0);
 }
@@ -204,6 +226,7 @@ function meta(m) {
 
 // --- Screens -------------------------------------------------------------------------------------
 function renderUse() {
+  jobLive = false;
   const t = $("#tiles"); t.replaceChildren();
   for (const [id, title, text] of USES)
     t.append(h("button", { class: "tile", onclick: () => pick(id) }, icon(ICONS[id]), h("b", {}, title), h("span", {}, text)));
@@ -269,20 +292,23 @@ async function install(m) {
 let timer = null;
 function watch() {
   clearTimeout(timer);
+  jobLive = true;
   const tick = async () => {
     const j = await api("/api/progress");
+    const away = view === "v-tools";        // the user is looking at Installed tools: keep polling, but never switch screens
     if (j.state === "downloading") {
-      show("v-install");
+      if (!away) show("v-install");
       $("#i-title").textContent = "Downloading " + j.title;
       $("#bar").classList.remove("busy");
       $("#bar-i").style.width = (j.total ? Math.min(100, (j.done * 100) / j.total) : 0) + "%";
       $("#i-text").textContent = fmt(j.done) + " of " + fmt(j.total);
     } else if (j.state === "testing") {
-      show("v-install");
+      if (!away) show("v-install");
       $("#i-title").textContent = "Testing speed…";
       $("#bar").classList.add("busy");
       $("#i-text").textContent = "About 10 seconds";
-    } else if (j.state === "done") return done(j);
+    } else if (away) return;                // finished while away: "Back" shows the result
+    else if (j.state === "done") return done(j);
     else if (j.state === "error") return fail(j.error);
     else return;
     timer = setTimeout(tick, 500);
@@ -300,6 +326,36 @@ function done(j) {
   show("v-done");
 }
 function fail(msg) { $("#e-text").textContent = msg; show("v-error"); }
+
+const STATUS = { installed: "Installed", "data-only": "Only leftovers found", "not-found": "Not found" };
+function toolCard(t) {
+  const card = h("div", { class: "tool" },
+    h("div", { class: "tool-head" }, h("b", {}, t.label), h("span", { class: "status " + t.status }, STATUS[t.status] || t.status)));
+  if (t.version) card.append(h("p", {}, "Version " + t.version));
+  const first = t.evidence[0];
+  if (first) card.append(h("p", {}, first.path));
+  if (t.status === "installed" && t.hint.start) card.append(h("p", {}, "Start it with: " + t.hint.start));
+  if (t.status === "installed" && !t.hint.start && t.hint.setup) card.append(h("p", {}, t.hint.setup));
+  if (t.status !== "installed") card.append(h("p", {}, t.hint.install));
+  const rows = (t.searched || []).map((s) => h("li", { class: s.found ? "hit" : "" }, (s.found ? "found  " : "no     ") + s.check + ": " + s.target));
+  card.append(h("details", {}, h("summary", {}, "Why we think so (" + t.evidence.length + " found, " + rows.length + " places checked)"),
+    h("ul", {}, t.evidence.map((e) => h("li", { class: "hit" }, e.kind + ": " + e.path)), rows)));
+  return card;
+}
+async function loadTools() {
+  const list = $("#tools-list"); list.replaceChildren(h("div", { class: "spin" }));
+  try {
+    const d = await api("/api/tools?verbose=1");
+    if (d.error) throw new Error(d.error);
+    list.replaceChildren(...d.tools.map(toolCard));
+  } catch (e) { list.replaceChildren(h("p", { class: "warn" }, "Could not check: " + e.message)); }
+}
+$("#tools-btn").onclick = () => { show("v-tools"); loadTools(); };
+$("#tools-recheck").onclick = loadTools;
+$("#tools-back").onclick = async () => {        // back to the running download / its result, else the first screen
+  const j = await api("/api/progress");
+  if (jobLive && ["downloading", "testing", "done", "error"].includes(j.state)) { view = ""; watch(); } else renderUse();
+};
 
 $("#back").onclick = renderUse;
 $("#more-btn").onclick = () => more(false);
@@ -319,6 +375,7 @@ $("#copy").onclick = async () => {
   if (!S.llama_server) warn.append(h("p", { class: "warn" }, "llama.cpp isn't installed yet, so the speed test will be skipped. See step 1 in the README."));
   else if (S.gpu_unused) warn.append(h("p", { class: "warn" }, "Your llama.cpp build can't use your graphics card, so models will run on the processor."));
   renderUse();
+  if (location.hash === "#tools") $("#tools-btn").click();
   const j = await api("/api/progress");           // page reloaded during a download: pick it back up
   if (j.state === "downloading" || j.state === "testing") watch();
 })();
