@@ -18,6 +18,7 @@ import json
 import platform
 import re
 import secrets
+import sys
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

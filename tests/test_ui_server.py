@@ -128,12 +128,12 @@ class TestPageScript(unittest.TestCase):
     def test_script_is_valid_javascript(self):
         text = ui_server.PAGE.read_text(encoding="utf-8")
         script = text[text.index("<script>") + 8:text.index("</script>")]
-        done = subprocess.run(["node", "--check", "-"], input=script, capture_output=True, text=True, timeout=30)
+        done = subprocess.run(["node", "--check", "-"], input=script, capture_output=True, text=True, encoding="utf-8", timeout=30)
         self.assertEqual(done.returncode, 0, done.stderr)
 
     def test_scenarios(self):
         done = subprocess.run(["node", str(HERE / "page_harness.js"), str(ui_server.PAGE)],
-                              capture_output=True, text=True, timeout=120)
+                              capture_output=True, text=True, encoding="utf-8", timeout=120)
         results = [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")]
         self.assertGreaterEqual(len(results), 12, done.stdout + done.stderr)
         for r in results:

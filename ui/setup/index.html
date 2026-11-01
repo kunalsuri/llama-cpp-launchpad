@@ -2034,14 +2034,14 @@ function authorAvatar(author) {
 }
 
 async function copyText(text, btn, feedback = "Copied!") {
-  const orig = btn.innerHTML;
+  const orig = Array.from(btn.childNodes);
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       await navigator.clipboard.writeText(text);
     }
   } catch (e) {}
   btn.textContent = feedback;
-  setTimeout(() => { btn.innerHTML = orig; }, 1800);
+  setTimeout(() => { btn.replaceChildren(...orig); }, 1800);
 }
 
 function toggleDrawer(repo) {
