@@ -168,6 +168,31 @@ class App:
         rows = hf_discover.rank(results, "speed" if use == "fast" else "popular")[:10]
         return {"models": [self.card(r) for r in rows]}
 
+    def radar(self, gpu_only: bool = False, search: str | None = None) -> dict:
+        """Dynamic Hugging Face radar of trending/new models and historical status."""
+        import hf_radar
+        latest = hf_radar.load_latest()
+        if not latest:
+            latest = hf_radar.sync_radar(self.hw, search=search)
+        models = latest.get("models") or []
+        if gpu_only:
+            models = [m for m in models if m.get("fit_mode") == "gpu"]
+        for m in models:
+            repo = m.get("repo", "")
+            name = m.get("name") or repo.split("/")[-1] or "model"
+            size = int(m.get("size_bytes") or m.get("size") or 0)
+            fname = f"{name}.gguf"
+            mid = f"{repo}|{fname}"
+            self.offered[mid] = {
+                "repo": repo,
+                "files": [(fname, size)],
+                "size": size,
+                "name": name,
+                "title": m.get("title") or name,
+            }
+            m["id"] = mid
+        return {"updated_at": latest.get("updated_at"), "models": models}
+
     # --- download job ------------------------------------------------------------------------------
     def snapshot(self) -> dict:
         with self.lock:
@@ -259,6 +284,10 @@ def make_handler(app: App):
                 return self.reply(200, app.recommend(use))
             if url.path == "/api/more":
                 return self.reply(200, app.more(use, (q.get("all") or ["0"])[0] == "1"))
+            if url.path == "/api/radar":
+                gpu_only = (q.get("gpu_only") or ["0"])[0] == "1"
+                search = (q.get("search") or [None])[0]
+                return self.reply(200, app.radar(gpu_only=gpu_only, search=search))
             if url.path == "/api/progress":
                 return self.reply(200, app.snapshot())
             if url.path == "/api/tools":
@@ -304,7 +333,7 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = False         # on Windows reuse would let another program share (and read) our port
 
 
-def serve(ms, port: int = 8765, open_browser: bool = True) -> int:
+def serve(ms, port: int = 8765, open_browser: bool = True, initial_hash: str = "") -> int:
     """Run the page until Ctrl+C. Uses the first free port from `port` upward."""
     app = App(ms)
     server = None
@@ -317,7 +346,8 @@ def serve(ms, port: int = 8765, open_browser: bool = True) -> int:
     if server is None:
         print(f"Could not open a port between {port} and {port + 19}. Try --port N.")
         return 1
-    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    target = f"{initial_hash}" if initial_hash else ""
+    url = f"http://127.0.0.1:{server.server_address[1]}/{target}"
     print(f"\n  llama-cpp-launchpad setup page: {url}\n  Only this computer can open it. Press Ctrl+C to stop.\n")
     if open_browser:
         threading.Timer(0.6, webbrowser.open, [url]).start()

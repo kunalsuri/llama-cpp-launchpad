@@ -358,6 +358,22 @@ class TestApi(UiBase):
         self.addCleanup(unittest.mock.patch.stopall)
         self.assertIn("Could not reach", self.get_json("/api/more?use=chat")["error"])
 
+    def test_radar(self):
+        with unittest.mock.patch("hf_radar.load_latest") as mock_load, \
+             unittest.mock.patch("hf_radar.sync_radar") as mock_sync:
+            mock_load.return_value = None
+            mock_sync.return_value = {
+                "updated_at": "2026-11-01T00:00:00Z",
+                "models": [
+                    {"repo": "test/gpu-model", "fit_mode": "gpu", "tps": 25},
+                    {"repo": "test/cpu-model", "fit_mode": "cpu", "tps": 5},
+                ],
+            }
+            d = self.get_json("/api/radar?gpu_only=1")
+            self.assertEqual(d["updated_at"], "2026-11-01T00:00:00Z")
+            self.assertEqual(len(d["models"]), 1)
+            self.assertEqual(d["models"][0]["repo"], "test/gpu-model")
+
 
 class TestInstall(UiBase):
     def wait_for(self, *states):

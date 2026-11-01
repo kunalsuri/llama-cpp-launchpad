@@ -27,6 +27,7 @@ Thumbs.db
 .launchpad-state
 .launchpad-state.tmp.*
 *.part
+data/
 
 # Python
 __pycache__/

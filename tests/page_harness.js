@@ -280,6 +280,61 @@ const scenarios = {
     await q.start();
     if (q.visible() !== "v-error") return "page load failure: expected v-error, got " + q.visible();
   },
+
+  async "the /#radar link opens the radar view and displays models"() {
+    const radarData = {
+      updated_at: "2026-11-01T00:00:00Z",
+      models: [
+        { repo: "author/test-model", fit_mode: "gpu", tps: 24, downloads: 1200, size_mb: 4096, quant: "Q4_K_M" },
+      ],
+    };
+    const p = makePage({
+      hash: "#radar",
+      routes: (path) => {
+        if (path === "/api/state") return STATE;
+        if (path === "/api/progress") return { state: "idle" };
+        if (path.startsWith("/api/radar")) return radarData;
+        return {};
+      },
+    });
+    await p.start();
+    await p.advance(100);
+    if (p.visible() !== "v-radar") return "expected v-radar on #radar hash, got " + p.visible();
+    if (!p.text("radar-list").includes("author/test-model")) return "radar models not rendered: " + p.text("radar-list");
+  },
+
+  async "radar sort buttons update sort order"() {
+    const radarData = {
+      updated_at: "2026-11-01T00:00:00Z",
+      models: [
+        { repo: "slow-big", fit_mode: "cpu", tps: 5, downloads: 100, size_mb: 8000, quant: "Q4_K_M" },
+        { repo: "fast-small", fit_mode: "gpu", tps: 50, downloads: 5000, size_mb: 2000, quant: "Q4_K_M" },
+      ],
+    };
+    const p = makePage({
+      routes: (path) => {
+        if (path === "/api/state") return STATE;
+        if (path === "/api/progress") return { state: "idle" };
+        if (path.startsWith("/api/radar")) return radarData;
+        return {};
+      },
+    });
+    await p.start();
+    await p.click("radar-btn");
+    await p.advance(100);
+    if (p.visible() !== "v-radar") return "expected v-radar";
+    // Default sort is downloads desc: fast-small first
+    let text = p.text("radar-list");
+    if (text.indexOf("fast-small") > text.indexOf("slow-big")) return "expected fast-small before slow-big by downloads";
+    // Click sort-speed:
+    await p.click("sort-speed");
+    text = p.text("radar-list");
+    if (text.indexOf("fast-small") > text.indexOf("slow-big")) return "expected fast-small before slow-big by speed desc";
+    // Click sort-dir: flips to asc
+    await p.click("sort-dir");
+    text = p.text("radar-list");
+    if (text.indexOf("slow-big") > text.indexOf("fast-small")) return "expected slow-big before fast-small by speed asc";
+  },
 };
 
 (async () => {

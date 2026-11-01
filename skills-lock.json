@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "lessons-learnt": {
+      "source": "kunalsuri/1000x-Agent-Skills",
+      "sourceType": "github",
+      "skillPath": "skills/lessons-learnt/SKILL.md",
+      "computedHash": "90e6cb6a43afca11bad8988cec7c250342b6b8c3fef82955de4ec3aede319aa3"
+    }
+  }
+}
