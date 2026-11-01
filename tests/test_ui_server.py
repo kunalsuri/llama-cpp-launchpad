@@ -114,8 +114,24 @@ class TestPage(UiBase):
         text = ui_server.PAGE.read_text(encoding="utf-8")
         for needle in ('id="v-tools"', 'id="tools-btn"', 'id="tools-list"', 'id="tools-recheck"', "/api/tools"):
             self.assertIn(needle, text)
-        self.assertIn('location.hash === "#tools"', text, "the view can be opened by link: /#tools")
         self.assertNotIn("innerHTML", text, "text from the server is only ever inserted as text")
+        # Opening /#tools by link is a behaviour: tests/page_harness.js checks it ("the /#tools link opens ...").
+
+    def test_page_draws_its_symbols_instead_of_relying_on_emoji_fonts(self):
+        """Regression: tabs and badges used emoji (🔥 ⚡ 💻 ...). Linux machines without a colour-emoji font show
+        empty boxes, and Windows/macOS draw them in different styles. The page uses its own SVG icons instead."""
+        text = ui_server.PAGE.read_text(encoding="utf-8")
+        emoji = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿️]")
+        found = sorted({(text[:m.start()].count("\n") + 1, m.group()) for m in emoji.finditer(text)})
+        self.assertEqual(found[:10], [], f"{len(found)} emoji in the page (line, char)")
+
+    def test_every_view_has_a_heading_that_can_take_focus(self):
+        """Moving focus to the heading tells screen readers that the view changed (checked in the page harness)."""
+        text = ui_server.PAGE.read_text(encoding="utf-8")
+        views = re.findall(r'<section class="view" id="v-([a-z]+)"', text)
+        self.assertGreaterEqual(len(views), 8)
+        for v in views:
+            self.assertTrue(re.search(rf'<h1 id="{v}-title"[^>]*\btabindex="-1"', text), f"v-{v} has no focusable <h1 id={v}-title>")
 
     def test_unknown_paths_are_404_and_there_is_no_file_serving(self):
         for path in ("/etc/passwd", "/../README.md", "/utils/model_setup.py", "/ui/setup/index.html"):
