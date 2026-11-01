@@ -1,6 +1,7 @@
 """Tests for utils/hf_radar.py (offline, mocked)."""
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import sys
@@ -392,7 +393,42 @@ class TestAppRadarApi(unittest.TestCase):
             self.assertEqual(snap["file"], "qwen2.5-coder-7b-instruct-q8_0.gguf")
 
 
+class TestSyncOffline(unittest.TestCase):
+    """A sync that reaches nothing must say so; the page used to show "No matching models" instead."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.hw = hardware.Hw(ram_mb=16384, cores=8, gpu_kind="none", gpu_name="", vram_mb=0, gpu_usable=False)
+
+    def test_no_listing_means_offline_and_nothing_is_recorded(self):
+        with mock.patch.object(hf_radar, "fetch_hf_repos", return_value=[]):
+            out = hf_radar.sync_radar(self.hw, hdir=self.tmp)
+        self.assertTrue(out["offline"])
+        self.assertEqual(out["models"], [])
+        self.assertFalse((self.tmp / "latest.json").exists())
+
+    def test_a_listing_that_came_back_is_not_offline(self):
+        with mock.patch.object(hf_radar, "fetch_hf_repos", return_value=[{"id": "a/b-GGUF", "siblings": []}]):
+            out = hf_radar.sync_radar(self.hw, hdir=self.tmp)
+        self.assertFalse(out["offline"])
+
+
 class TestRadarDownloadCli(unittest.TestCase):
+    @mock.patch("hf_radar.load_latest")
+    @mock.patch("model_setup.download", return_value=None)
+    @mock.patch("model_setup.local_path", return_value=(Path("m.gguf"), False))
+    @mock.patch("model_setup.state_update")
+    def test_a_failed_download_names_the_command_that_really_resumes(self, _state, _path, _dl, load):
+        load.return_value = {"models": [{"repo": "t/m", "file": "m.gguf", "size_bytes": 5}]}
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out), mock.patch.object(hf_radar.sys, "platform", "win32"):
+            self.assertEqual(hf_radar.download_model_cli("t/m"), 1)
+        text = out.getvalue()
+        self.assertIn('scripts\\win\\radar.bat --download "t/m"', text)
+        self.assertNotIn("python3", text)
+        self.assertNotIn("-C -", text, "curl cannot continue the app's .part file")
+
     def test_normalize_model_entry(self):
         m = {"repo": "author/model-name", "size_bytes": 1024}
         hf_radar._normalize_model_entry(m)

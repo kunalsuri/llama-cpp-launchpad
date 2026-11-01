@@ -36,7 +36,8 @@ class UiBase(tms.Base):
             p.start()
             self.addCleanup(p.stop)
         self.app = ui_server.App(ms)
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), ui_server.make_handler(self.app))
+        self.app.probe = FakeProbe("Linux")     # rule 2: commands and hints must not depend on the host
+        self.server =ThreadingHTTPServer(("127.0.0.1", 0), ui_server.make_handler(self.app))
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
@@ -466,6 +467,128 @@ class TestInstall(UiBase):
         self.addCleanup(unittest.mock.patch.stopall)
         self.post("/api/install", {"id": self.get_json("/api/recommend?use=chat")["models"][0]["id"]})
         self.assertEqual(self.wait_for("done")["bench"], "skipped")
+
+
+WIN_CURL = {"curl": r"C:\Windows\System32\curl.exe"}
+
+
+class TestOsAwareHelp(UiBase):
+    """Every command the page shows is built here, for the OS the server runs on, and only from programs that were
+    found (rule 3). Regressions: Linux was told `brew install llama.cpp`; Windows got `python3 ...` (usually the
+    Microsoft Store stub) and `curl` (an Invoke-WebRequest alias in Windows PowerShell 5, which rejects -L -C)."""
+
+    def use(self, system, path=None):
+        self.app.probe = FakeProbe(system, path=path or {})
+
+    def install_hint(self, system, path=None):
+        self.use(system, path)
+        return self.get_json("/api/tools?tool=llama-cpp")["tools"][0]["hint"]
+
+    def test_llama_cpp_install_hint_fits_the_os_and_needs_its_package_manager(self):
+        cases = [
+            ("Windows", {"winget": r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\winget.exe"}, "winget install ggml.llamacpp"),
+            ("Darwin", {"brew": "/opt/homebrew/bin/brew"}, "brew install llama.cpp"),
+            ("Linux", {"brew": "/home/linuxbrew/.linuxbrew/bin/brew"}, "brew install llama.cpp"),
+        ]
+        for system, path, cmd in cases:
+            with self.subTest(system=system):
+                hint = self.install_hint(system, path)
+                self.assertEqual(hint["install_cmd"], cmd)
+                self.assertIn(cmd, hint["install"])
+        for system in ("Windows", "Darwin", "Linux"):
+            with self.subTest(system=system, package_manager="missing"):
+                hint = self.install_hint(system)
+                self.assertNotIn("install_cmd", hint, "no command when its program is missing")
+                self.assertNotRegex(hint["install"], r"^(brew|winget) ", hint["install"])
+                self.assertNotRegex(hint["install"], r"https?://", "plain text, never links")
+        self.assertIn("releases", self.install_hint("Linux")["install"])
+        self.assertIn("Homebrew", self.install_hint("Darwin")["install"])
+
+    def test_state_tells_the_page_the_os_and_how_to_get_llama_cpp(self):
+        for system, name, serve in (("Windows", "windows", "scripts\\win\\serve.bat"),
+                                    ("Darwin", "mac", "./scripts/unix/serve.sh"), ("Linux", "linux", "./scripts/unix/serve.sh")):
+            with self.subTest(system=system):
+                self.use(system, {"brew": "/usr/local/bin/brew"} if system == "Darwin" else {})
+                s = self.get_json("/api/state")
+                self.assertEqual((s["os"], s["serve_cmd"]), (name, serve))
+                self.assertTrue(s["llama_install"]["install"])
+        self.assertEqual(s["llama_install"].get("install_cmd"), None)                   # Linux without brew
+        self.use("Darwin", {"brew": "/usr/local/bin/brew"})
+        self.assertEqual(self.get_json("/api/state")["llama_install"]["install_cmd"], "brew install llama.cpp")
+
+    def commands(self, system, path=None):
+        self.use(system, path)
+        return {c["kind"]: c for c in self.get_json("/api/recommend?use=chat")["models"][0]["commands"]}
+
+    def test_download_commands_use_this_os_launcher_and_only_programs_that_were_found(self):
+        win = self.commands("Windows", WIN_CURL)
+        self.assertRegex(win["resume"]["cmd"], r'^scripts\\win\\radar\.bat --download "[^"]+/[^"]+" --file "[^"]+\.gguf"$')
+        self.assertTrue(win["manual"]["cmd"].startswith("curl.exe -L -o "), win["manual"]["cmd"])
+        lin = self.commands("Linux", {"curl": "/usr/bin/curl"})
+        self.assertTrue(lin["resume"]["cmd"].startswith("./scripts/unix/radar.sh --download "))
+        self.assertTrue(lin["manual"]["cmd"].startswith("curl -L -o "))
+        self.assertEqual(set(self.commands("Linux")), {"resume"}, "no curl on PATH: no curl command")
+        for cmds in (win, lin):
+            self.assertNotIn("python3", " ".join(c["cmd"] for c in cmds.values()))
+            self.assertNotIn("-C -", cmds["manual"]["cmd"], "curl cannot resume the app's .part file: do not claim it")
+
+    def test_manual_download_lands_exactly_where_the_app_looks_for_the_model(self):
+        top = self.get_json("/api/recommend?use=chat")["models"][0]
+        offer = self.app.offered[top["id"]]
+        f, size = offer["files"][0]
+        dest, _ = ms.local_path(offer["repo"], f, size)
+        self.use("Linux", {"curl": "/usr/bin/curl"})
+        cmd = {c["kind"]: c for c in self.app.download_commands(offer)}["manual"]["cmd"]
+        self.assertIn(f'-o "{dest}"', cmd)
+        self.assertIn(f'/{offer["repo"]}/resolve/main/{f}"', cmd)
+
+    def test_split_models_are_resumed_whole_not_by_their_first_part(self):
+        self.use("Linux", {"curl": "/usr/bin/curl"})
+        card = self.app.card({"repo": "o/Big-GGUF", "name": "Big-Q4_K_M", "size": 9, "tps": 20, "mode": "gpu",
+                              "files": [("Big-00001-of-00002.gguf", 5), ("Big-00002-of-00002.gguf", 4)]})
+        kinds = {c["kind"]: c["cmd"] for c in card["commands"]}
+        self.assertEqual(kinds, {"resume": './scripts/unix/radar.sh --download "o/Big-GGUF"'})
+
+    def test_a_failed_download_offers_the_resume_that_really_resumes(self):
+        self.use("Windows", WIN_CURL)
+        unittest.mock.patch.object(ms, "download", lambda *a, **k: None).start()
+        self.addCleanup(unittest.mock.patch.stopall)
+        mid = self.get_json("/api/recommend?use=chat")["models"][0]["id"]
+        self.post("/api/install", {"id": mid})
+        for _ in range(100):
+            j = self.get_json("/api/progress")
+            if j["state"] == "error":
+                break
+            time.sleep(0.05)
+        self.assertEqual(j["state"], "error")
+        self.assertEqual(j["commands"][0]["kind"], "resume")
+        self.assertTrue(j["commands"][0]["cmd"].startswith("scripts\\win\\radar.bat --download"))
+        self.assertNotIn("curl_cmd", j)
+
+    def test_radar_and_terminal_downloads_carry_commands_too(self):
+        self.use("Linux")
+        with unittest.mock.patch("hf_radar.load_latest") as load:
+            load.return_value = {"updated_at": "2026-11-01T00:00:00Z",
+                                 "models": [{"repo": "t/m-GGUF", "file": "m.gguf", "size_bytes": 7, "fit_mode": "gpu"}]}
+            m = self.get_json("/api/radar")["models"][0]
+        self.assertEqual(m["commands"][0]["cmd"], './scripts/unix/radar.sh --download "t/m-GGUF" --file "m.gguf"')
+        values = {"dl_active": "1", "dl_state": "downloading", "dl_repo": "t/m-GGUF", "dl_file": "m.gguf",
+                  "dl_done": "1", "dl_total": "7"}
+        with unittest.mock.patch.object(ms, "state_get", side_effect=lambda k: values.get(k, "")):
+            snap = self.app.snapshot()
+        self.assertEqual(snap["source"], "terminal")
+        self.assertEqual(snap["commands"][0]["kind"], "resume")
+
+
+class TestRadarOffline(UiBase):
+    def test_a_sync_that_cannot_reach_the_hub_says_so_and_keeps_the_saved_scan(self):
+        saved = {"updated_at": "2026-10-30T00:00:00Z", "models": [{"repo": "t/saved-GGUF", "fit_mode": "gpu"}]}
+        with unittest.mock.patch("hf_radar.fetch_hf_repos", return_value=[]), \
+                unittest.mock.patch("hf_radar.load_latest", return_value=saved):
+            d = self.get_json("/api/radar?sync=1")
+        self.assertTrue(d["offline"])
+        self.assertEqual([m["repo"] for m in d["models"]], ["t/saved-GGUF"])
+        self.assertEqual(d["updated_at"], "2026-10-30T00:00:00Z")
 
 
 class TestServe(unittest.TestCase):

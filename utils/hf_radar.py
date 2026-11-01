@@ -406,17 +406,19 @@ def sync_radar(hw: hardware.Hw | None = None, hdir: Path | None = None,
             evaluated.append(ev)
 
     evaluated.sort(key=lambda m: (m["downloads"] + m["likes"] * 20), reverse=True)
+    offline = not repos_to_check                # no listing came back at all: the Hub was not reached
     if evaluated:
         record_history(evaluated, hdir)
     else:
         cached = load_latest(hdir)
         if cached and cached.get("models"):
-            return cached
+            return dict(cached, offline=offline)
     return {
         "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "total_scanned": len(repos_to_check),
         "total_compatible": len(evaluated),
         "models": evaluated,
+        "offline": offline,
     }
 
 
@@ -565,7 +567,9 @@ def download_model_cli(repo_or_url: str, custom_file: str | None = None) -> int:
     size = match["size_bytes"]
     files = match["files"] if not custom_file else [(custom_file, size)]
     dl_url = f"https://huggingface.co/{repo}/resolve/main/{fname}"
-    curl_cmd = f'curl -L -C - -o "models/{fname}" "{dl_url}"'
+    # Running this again continues the partial .part file; a curl command would start a different file from zero.
+    radar_launcher = "scripts\\win\\radar.bat" if sys.platform == "win32" else "./scripts/unix/radar.sh"
+    resume_cmd = f'{radar_launcher} --download "{repo}"' + (f' --file "{custom_file}"' if custom_file else "")
 
     print("=" * 80)
     print("  LLAMA-CPP LAUNCHPAD - TERMINAL DOWNLOAD")
@@ -576,7 +580,7 @@ def download_model_cli(repo_or_url: str, custom_file: str | None = None) -> int:
     print(f"  Quantization:    {match.get('quant', 'Unknown')}")
     print(f"  Execution Mode:  {match.get('fit_mode', 'cpu').upper()} (~{match.get('tps', 0)} tok/s)")
     print(f"  Direct Link:     {dl_url}")
-    print(f"  Resume Command:  {curl_cmd}")
+    print(f"  Resume Command:  {resume_cmd}")
     print("=" * 80)
     print("Starting download into models/ (live progress synchronized with setup UI)...")
 
@@ -606,10 +610,9 @@ def download_model_cli(repo_or_url: str, custom_file: str | None = None) -> int:
         path = model_setup.download(repo, f, part_size, on_chunk)
         if not path:
             model_setup.state_update({"dl_active": "0", "dl_state": "error"})
-            print("\nDownload failed or interrupted.")
-            print("To resume this download, execute:")
-            print(f"  {curl_cmd}")
-            print(f"  OR re-run: python3 utils/hf_radar.py --download \"{repo}\"")
+            print("\nDownload failed or interrupted. What was downloaded is kept.")
+            print("To continue where it stopped, run:")
+            print(f"  {resume_cmd}")
             return 1
         base += part_size
         paths.append(path)
