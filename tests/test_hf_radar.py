@@ -17,6 +17,34 @@ import hardware
 import hf_radar
 
 
+class TestRadarClusters(unittest.TestCase):
+    def test_classify_coding(self):
+        meta = {"id": "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF", "tags": ["code"]}
+        clusters = hf_radar.classify_clusters(meta, "qwen2.5-coder-7b")
+        self.assertIn("coding", clusters)
+
+    def test_classify_agentic(self):
+        meta = {"id": "pragmaticcs/MiMo-HERO-Frontier-Agentic-Coder-9B-GGUF"}
+        clusters = hf_radar.classify_clusters(meta)
+        self.assertIn("agentic", clusters)
+        self.assertIn("coding", clusters)
+
+    def test_classify_reasoning(self):
+        meta = {"id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B-GGUF"}
+        clusters = hf_radar.classify_clusters(meta)
+        self.assertIn("reasoning", clusters)
+
+    def test_classify_creative(self):
+        meta = {"id": "JonathanColetti/Qwen3.8-27B-Uncensored-GGUF"}
+        clusters = hf_radar.classify_clusters(meta)
+        self.assertIn("creative", clusters)
+
+    def test_classify_chat_fallback(self):
+        meta = {"id": "author/plain-general-model"}
+        clusters = hf_radar.classify_clusters(meta)
+        self.assertEqual(clusters, ["chat"])
+
+
 class TestRadarHistory(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -48,31 +76,112 @@ class TestRadarHistory(unittest.TestCase):
         self.assertIsNotNone(latest)
         self.assertEqual(len(latest["models"]), 1)
         self.assertEqual(latest["models"][0]["repo"], "test/model-1")
+        self.assertIn("clusters", latest["models"][0])
 
         # History log check
         entries = hf_radar.load_history_entries(self.tmp, days=30)
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["repo"], "test/model-1")
 
-    def test_render_dashboard(self):
+    def test_compute_sync_diff(self):
+        snap_dir = self.tmp / "snapshots"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+
+        snap1 = {
+            "updated_at": "2026-10-31T00:00:00Z",
+            "models": [
+                {
+                    "repo": "common/model",
+                    "name": "common-model",
+                    "fit_mode": "gpu",
+                    "tps": 20,
+                    "downloads": 1000,
+                    "likes": 50,
+                },
+                {
+                    "repo": "old/retired-model",
+                    "name": "retired-model",
+                    "fit_mode": "cpu",
+                    "tps": 10,
+                    "downloads": 500,
+                    "likes": 20,
+                },
+            ],
+        }
+        (snap_dir / "2026-10-31.json").write_text(json.dumps(snap1), encoding="utf-8")
+
+        snap2 = {
+            "updated_at": "2026-11-01T00:00:00Z",
+            "models": [
+                {
+                    "repo": "common/model",
+                    "name": "common-model",
+                    "fit_mode": "gpu",
+                    "tps": 20,
+                    "downloads": 1500,
+                    "likes": 75,
+                },
+                {
+                    "repo": "new/agentic-coder",
+                    "name": "agentic-coder-q4",
+                    "fit_mode": "gpu",
+                    "tps": 35,
+                    "downloads": 800,
+                    "likes": 120,
+                },
+            ],
+        }
+        (snap_dir / "2026-11-01.json").write_text(json.dumps(snap2), encoding="utf-8")
+        (self.tmp / "latest.json").write_text(json.dumps(snap2), encoding="utf-8")
+
+        diff = hf_radar.compute_sync_diff(self.tmp)
+        self.assertTrue(diff["has_previous"])
+        self.assertEqual(diff["summary"]["new_count"], 1)
+        self.assertEqual(diff["summary"]["removed_count"], 1)
+        self.assertEqual(diff["summary"]["persisted_count"], 1)
+        self.assertEqual(diff["summary"]["gpu_ready_new"], 1)
+        self.assertEqual(diff["new_models"][0]["repo"], "new/agentic-coder")
+        self.assertEqual(diff["removed_models"][0]["repo"], "old/retired-model")
+        self.assertEqual(diff["top_movers"][0]["delta_downloads"], 500)
+        self.assertEqual(diff["top_movers"][0]["delta_likes"], 25)
+
+        rendered = hf_radar.render_history_diff(diff)
+        self.assertIn("WHAT CHANGED SINCE LAST SYNC", rendered)
+        self.assertIn("new/agentic-coder", rendered)
+        self.assertIn("common/model", rendered)
+        self.assertIn("old/retired-model", rendered)
+
+    def test_render_dashboard_with_cluster_filter(self):
         data = {
             "updated_at": "2026-11-01T00:00:00Z",
             "models": [
                 {
-                    "repo": "prism-ml/Ternary-Bonsai-2-27B-gguf",
+                    "repo": "test/coder-7b",
+                    "name": "coder-7b-q4",
                     "quant": "Q4_K_M",
-                    "size_mb": 5632.0,
+                    "size_mb": 4000.0,
                     "fit_mode": "gpu",
-                    "tps": 17,
-                    "downloads": 1900000,
-                }
+                    "tps": 20,
+                    "clusters": ["coding", "chat"],
+                },
+                {
+                    "repo": "test/chat-7b",
+                    "name": "chat-7b-q4",
+                    "quant": "Q4_K_M",
+                    "size_mb": 4000.0,
+                    "fit_mode": "gpu",
+                    "tps": 20,
+                    "clusters": ["chat"],
+                },
             ],
         }
-        text = hf_radar.render_dashboard(data, gpu_only=False, limit=10)
-        self.assertIn("HUGGING FACE LOCAL MODEL RADAR", text)
-        self.assertIn("prism-ml/Ternary-Bonsai", text)
-        self.assertIn("GPU", text)
-        self.assertIn("~17 t/s", text)
+        text_coding = hf_radar.render_dashboard(data, cluster="coding", limit=10)
+        self.assertIn("test/coder-7b", text_coding)
+        self.assertNotIn("test/chat-7b", text_coding)
+
+        text_all = hf_radar.render_dashboard(data, cluster="all", limit=10)
+        self.assertIn("test/coder-7b", text_all)
+        self.assertIn("test/chat-7b", text_all)
 
 
 class TestRadarEvaluation(unittest.TestCase):
@@ -103,7 +212,7 @@ class TestRadarEvaluation(unittest.TestCase):
             "downloads": 12000,
             "likes": 340,
             "createdAt": "2026-10-15T00:00:00.000Z",
-            "tags": ["gguf"],
+            "tags": ["gguf", "code"],
         }
         siblings = [
             {"rfilename": "test-7b-Q4_K_M.gguf", "size": 4500000000},
@@ -115,6 +224,8 @@ class TestRadarEvaluation(unittest.TestCase):
         self.assertIn(res["quant"], ("Q8_0", "Q4_K_M"))
         self.assertEqual(res["fit_mode"], "gpu")
         self.assertGreater(res["tps"], 0)
+        self.assertIn("clusters", res)
+        self.assertIn("coding", res["clusters"])
 
 
 class TestRadarSync(unittest.TestCase):
@@ -153,7 +264,21 @@ class TestRadarMain(unittest.TestCase):
             "updated_at": "2026-11-01T00:00:00Z",
             "models": [],
         }
-        ret = hf_radar.main(["--cli", "--dashboard"])
+        ret = hf_radar.main(["--cli", "--dashboard", "--cluster", "coding"])
+        self.assertEqual(ret, 0)
+
+    @mock.patch("hf_radar.compute_sync_diff")
+    def test_main_cli_history(self, mock_diff):
+        mock_diff.return_value = {
+            "has_previous": True,
+            "latest_sync": "2026-11-01T00:00:00Z",
+            "previous_sync": "2026-10-31T00:00:00Z",
+            "summary": {"new_count": 0, "removed_count": 0, "persisted_count": 0, "gpu_ready_new": 0},
+            "new_models": [],
+            "top_movers": [],
+            "removed_models": [],
+        }
+        ret = hf_radar.main(["--history", "--cli"])
         self.assertEqual(ret, 0)
 
     @mock.patch("hf_radar.load_latest")
@@ -180,6 +305,108 @@ class TestRadarMain(unittest.TestCase):
         self.assertEqual(kwargs.get("port"), 9999)
         self.assertEqual(kwargs.get("initial_hash"), "#radar")
         self.assertEqual(kwargs.get("open_browser"), False)
+
+
+class TestAppRadarApi(unittest.TestCase):
+    def test_app_radar_clusters_and_history(self):
+        import model_setup
+        import ui_server
+
+        app = ui_server.App(model_setup)
+        data = app.radar()
+        self.assertIn("models", data)
+        self.assertIn("updated_at", data)
+        if data["models"]:
+            self.assertIn("clusters", data["models"][0])
+            self.assertIn("file", data["models"][0])
+            self.assertIn("download_url", data["models"][0])
+
+        coding_data = app.radar(cluster="coding")
+        for m in coding_data["models"]:
+            self.assertIn("coding", m["clusters"])
+
+        hist = app.radar_history()
+        self.assertIn("summary", hist)
+        self.assertIn("new_models", hist)
+        self.assertIn("snapshots", hist)
+        self.assertGreater(len(app.offered), 0)
+
+        # Verify offered entries have exact file and download_url
+        for mid, offer in app.offered.items():
+            self.assertIn("file", offer)
+            self.assertIn("files", offer)
+            self.assertIn("download_url", offer)
+            self.assertTrue(offer["download_url"].startswith("https://huggingface.co/"))
+
+    def test_app_snapshot_reflects_terminal_download(self):
+        import model_setup
+        import ui_server
+
+        app = ui_server.App(model_setup)
+        # Mock active terminal download in model_setup state
+        state_vals = {
+            "dl_active": "1",
+            "dl_state": "downloading",
+            "dl_title": "Qwen2.5-Coder",
+            "dl_repo": "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
+            "dl_file": "qwen2.5-coder-7b-instruct-q8_0.gguf",
+            "dl_done": "500000000",
+            "dl_total": "1000000000",
+        }
+        with mock.patch.object(model_setup, "state_get", side_effect=lambda k: state_vals.get(k, "")), \
+             mock.patch.object(model_setup, "state_int", side_effect=lambda k: int(state_vals.get(k, 0))):
+            snap = app.snapshot()
+            self.assertEqual(snap["state"], "downloading")
+            self.assertEqual(snap["source"], "terminal")
+            self.assertEqual(snap["done"], 500000000)
+            self.assertEqual(snap["total"], 1000000000)
+            self.assertEqual(snap["file"], "qwen2.5-coder-7b-instruct-q8_0.gguf")
+
+
+class TestRadarDownloadCli(unittest.TestCase):
+    def test_normalize_model_entry(self):
+        m = {"repo": "author/model-name", "size_bytes": 1024}
+        hf_radar._normalize_model_entry(m)
+        self.assertEqual(m["file"], "model-name.gguf")
+        self.assertEqual(m["files"], [("model-name.gguf", 1024)])
+        self.assertEqual(m["download_url"], "https://huggingface.co/author/model-name/resolve/main/model-name.gguf")
+        self.assertIn("clusters", m)
+
+    @mock.patch("hf_radar.load_latest")
+    @mock.patch("model_setup.download")
+    @mock.patch("model_setup.local_path")
+    @mock.patch("model_setup.record_installed")
+    @mock.patch("model_setup.check_model_speed")
+    @mock.patch("model_setup.state_update")
+    def test_download_model_cli(self, mock_state, mock_speed, mock_record, mock_path, mock_dl, mock_load):
+        mock_load.return_value = {
+            "updated_at": "2026-11-01T00:00:00Z",
+            "models": [{
+                "repo": "test/model",
+                "name": "test-model-q4",
+                "file": "test-model-q4.gguf",
+                "files": [("test-model-q4.gguf", 5000)],
+                "size_bytes": 5000,
+                "quant": "Q4_K_M",
+                "fit_mode": "gpu",
+                "tps": 30,
+            }],
+        }
+        mock_path.return_value = (Path("/tmp/models/test-model-q4.gguf"), False)
+        mock_dl.return_value = Path("/tmp/models/test-model-q4.gguf")
+        mock_speed.return_value = 0
+
+        rc = hf_radar.download_model_cli("test/model")
+        self.assertEqual(rc, 0)
+        mock_dl.assert_called_once()
+        mock_record.assert_called_once()
+
+    @mock.patch("hf_radar.download_model_cli")
+    def test_main_download_flag(self, mock_cli_dl):
+        mock_cli_dl.return_value = 0
+        ret = hf_radar.main(["--download", "test/repo", "--file", "test.gguf"])
+        self.assertEqual(ret, 0)
+        mock_cli_dl.assert_called_once_with("test/repo", custom_file="test.gguf")
 
 
 if __name__ == "__main__":

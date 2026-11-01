@@ -1,5 +1,9 @@
 # Llama.cpp Launchpad
 
+
+# Launch interactive Model Radar dashboard (opens browser to #radar)
+python utils/hf_radar.py
+
 ## Hf Radar UI
 python utils/hf_radar.py --ui
 

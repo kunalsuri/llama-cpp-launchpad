@@ -374,6 +374,22 @@ class TestApi(UiBase):
             self.assertEqual(len(d["models"]), 1)
             self.assertEqual(d["models"][0]["repo"], "test/gpu-model")
 
+    def test_radar_history(self):
+        with unittest.mock.patch("hf_radar.compute_sync_diff") as mock_diff:
+            mock_diff.return_value = {
+                "latest_sync": "2026-11-01T00:00:00Z",
+                "previous_sync": "2026-10-31T00:00:00Z",
+                "summary": {"new_count": 1, "removed_count": 0, "persisted_count": 1, "gpu_ready_new": 1},
+                "new_models": [{"repo": "test/new-model", "name": "new-model", "fit_mode": "gpu", "tps": 30}],
+                "top_movers": [],
+                "removed_models": [],
+                "snapshots": [],
+            }
+            d = self.get_json("/api/radar/history")
+            self.assertEqual(d["latest_sync"], "2026-11-01T00:00:00Z")
+            self.assertEqual(len(d["new_models"]), 1)
+            self.assertEqual(d["new_models"][0]["repo"], "test/new-model")
+
 
 class TestInstall(UiBase):
     def wait_for(self, *states):

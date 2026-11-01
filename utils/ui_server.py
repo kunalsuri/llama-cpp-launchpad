@@ -168,33 +168,91 @@ class App:
         rows = hf_discover.rank(results, "speed" if use == "fast" else "popular")[:10]
         return {"models": [self.card(r) for r in rows]}
 
-    def radar(self, gpu_only: bool = False, search: str | None = None) -> dict:
+    def radar(self, gpu_only: bool = False, search: str | None = None,
+              sync: bool = False, cluster: str | None = None) -> dict:
         """Dynamic Hugging Face radar of trending/new models and historical status."""
         import hf_radar
-        latest = hf_radar.load_latest()
-        if not latest:
+        if sync:
             latest = hf_radar.sync_radar(self.hw, search=search)
+        else:
+            latest = hf_radar.load_latest()
+            if not latest:
+                latest = hf_radar.sync_radar(self.hw, search=search)
         models = latest.get("models") or []
+        for m in models:
+            if "clusters" not in m:
+                m["clusters"] = hf_radar.classify_clusters(m, m.get("name", ""))
         if gpu_only:
             models = [m for m in models if m.get("fit_mode") == "gpu"]
+        if cluster and cluster != "all":
+            models = [m for m in models if cluster in m.get("clusters", [])]
         for m in models:
             repo = m.get("repo", "")
             name = m.get("name") or repo.split("/")[-1] or "model"
             size = int(m.get("size_bytes") or m.get("size") or 0)
-            fname = f"{name}.gguf"
+            fname = m.get("file") or (m.get("files")[0][0] if m.get("files") else f"{name}.gguf")
+            files = m.get("files") or [(fname, size)]
+            dl_url = m.get("download_url") or f"https://huggingface.co/{repo}/resolve/main/{fname}"
             mid = f"{repo}|{fname}"
             self.offered[mid] = {
                 "repo": repo,
-                "files": [(fname, size)],
+                "file": fname,
+                "files": files,
                 "size": size,
                 "name": name,
                 "title": m.get("title") or name,
+                "download_url": dl_url,
             }
             m["id"] = mid
+            m["file"] = fname
+            m["files"] = files
+            m["download_url"] = dl_url
         return {"updated_at": latest.get("updated_at"), "models": models}
+
+    def radar_history(self, base: str | None = None) -> dict:
+        """Historical snapshot diff showing what changed since last sync."""
+        import hf_radar
+        diff = hf_radar.compute_sync_diff(base_snap=base)
+        for cat in ("new_models", "top_movers", "all_movers"):
+            for m in diff.get(cat) or []:
+                repo = m.get("repo", "")
+                name = m.get("name") or repo.split("/")[-1] or "model"
+                size = int(m.get("size_bytes") or m.get("size") or 0)
+                fname = m.get("file") or (m.get("files")[0][0] if m.get("files") else f"{name}.gguf")
+                files = m.get("files") or [(fname, size)]
+                dl_url = m.get("download_url") or f"https://huggingface.co/{repo}/resolve/main/{fname}"
+                mid = f"{repo}|{fname}"
+                self.offered[mid] = {
+                    "repo": repo,
+                    "file": fname,
+                    "files": files,
+                    "size": size,
+                    "name": name,
+                    "title": m.get("title") or name,
+                    "download_url": dl_url,
+                }
+                m["id"] = mid
+                m["file"] = fname
+                m["files"] = files
+                m["download_url"] = dl_url
+        return diff
 
     # --- download job ------------------------------------------------------------------------------
     def snapshot(self) -> dict:
+        with self.lock:
+            if self.job.get("state") in ("downloading", "testing"):
+                return dict(self.job)
+        ms = self.ms
+        if ms.state_get("dl_active") == "1":
+            return {
+                "state": ms.state_get("dl_state") or "downloading",
+                "title": ms.state_get("dl_title") or ms.state_get("dl_repo") or "Terminal Download",
+                "done": ms.state_int("dl_done"),
+                "total": ms.state_int("dl_total"),
+                "source": "terminal",
+                "repo": ms.state_get("dl_repo"),
+                "file": ms.state_get("dl_file"),
+            }
         with self.lock:
             return dict(self.job)
 
@@ -210,7 +268,15 @@ class App:
         with self.lock:
             if self.job.get("state") in ("downloading", "testing"):
                 return 409, {"error": "Another download is running."}
-            self.job = {"state": "downloading", "title": offer["title"], "done": 0, "total": offer["size"]}
+            self.job = {
+                "state": "downloading",
+                "title": offer["title"],
+                "done": 0,
+                "total": offer["size"],
+                "repo": offer["repo"],
+                "file": offer.get("file", ""),
+                "download_url": offer.get("download_url", ""),
+            }
         threading.Thread(target=self._install, args=(offer,), daemon=True).start()
         return 202, {"ok": True}
 
@@ -218,23 +284,78 @@ class App:
         ms = self.ms
         try:
             base, paths = 0, []
+            total_size = offer.get("size") or sum(sz for _, sz in offer.get("files", []))
+            ms.state_update({
+                "dl_active": "1",
+                "dl_state": "downloading",
+                "dl_title": offer["title"],
+                "dl_repo": offer["repo"],
+                "dl_file": offer.get("file", ""),
+                "dl_done": 0,
+                "dl_total": total_size,
+            })
+            sys.stderr.write(f"\n[LAUNCHPAD] Starting download: {offer['repo']}\n")
+            sys.stderr.write(f"[LAUNCHPAD] Total payload: {ms.human_size(total_size)}\n")
+            sys.stderr.flush()
+
             for f, size in offer["files"]:                  # split models: every part, into the same folder
                 dest, have = ms.local_path(offer["repo"], f, size)
-                path = dest if have else ms.download(
-                    offer["repo"], f, size, lambda d, b=base: self._set(done=b + d))
+                dl_url = offer.get("download_url") or f"https://huggingface.co/{offer['repo']}/resolve/main/{f}"
+
+                def on_chunk(done, b=base, sz=total_size, fn=f):
+                    cur = b + done
+                    self._set(done=cur)
+                    ms.state_update({"dl_done": cur})
+                    pct = int(cur * 100 // max(sz, 1))
+                    bar_len = 25
+                    filled = int(bar_len * pct // 100)
+                    bar = "=" * filled + (">" if filled < bar_len else "")
+                    bar = bar.ljust(bar_len, " ")
+                    sys.stderr.write(
+                        f"\r[LAUNCHPAD] [{bar}] {pct:3d}%  {ms.human_size(cur)} / {ms.human_size(sz)} ({fn})"
+                    )
+                    sys.stderr.flush()
+
+                path = dest if have else ms.download(offer["repo"], f, size, on_chunk)
                 if not path:
-                    self._set(state="error", error="The download did not finish (disk space or connection). "
-                                                   "Press the button again to resume.")
+                    curl_cmd = f'curl -L -C - -o "models/{f}" "{dl_url}"'
+                    cli_cmd = f'python3 utils/hf_radar.py --download "{offer["repo"]}"'
+                    sys.stderr.write(f"\n[LAUNCHPAD] Download failed. Resume via terminal with:\n  {curl_cmd}\n")
+                    sys.stderr.flush()
+                    ms.state_update({"dl_active": "0", "dl_state": "error"})
+                    self._set(
+                        state="error",
+                        error="The download did not finish (disk space or connection). Press Retry or resume via terminal.",
+                        curl_cmd=curl_cmd,
+                        cli_cmd=cli_cmd,
+                        download_url=dl_url,
+                        file=f,
+                        repo=offer["repo"],
+                    )
                     return
                 base += size
                 self._set(done=base)
+                ms.state_update({"dl_done": base})
                 paths.append(path)
+
+            sys.stderr.write("\n[LAUNCHPAD] Download complete! Running speed test with llama-bench...\n")
+            sys.stderr.flush()
             ms.record_installed(offer["name"], offer["repo"], offer["size"])
             self._set(state="testing")
+            ms.state_update({"dl_state": "testing"})
             rc = ms.check_model_speed(paths[0], offer["size"], self.hw)
             tps = ms.state_int("measured_tps") if rc == 0 else 0
+            ms.state_update({"dl_active": "0", "dl_state": "done"})
+            cmd = serve_cmd(platform.system())
+            sys.stderr.write(
+                f"[LAUNCHPAD] Ready! Speed: ~{tps} tokens/s. Start server with: {cmd}\n\n"
+            )
+            sys.stderr.flush()
             self._set(state="done", bench="ok" if rc == 0 else "skipped" if rc == 2 else "failed", tps=tps)
         except Exception as e:                              # noqa: BLE001 - show the user something, never crash the page
+            ms.state_update({"dl_active": "0", "dl_state": "error"})
+            sys.stderr.write(f"\n[LAUNCHPAD] Error during download: {e}\n")
+            sys.stderr.flush()
             self._set(state="error", error=f"Something went wrong: {e}")
 
 
@@ -287,7 +408,14 @@ def make_handler(app: App):
             if url.path == "/api/radar":
                 gpu_only = (q.get("gpu_only") or ["0"])[0] == "1"
                 search = (q.get("search") or [None])[0]
-                return self.reply(200, app.radar(gpu_only=gpu_only, search=search))
+                sync = (q.get("sync") or ["0"])[0] == "1"
+                cluster = (q.get("cluster") or [None])[0]
+                return self.reply(200, app.radar(
+                    gpu_only=gpu_only, search=search, sync=sync, cluster=cluster
+                ))
+            if url.path == "/api/radar/history":
+                base = (q.get("base") or [None])[0]
+                return self.reply(200, app.radar_history(base=base))
             if url.path == "/api/progress":
                 return self.reply(200, app.snapshot())
             if url.path == "/api/tools":

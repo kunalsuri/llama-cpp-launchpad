@@ -335,6 +335,134 @@ const scenarios = {
     text = p.text("radar-list");
     if (text.indexOf("slow-big") > text.indexOf("fast-small")) return "expected slow-big before fast-small by speed asc";
   },
+
+  async "radar cluster buttons filter models by cluster"() {
+    const radarData = {
+      updated_at: "2026-11-01T00:00:00Z",
+      models: [
+        { repo: "author/code-model", fit_mode: "gpu", tps: 20, downloads: 100, size_mb: 2000, clusters: ["coding", "chat"] },
+        { repo: "author/agent-model", fit_mode: "gpu", tps: 20, downloads: 100, size_mb: 2000, clusters: ["agentic"] },
+      ],
+    };
+    const p = makePage({
+      routes: (path) => {
+        if (path === "/api/state") return STATE;
+        if (path === "/api/progress") return { state: "idle" };
+        if (path.startsWith("/api/radar")) return radarData;
+        return {};
+      },
+    });
+    await p.start();
+    await p.click("radar-btn");
+    await p.advance(100);
+    if (!p.text("radar-list").includes("author/code-model") || !p.text("radar-list").includes("author/agent-model")) {
+      return "expected both models in all clusters view";
+    }
+  },
+
+  async "the /#history link opens the history view and displays changes"() {
+    const historyData = {
+      has_previous: true,
+      latest_sync: "2026-11-01T00:00:00Z",
+      previous_sync: "2026-10-31T00:00:00Z",
+      summary: { new_count: 1, removed_count: 1, persisted_count: 1, gpu_ready_new: 1, total_current: 2, total_previous: 2 },
+      new_models: [{ repo: "new/frontier-model", fit_mode: "gpu", tps: 30, downloads: 500, size_mb: 4000, quant: "Q4_K_M", clusters: ["coding"] }],
+      top_movers: [{ repo: "common/mover-model", fit_mode: "gpu", tps: 20, downloads: 2000, delta_downloads: 400, size_mb: 2000, quant: "Q4_K_M" }],
+      removed_models: [{ repo: "old/retired-model", downloads: 300, quant: "Q8_0" }],
+      snapshots: [{ date: "2026-11-01", count: 2, updated_at: "2026-11-01T00:00:00Z" }],
+    };
+    const p = makePage({
+      hash: "#history",
+      routes: (path) => {
+        if (path === "/api/state") return STATE;
+        if (path === "/api/progress") return { state: "idle" };
+        if (path.startsWith("/api/radar/history")) return historyData;
+        return {};
+      },
+    });
+    await p.start();
+    await p.advance(100);
+    if (p.visible() !== "v-history") return "expected v-history on #history hash, got " + p.visible();
+    if (!p.text("history-content").includes("new/frontier-model")) {
+      return "new model not rendered in history view: " + p.text("history-content");
+    }
+  },
+
+  async "radar cards render terminal curl buttons and specs"() {
+    const radarData = {
+      updated_at: "2026-11-01T00:00:00Z",
+      models: [
+        {
+          repo: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
+          name: "Qwen2.5-Coder-7B-Instruct-Q4_K_M",
+          file: "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+          download_url: "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+          fit_mode: "gpu",
+          tps: 35,
+          downloads: 1000,
+          size_mb: 4500,
+          clusters: ["coding"],
+          id: "m1",
+        },
+      ],
+    };
+    const p = makePage({
+      routes: (path) => {
+        if (path === "/api/state") return STATE;
+        if (path === "/api/progress") return { state: "idle" };
+        if (path.startsWith("/api/radar")) return radarData;
+        return {};
+      },
+    });
+    await p.start();
+    await p.click("radar-btn");
+    await p.advance(100);
+    const text = p.text("radar-list");
+    if (!text.includes("Copy curl")) {
+      return "expected Copy curl button on radar cards, got: " + text;
+    }
+  },
+
+  async "terminal download box is rendered during download and failure"() {
+    let progressState = {
+      state: "downloading",
+      title: "Qwen2.5-Coder",
+      done: 1000,
+      total: 5000,
+      repo: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
+      file: "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+      download_url: "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+      source: "terminal",
+    };
+    const p = makePage({
+      routes: (path) => {
+        if (path === "/api/state") return STATE;
+        if (path === "/api/progress") return progressState;
+        return {};
+      },
+    });
+    await p.start();
+    await p.advance(100);
+    if (p.visible() !== "v-install") return "expected v-install during download, got: " + p.visible();
+    const installBox = p.text("i-terminal-box");
+    if (!installBox.includes("curl -L -C -") || !installBox.includes("qwen2.5-coder-7b-instruct-q4_k_m.gguf")) {
+      return "expected curl command in install box, got: " + installBox;
+    }
+
+    // Now test error view
+    progressState = {
+      state: "error",
+      error: "Network interrupted",
+      curl_cmd: 'curl -L -C - -o "models/test.gguf" "https://huggingface.co/test/model/resolve/main/test.gguf"',
+      cli_cmd: 'python3 utils/hf_radar.py --download "test/model"',
+    };
+    await p.advance(550);
+    if (p.visible() !== "v-error") return "expected v-error on error, got: " + p.visible();
+    const errorBox = p.text("e-terminal-box");
+    if (!errorBox.includes("curl -L -C - -o") || !errorBox.includes("test.gguf")) {
+      return "expected resume curl command in error box, got: " + errorBox;
+    }
+  },
 };
 
 (async () => {

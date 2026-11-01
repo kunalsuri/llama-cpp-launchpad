@@ -363,23 +363,327 @@
   .tool ul { margin: 8px 0 0; padding-left: 20px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
   .tool .hit { color: var(--good); font-weight: 600; }
 
-  /* Model Radar */
-  .radar-controls {
-    display: flex;
-    flex-wrap: wrap;
+  /* Model Radar - Steve Jobs Edition */
+  main:has(#v-radar:not([hidden])) {
+    max-width: 960px;
+    transition: max-width .22s cubic-bezier(.16, 1, .3, 1);
+  }
+
+  .radar-header {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+  .radar-eyebrow {
+    display: inline-flex;
     align-items: center;
-    gap: 10px;
+    gap: 7px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-subtle);
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
+    margin-bottom: 10px;
+  }
+  .pulse-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--good);
+    box-shadow: 0 0 8px var(--good);
+    animation: radarPulse 1.8s ease-in-out infinite;
+  }
+  @keyframes radarPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: .4; transform: scale(.85); }
+  }
+
+  /* Hardware Horizon Telemetry Banner */
+  .radar-horizon {
+    display: grid;
+    grid-template-columns: 1.4fr 1.6fr auto;
+    align-items: center;
+    gap: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 22px;
+    margin-bottom: 22px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(20px);
+  }
+  .horizon-device {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .horizon-chip-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    display: grid;
+    place-items: center;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .horizon-chip-icon svg { width: 22px; height: 22px; }
+  .horizon-device-name {
+    font-size: 15px;
+    font-weight: 800;
+    color: var(--text-main);
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .horizon-device-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 3px;
+  }
+  .horizon-stats {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    gap: 12px;
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    padding: 0 16px;
+  }
+  .horizon-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+  .horizon-stat-val {
+    font-size: 19px;
+    font-weight: 800;
+    color: var(--text-main);
+    letter-spacing: -.02em;
+    line-height: 1.1;
+  }
+  .horizon-stat.stat-gpu .horizon-stat-val {
+    color: var(--good);
+  }
+  .horizon-stat-lbl {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .horizon-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+  .radar-sync-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-main);
+    padding: 7px 14px;
+    border-radius: var(--radius-full);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: var(--shadow-sm);
+    transition: all .15s;
+  }
+  .radar-sync-btn:hover {
+    background: var(--surface-hover);
+    border-color: var(--border-hover);
+    transform: translateY(-1px);
+  }
+  .radar-sync-btn.syncing svg {
+    animation: spinRadar .8s linear infinite;
+  }
+  @keyframes spinRadar { to { transform: rotate(360deg); } }
+  .radar-updated { font-size: 12px; color: var(--text-muted); }
+
+  /* Keynote Spotlight Hero Card */
+  .radar-spotlight-wrap { margin-bottom: 24px; }
+  .spotlight-card {
+    background: linear-gradient(135deg, color-mix(in oklch, var(--surface) 94%, var(--accent) 6%), var(--surface));
+    border: 1px solid color-mix(in oklch, var(--border) 70%, var(--accent) 30%);
+    border-radius: var(--radius);
+    padding: 24px 28px;
+    box-shadow: 0 8px 30px -6px rgba(0, 0, 0, 0.08), 0 0 0 1px color-mix(in oklch, var(--accent) 15%, transparent);
+    position: relative;
+    overflow: hidden;
+    transition: box-shadow .2s, transform .2s;
+  }
+  .spotlight-card:hover {
+    box-shadow: 0 12px 36px -6px rgba(0, 0, 0, 0.12), 0 0 0 1px color-mix(in oklch, var(--accent) 30%, transparent);
+  }
+  .spotlight-card::before {
+    content: "";
+    position: absolute;
+    top: -60px;
+    right: -60px;
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    background: radial-gradient(circle, color-mix(in oklch, var(--accent) 25%, transparent), transparent 70%);
+    pointer-events: none;
+  }
+  .spotlight-badge-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     margin-bottom: 12px;
   }
+  .spotlight-crown-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-subtle);
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
+  }
+  .spotlight-body {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+  }
+  .spotlight-info { flex: 1; min-width: 0; }
+  .spotlight-author {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+  }
+  .spotlight-title {
+    font-size: 24px;
+    font-weight: 800;
+    margin: 4px 0 6px;
+    color: var(--text-main);
+    letter-spacing: -.02em;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+  .spotlight-desc {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin: 0 0 14px;
+    line-height: 1.45;
+  }
+  .spotlight-meter-wrap {
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    margin-bottom: 14px;
+  }
+  .spotlight-meter-labels {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
+  .spotlight-meter-labels .speed {
+    color: var(--good);
+    font-weight: 700;
+  }
+  .spotlight-cta { flex-shrink: 0; }
+  .spotlight-install-btn {
+    padding: 12px 26px;
+    font-size: 15px;
+    font-weight: 700;
+    border-radius: var(--radius-full);
+  }
+
+  /* Segmented Nav & Filter Deck */
+  .radar-nav-deck {
+    margin-bottom: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .segmented-control {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    padding: 3px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .segmented-control::-webkit-scrollbar { display: none; }
+  .seg-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 15px;
+    border-radius: var(--radius-full);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    transition: all .14s cubic-bezier(.16, 1, .3, 1);
+  }
+  .seg-btn:hover { color: var(--text-main); }
+  .seg-btn.active {
+    background: var(--surface);
+    color: var(--text-main);
+    font-weight: 700;
+    box-shadow: var(--shadow-sm);
+  }
+  .seg-count {
+    font-size: 11px;
+    font-weight: 700;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    padding: 1px 7px;
+    border-radius: var(--radius-full);
+    color: var(--text-muted);
+  }
+  .seg-btn.active .seg-count {
+    background: var(--accent-subtle);
+    color: var(--accent);
+    border-color: transparent;
+  }
+
+  .radar-search-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
   .search-box {
-    flex: 1 1 240px;
+    flex: 1 1 260px;
     position: relative;
     display: flex;
     align-items: center;
   }
   .search-box input {
     width: 100%;
-    padding: 9px 14px 9px 36px;
+    padding: 10px 42px 10px 38px;
     border-radius: var(--radius-full);
     border: 1px solid var(--border);
     background: var(--surface);
@@ -387,19 +691,334 @@
     font: inherit;
     font-size: 14px;
     outline: none;
+    box-shadow: var(--shadow-sm);
     transition: border-color .15s, box-shadow .15s;
   }
   .search-box input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-subtle); }
-  .search-icon { position: absolute; left: 12px; color: var(--text-faint); pointer-events: none; width: 16px; height: 16px; }
+  .search-icon { position: absolute; left: 13px; color: var(--text-faint); pointer-events: none; width: 16px; height: 16px; }
+  .search-kbd-hint {
+    position: absolute;
+    right: 12px;
+    display: flex;
+    align-items: center;
+    pointer-events: none;
+  }
+  .search-kbd-hint kbd {
+    font-family: var(--font);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-faint);
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  .search-clear-btn {
+    position: absolute;
+    right: 36px;
+    background: none;
+    border: none;
+    font-size: 16px;
+    color: var(--text-faint);
+    cursor: pointer;
+    padding: 2px 6px;
+  }
+  .search-clear-btn:hover { color: var(--text-main); }
+
+  .arch-pills-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .arch-pills-row::-webkit-scrollbar { display: none; }
+  .arch-pill-lbl {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    margin-right: 2px;
+  }
+  .arch-pill {
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .12s;
+  }
+  .arch-pill:hover {
+    background: var(--surface-hover);
+    color: var(--text-main);
+  }
+  .arch-pill.active {
+    background: var(--primary);
+    color: var(--primary-fg);
+    font-weight: 700;
+    border-color: transparent;
+  }
+
+  .cluster-pills-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .cluster-pills-row::-webkit-scrollbar { display: none; }
+  .cluster-pill-lbl {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    margin-right: 2px;
+  }
+  .cluster-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .12s;
+  }
+  .cluster-pill:hover {
+    background: var(--surface-hover);
+    color: var(--text-main);
+  }
+  .cluster-pill.active {
+    background: var(--primary);
+    color: var(--primary-fg);
+    font-weight: 700;
+    border-color: transparent;
+  }
+  .cluster-emoji { font-size: 13px; line-height: 1; }
+
+  .radar-cluster-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border);
+    background: var(--bg-subtle);
+    color: var(--text-muted);
+    letter-spacing: .02em;
+    cursor: pointer;
+    transition: transform .1s, background .1s;
+  }
+  .radar-cluster-badge:hover { transform: scale(1.05); }
+  .radar-cluster-badge.cluster-coding {
+    background: color-mix(in oklch, #3b82f6 14%, var(--surface));
+    color: #2563eb;
+    border-color: color-mix(in oklch, #3b82f6 30%, transparent);
+  }
+  .radar-cluster-badge.cluster-agentic {
+    background: color-mix(in oklch, #8b5cf6 14%, var(--surface));
+    color: #7c3aed;
+    border-color: color-mix(in oklch, #8b5cf6 30%, transparent);
+  }
+  .radar-cluster-badge.cluster-chat {
+    background: color-mix(in oklch, #10b981 14%, var(--surface));
+    color: #059669;
+    border-color: color-mix(in oklch, #10b981 30%, transparent);
+  }
+  .radar-cluster-badge.cluster-reasoning {
+    background: color-mix(in oklch, #f59e0b 14%, var(--surface));
+    color: #d97706;
+    border-color: color-mix(in oklch, #f59e0b 30%, transparent);
+  }
+  .radar-cluster-badge.cluster-creative {
+    background: color-mix(in oklch, #ec4899 14%, var(--surface));
+    color: #db2777;
+    border-color: color-mix(in oklch, #ec4899 30%, transparent);
+  }
+
+  /* History View */
+  main:has(#v-history:not([hidden])) {
+    max-width: 960px;
+    transition: max-width .22s cubic-bezier(.16, 1, .3, 1);
+  }
+  .history-header {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+  .history-horizon {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 22px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow);
+  }
+  .history-sync-box {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .history-sync-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--text-muted);
+  }
+  .history-sync-val {
+    font-size: 15px;
+    font-weight: 800;
+    color: var(--text-main);
+  }
+  .history-sync-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .history-sync-arrow {
+    font-size: 20px;
+    color: var(--text-faint);
+    text-align: center;
+  }
+  .history-select-snap {
+    padding: 6px 12px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border);
+    background: var(--bg-subtle);
+    color: var(--text-main);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+    max-width: 260px;
+  }
+  .history-kpi-deck {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 22px;
+  }
+  @media (max-width: 640px) {
+    .history-kpi-deck { grid-template-columns: repeat(2, 1fr); }
+    .history-horizon { grid-template-columns: 1fr; gap: 12px; }
+    .history-sync-arrow { display: none; }
+  }
+  .history-kpi-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    text-align: center;
+    box-shadow: var(--shadow-sm);
+  }
+  .history-kpi-val {
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -.03em;
+    line-height: 1.1;
+    color: var(--text-main);
+  }
+  .history-kpi-card.kpi-new .history-kpi-val { color: var(--accent); }
+  .history-kpi-card.kpi-surge .history-kpi-val { color: var(--good); }
+  .history-kpi-card.kpi-gpu .history-kpi-val { color: var(--good); }
+  .history-kpi-card.kpi-depart .history-kpi-val { color: var(--text-muted); }
+  .history-kpi-lbl {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  .delta-surge-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: var(--radius-full);
+    background: color-mix(in oklch, var(--good) 15%, var(--surface));
+    color: var(--good);
+    border: 1px solid color-mix(in oklch, var(--good) 35%, transparent);
+  }
+  .delta-new-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 3px 10px;
+    border-radius: var(--radius-full);
+    background: color-mix(in oklch, var(--accent) 15%, var(--surface));
+    color: var(--accent);
+    border: 1px solid color-mix(in oklch, var(--accent) 35%, transparent);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+  }
+  .history-snapshot-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .history-snapshot-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    gap: 12px;
+  }
+  .history-snap-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .history-snap-date {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-main);
+  }
+  .history-snap-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .history-empty {
+    text-align: center;
+    padding: 48px 24px;
+    background: var(--surface);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+  }
 
   .sort-bar {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
-    margin-bottom: 18px;
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
+    padding: 6px 12px;
+    border-radius: var(--radius-full);
     background: var(--bg-subtle);
     border: 1px solid var(--border);
     font-size: 13px;
@@ -416,7 +1035,6 @@
   }
   .sort-btn:hover { background: var(--surface-hover); color: var(--text-main); }
   .sort-btn.active { background: var(--surface); color: var(--accent); font-weight: 700; box-shadow: var(--shadow-sm); }
-
   .sort-dir-btn {
     display: inline-flex;
     align-items: center;
@@ -430,41 +1048,116 @@
     color: var(--text-main);
   }
   .sort-dir-btn:hover { background: var(--surface-hover); }
-  .spacer { flex: 1; }
-  .radar-updated { font-size: 12px; color: var(--text-muted); }
 
+  /* Model Card - Steve Jobs Craftsmanship */
   .radar-card {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--surface);
-    padding: 20px 22px;
+    padding: 22px 24px;
     margin-top: 14px;
     box-shadow: var(--shadow-sm);
-    transition: transform .16s, box-shadow .16s, border-color .16s;
+    transition: transform .18s cubic-bezier(.16, 1, .3, 1), box-shadow .18s, border-color .18s;
+    container-type: inline-size;
   }
   .radar-card:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow);
     border-color: var(--border-hover);
   }
+  .radar-card.is-installed {
+    border-color: color-mix(in oklch, var(--good) 40%, var(--border));
+  }
   .radar-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
   .radar-avatar {
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
-    background: var(--accent-subtle);
-    color: var(--accent);
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
     display: grid;
     place-items: center;
-    font-weight: 700;
-    font-size: 15px;
+    font-weight: 800;
+    font-size: 16px;
     flex-shrink: 0;
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   }
   .radar-title-group { flex: 1; min-width: 0; }
-  .radar-repo { font-size: 16px; font-weight: 700; color: var(--text-main); overflow-wrap: anywhere; }
+  .radar-repo {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-main);
+    overflow-wrap: anywhere;
+    letter-spacing: -.01em;
+    line-height: 1.3;
+  }
   .radar-subname { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
 
-  .chips-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .badge {
+    font-size: 12px;
+    font-weight: 700;
+    border-radius: var(--radius-full);
+    padding: 4px 12px;
+    white-space: nowrap;
+  }
+  .badge.fit-gpu {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: oklch(62% 0.18 152 / .15);
+    color: var(--good);
+    border: 1px solid oklch(62% 0.18 152 / .3);
+  }
+  .badge.fit-gpu::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--good);
+    box-shadow: 0 0 6px var(--good);
+  }
+  .badge.fit-cpu { background: oklch(58% 0.16 240 / .15); color: oklch(65% 0.16 240); border: 1px solid oklch(58% 0.16 240 / .3); }
+  .badge.fit-tight { background: oklch(68% 0.16 75 / .15); color: var(--warn); border: 1px solid oklch(68% 0.16 75 / .3); }
+
+  /* Memory Horizon Gauge on each card */
+  .card-meter {
+    margin-top: 14px;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 9px 13px;
+  }
+  .card-meter-labels {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
+  .card-meter-title { color: var(--text-muted); font-weight: 500; }
+  .card-meter-title b { color: var(--text-main); }
+  .card-meter-speed { font-weight: 700; }
+  .card-meter-speed.speed-fast { color: var(--good); }
+  .card-meter-speed.speed-med { color: var(--text-main); }
+  .card-meter-speed.speed-slow { color: var(--text-muted); }
+
+  .meter-track {
+    height: 6px;
+    border-radius: var(--radius-full);
+    background: color-mix(in oklch, var(--border) 60%, transparent);
+    overflow: hidden;
+  }
+  .meter-fill {
+    height: 100%;
+    border-radius: var(--radius-full);
+    transition: width .4s cubic-bezier(.16, 1, .3, 1);
+  }
+  .meter-fill.fill-gpu { background: linear-gradient(90deg, oklch(62% 0.18 152), oklch(72% 0.18 140)); }
+  .meter-fill.fill-cpu { background: linear-gradient(90deg, oklch(58% 0.16 240), oklch(68% 0.16 220)); }
+  .meter-fill.fill-tight { background: linear-gradient(90deg, oklch(68% 0.16 75), oklch(76% 0.16 65)); }
+
+  /* Chips row */
+  .chips-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; align-items: center; }
   .chip-meta {
     background: var(--bg-subtle);
     border: 1px solid var(--border);
@@ -477,20 +1170,11 @@
     align-items: center;
     gap: 4px;
   }
-  .chip-meta.highlight { background: var(--accent-subtle); color: var(--accent); font-weight: 600; border-color: transparent; }
+  .chip-meta.highlight { background: var(--accent-subtle); color: var(--accent); font-weight: 700; border-color: transparent; }
+  .chip-meta.moe-badge { background: oklch(62% 0.22 300 / 0.15); color: oklch(65% 0.22 300); border-color: oklch(62% 0.22 300 / 0.3); font-weight: 700; }
   .chip-svg { width: 12px; height: 12px; }
 
-  .badge {
-    font-size: 12px;
-    font-weight: 700;
-    border-radius: var(--radius-full);
-    padding: 3px 10px;
-    white-space: nowrap;
-  }
-  .badge.fit-gpu { background: oklch(62% 0.18 152 / .15); color: var(--good); border: 1px solid oklch(62% 0.18 152 / .3); }
-  .badge.fit-cpu { background: oklch(58% 0.16 240 / .15); color: oklch(65% 0.16 240); border: 1px solid oklch(58% 0.16 240 / .3); }
-  .badge.fit-tight { background: oklch(68% 0.16 75 / .15); color: var(--warn); border: 1px solid oklch(68% 0.16 75 / .3); }
-
+  /* Radar Foot */
   .radar-foot {
     display: flex;
     align-items: center;
@@ -500,7 +1184,173 @@
     padding-top: 12px;
     border-top: 1px solid var(--border);
   }
-  .radar-date { font-size: 12px; color: var(--text-muted); }
+  .radar-foot-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .radar-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    padding: 5px 11px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all .12s;
+  }
+  .radar-icon-btn:hover {
+    background: var(--surface-hover);
+    color: var(--text-main);
+    border-color: var(--border-hover);
+  }
+  .radar-icon-btn svg { width: 13px; height: 13px; }
+  .btn.installed {
+    background: var(--bg-subtle);
+    color: var(--good);
+    border: 1px solid oklch(62% 0.18 152 / 0.3);
+  }
+
+  /* Drawer: technical specs */
+  .radar-drawer {
+    margin-top: 14px;
+    padding: 12px 14px;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    animation: fadeIn .15s ease-out;
+  }
+  .radar-drawer dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 14px;
+  }
+  .radar-drawer dt { font-weight: 600; color: var(--text-main); }
+  .radar-drawer dd { margin: 0; overflow-wrap: anywhere; }
+
+  /* Terminal download box & code copy rows */
+  .terminal-download-box {
+    text-align: left;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    margin-top: 18px;
+    box-shadow: var(--shadow-sm);
+  }
+  .terminal-box-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    color: var(--accent);
+  }
+  .terminal-icon {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 800;
+  }
+  .code-copy-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    margin-top: 4px;
+  }
+  .inline-code {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-main);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: all;
+  }
+  .sub.small {
+    font-size: 12px;
+    margin: 4px 0 8px;
+    line-height: 1.4;
+  }
+
+  /* Scanner animation */
+  .radar-scanner-wrap { text-align: center; padding: 60px 20px; }
+  .radar-dish {
+    width: 80px;
+    height: 80px;
+    margin: 0 auto 20px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    position: relative;
+    display: grid;
+    place-items: center;
+    box-shadow: 0 0 24px color-mix(in oklch, var(--accent) 30%, transparent);
+  }
+  .radar-dish::before {
+    content: "";
+    position: absolute;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 1px dashed color-mix(in oklch, var(--accent) 60%, transparent);
+  }
+  .radar-dish-sweep {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, transparent 0deg, color-mix(in oklch, var(--accent) 35%, transparent) 60deg, transparent 65deg);
+    animation: dishRotate 1.4s linear infinite;
+  }
+  @keyframes dishRotate { to { transform: rotate(360deg); } }
+  .radar-scanner-title { font-size: 18px; font-weight: 700; color: var(--text-main); margin: 0 0 6px; }
+  .radar-scanner-sub { font-size: 14px; color: var(--text-muted); margin: 0; }
+
+  /* Empty state */
+  .radar-empty {
+    text-align: center;
+    padding: 48px 20px;
+    background: var(--surface);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    margin-top: 20px;
+  }
+  .radar-empty-icon { width: 44px; height: 44px; color: var(--text-faint); margin: 0 auto 12px; }
+  .radar-empty h3 { font-size: 18px; font-weight: 700; margin: 0 0 8px; color: var(--text-main); }
+  .radar-empty p { font-size: 14px; color: var(--text-muted); margin: 0 0 16px; }
+
+  @media (max-width: 768px) {
+    .radar-horizon { grid-template-columns: 1fr; gap: 14px; }
+    .horizon-stats {
+      border-left: none;
+      border-right: none;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 0;
+    }
+    .horizon-actions {
+      align-items: flex-start;
+      flex-direction: row;
+      justify-content: space-between;
+    }
+    .spotlight-body { flex-direction: column; align-items: stretch; }
+    .spotlight-cta { margin-top: 12px; }
+    .spotlight-install-btn { width: 100%; }
+    .radar-foot { flex-direction: column; align-items: stretch; }
+    .radar-foot-actions { justify-content: space-between; }
+  }
 
   @media (max-width: 600px) {
     header { padding: 12px 16px; }
@@ -520,6 +1370,10 @@
     <button class="nav" id="radar-btn">
       <svg viewBox="0 0 24 24" class="nav-svg"><path d="M12 20a8 8 0 1 0-8-8m8 4a4 4 0 1 0-4-4m4 0V4m0 8 5.5-5.5"/></svg>
       Model Radar
+    </button>
+    <button class="nav" id="history-btn">
+      <svg viewBox="0 0 24 24" class="nav-svg"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>
+      Sync History
     </button>
     <button class="nav" id="tools-btn">
       <svg viewBox="0 0 24 24" class="nav-svg"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
@@ -557,6 +1411,7 @@
     <h1 id="i-title">Downloading&hellip;</h1>
     <div class="bar" id="bar"><i id="bar-i"></i></div>
     <p class="sub" id="i-text" style="margin:0"></p>
+    <div id="i-terminal-box"></div>
   </section>
 
   <section class="view" id="v-done" hidden>
@@ -578,38 +1433,183 @@
 
   <section class="view" id="v-radar" hidden>
     <button class="link back" id="radar-back">&larr; Back</button>
-    <h1>Hugging Face Model Radar</h1>
-    <p class="sub">Fresh models from Hugging Face tested against your hardware.</p>
-
-    <div class="radar-controls">
-      <div class="search-box">
-        <svg viewBox="0 0 24 24" class="search-icon"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm10 2-4.35-4.35"/></svg>
-        <input type="text" id="radar-search" placeholder="Filter models by name, architecture, or quant..." autocomplete="off">
+    <div class="radar-header">
+      <div class="radar-eyebrow">
+        <span class="pulse-dot"></span>
+        <span>LIVE SILICON CALIBRATION</span>
       </div>
-      <button class="btn small ghost" id="radar-toggle-gpu">Toggle GPU Only</button>
+      <h1>Hugging Face Model Radar</h1>
+      <p class="sub">Fresh, curated weights from the open-source frontier — fit-tested for your machine.</p>
     </div>
 
-    <div class="sort-bar">
-      <span class="sort-label">Sort:</span>
-      <div class="sort-group">
-        <button class="sort-btn active" data-sort="downloads" id="sort-downloads">Downloads</button>
-        <button class="sort-btn" data-sort="speed" id="sort-speed">Speed</button>
-        <button class="sort-btn" data-sort="size" id="sort-size">Size</button>
-        <button class="sort-btn" data-sort="name" id="sort-name">Name</button>
+    <!-- Hardware Horizon Telemetry Banner -->
+    <div class="radar-horizon" id="radar-horizon">
+      <div class="horizon-device">
+        <div class="horizon-chip-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 20a8 8 0 1 0-8-8m8 4a4 4 0 1 0-4-4m4 0V4m0 8 5.5-5.5"/></svg>
+        </div>
+        <div class="horizon-device-info">
+          <div class="horizon-device-name" id="radar-hw-name">Hardware Engine</div>
+          <div class="horizon-device-sub" id="radar-hw-sub">High-bandwidth unified memory architecture</div>
+        </div>
       </div>
-      <button class="sort-dir-btn" id="sort-dir" title="Toggle Ascending / Descending">
-        <span id="sort-dir-icon">▼</span> <span id="sort-dir-text">Desc</span>
-      </button>
-      <span class="spacer"></span>
-      <span id="radar-updated" class="radar-updated"></span>
+      <div class="horizon-stats">
+        <div class="horizon-stat">
+          <span class="horizon-stat-val" id="radar-stat-scanned">&mdash;</span>
+          <span class="horizon-stat-lbl">On Radar</span>
+        </div>
+        <div class="horizon-stat stat-gpu">
+          <span class="horizon-stat-val" id="radar-stat-gpu">&mdash;</span>
+          <span class="horizon-stat-lbl">Full GPU Ready</span>
+        </div>
+        <div class="horizon-stat">
+          <span class="horizon-stat-val" id="radar-stat-tps">&mdash;</span>
+          <span class="horizon-stat-lbl">Peak Velocity</span>
+        </div>
+      </div>
+      <div class="horizon-actions">
+        <button class="radar-sync-btn" id="radar-sync-btn" title="Refresh radar from Hugging Face Hub">
+          <svg viewBox="0 0 24 24" class="chip-svg"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5 M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16 M16 16h5v5"/></svg>
+          <span>Sync Hub</span>
+        </button>
+        <button class="radar-sync-btn" id="radar-open-history-btn" title="View what changed since last sync">
+          <svg viewBox="0 0 24 24" class="chip-svg"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>
+          <span>What Changed?</span>
+        </button>
+        <span id="radar-updated" class="radar-updated"></span>
+      </div>
+    </div>
+
+    <!-- Keynote Spotlight Hero Card -->
+    <div id="radar-spotlight" class="radar-spotlight-wrap" hidden></div>
+
+    <!-- Segmented Navigation & Filter Bar -->
+    <div class="radar-nav-deck">
+      <div class="segmented-control" id="radar-tabs" role="tablist">
+        <button class="seg-btn active" data-tab="all">All Models <span class="seg-count" id="count-all">0</span></button>
+        <button class="seg-btn" data-tab="gpu">⚡ Full GPU <span class="seg-count" id="count-gpu">0</span></button>
+        <button class="seg-btn" data-tab="trending">🔥 Trending</button>
+        <button class="seg-btn" data-tab="new">✨ Newest</button>
+        <button class="seg-btn" data-tab="fast">🚀 Blazing (&gt;30 t/s)</button>
+      </div>
+
+      <!-- Backward compatibility toggle for tests if needed -->
+      <button class="btn small ghost" id="radar-toggle-gpu" style="display:none"></button>
+
+      <div class="radar-search-row">
+        <div class="search-box">
+          <svg viewBox="0 0 24 24" class="search-icon"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm10 2-4.35-4.35"/></svg>
+          <input type="text" id="radar-search" placeholder="Search models, architectures, or quants (e.g. Qwen, Llama, Q4_K_M)..." autocomplete="off">
+          <button class="search-clear-btn" id="radar-search-clear" title="Clear search" hidden>&times;</button>
+          <span class="search-kbd-hint"><kbd>/</kbd></span>
+        </div>
+
+        <div class="sort-bar">
+          <span class="sort-label">Sort:</span>
+          <div class="sort-group">
+            <button class="sort-btn active" data-sort="downloads" id="sort-downloads">Downloads</button>
+            <button class="sort-btn" data-sort="speed" id="sort-speed">Speed</button>
+            <button class="sort-btn" data-sort="size" id="sort-size">Size</button>
+            <button class="sort-btn" data-sort="name" id="sort-name">Name</button>
+          </div>
+          <button class="sort-dir-btn" id="sort-dir" title="Toggle Ascending / Descending">
+            <span id="sort-dir-icon">▼</span> <span id="sort-dir-text">Desc</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="arch-pills-row" id="radar-arch-pills">
+        <span class="arch-pill-lbl">Family:</span>
+        <button class="arch-pill active" data-arch="all">All</button>
+        <button class="arch-pill" data-arch="qwen">Qwen</button>
+        <button class="arch-pill" data-arch="llama">Llama</button>
+        <button class="arch-pill" data-arch="deepseek">DeepSeek</button>
+        <button class="arch-pill" data-arch="gemma">Gemma</button>
+        <button class="arch-pill" data-arch="mistral">Mistral</button>
+        <button class="arch-pill" data-arch="phi">Phi</button>
+        <button class="arch-pill" data-arch="moe">MoE</button>
+      </div>
+
+      <div class="cluster-pills-row" id="radar-cluster-pills">
+        <span class="cluster-pill-lbl">Cluster:</span>
+        <button class="cluster-pill active" data-cluster="all">All Clusters</button>
+        <button class="cluster-pill" data-cluster="coding"><span class="cluster-emoji">💻</span> Coding</button>
+        <button class="cluster-pill" data-cluster="agentic"><span class="cluster-emoji">🤖</span> Agentic Work</button>
+        <button class="cluster-pill" data-cluster="chat"><span class="cluster-emoji">💬</span> Chat & Instruct</button>
+        <button class="cluster-pill" data-cluster="reasoning"><span class="cluster-emoji">🧠</span> Reasoning & Math</button>
+        <button class="cluster-pill" data-cluster="creative"><span class="cluster-emoji">🎭</span> Creative & RP</button>
+      </div>
     </div>
 
     <div id="radar-list"></div>
   </section>
 
+  <section class="view" id="v-history" hidden>
+    <button class="link back" id="history-back">&larr; Back to Radar</button>
+    <div class="history-header">
+      <div class="radar-eyebrow">
+        <span class="pulse-dot"></span>
+        <span>FRONTIER SYNCHRONIZATION CHRONICLE</span>
+      </div>
+      <h1>What Changed Since Last Sync</h1>
+      <p class="sub">Compare telemetry between scans to discover newly appeared frontier weights, download velocity surges, and retired models.</p>
+    </div>
+
+    <!-- History Horizon Comparison Banner -->
+    <div class="history-horizon" id="history-horizon">
+      <div class="history-sync-box">
+        <span class="history-sync-label">Current Scan</span>
+        <span class="history-sync-val" id="hist-curr-val">&mdash;</span>
+        <span class="history-sync-sub" id="hist-curr-sub">&mdash;</span>
+      </div>
+      <div class="history-sync-arrow">&rarr;</div>
+      <div class="history-sync-box">
+        <span class="history-sync-label">Compare With Baseline</span>
+        <select class="history-select-snap" id="hist-base-select">
+          <option value="">Previous Sync (Auto)</option>
+        </select>
+        <span class="history-sync-sub" id="hist-prev-sub">&mdash;</span>
+      </div>
+    </div>
+
+    <!-- KPI Summary Cards -->
+    <div class="history-kpi-deck">
+      <div class="history-kpi-card kpi-new">
+        <div class="history-kpi-val" id="hist-stat-new">0</div>
+        <div class="history-kpi-lbl">New on Frontier</div>
+      </div>
+      <div class="history-kpi-card kpi-surge">
+        <div class="history-kpi-val" id="hist-stat-surge">0</div>
+        <div class="history-kpi-lbl">Top DL Gain</div>
+      </div>
+      <div class="history-kpi-card kpi-gpu">
+        <div class="history-kpi-val" id="hist-stat-gpu">0</div>
+        <div class="history-kpi-lbl">GPU Ready New</div>
+      </div>
+      <div class="history-kpi-card kpi-depart">
+        <div class="history-kpi-val" id="hist-stat-depart">0</div>
+        <div class="history-kpi-lbl">Cooled Off</div>
+      </div>
+    </div>
+
+    <!-- Section Navigation Tabs -->
+    <div class="radar-nav-deck">
+      <div class="segmented-control" id="history-tabs" role="tablist">
+        <button class="seg-btn active" data-tab="new">🆕 New Arrivals <span class="seg-count" id="hist-count-new">0</span></button>
+        <button class="seg-btn" data-tab="movers">🚀 Velocity Movers <span class="seg-count" id="hist-count-movers">0</span></button>
+        <button class="seg-btn" data-tab="depart">📉 Cooled Off <span class="seg-count" id="hist-count-depart">0</span></button>
+        <button class="seg-btn" data-tab="snapshots">📅 Snapshot Archive</button>
+      </div>
+    </div>
+
+    <!-- Dynamic History Container -->
+    <div id="history-content"></div>
+  </section>
+
   <section class="view" id="v-error" hidden>
     <h1>That didn't work</h1>
     <p class="sub" id="e-text"></p>
+    <div id="e-terminal-box"></div>
     <p class="center"><button class="btn" id="retry">Try again</button></p>
   </section>
 </main>
@@ -631,6 +1631,17 @@ const ICONS = {
   tools: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
   download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
   gauge: "m12 14 4-4M3.34 19a10 10 0 1 1 17.32 0",
+  zap: "M13 2 3 14h9l-1 8 10-12h-9l1-8z",
+  cpu: "M4 4h16v16H4z M9 2v2 M15 2v2 M9 20v2 M15 20v2 M2 9h2 M2 15h2 M20 9h2 M20 15h2 M9 9h6v6H9z",
+  refresh: "M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5 M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16 M16 16h5v5",
+  copy: "M8 4v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.242a2 2 0 0 0-.602-1.43L16.083 2.57A2 2 0 0 0 14.685 2H10a2 2 0 0 0-2 2z M16 18v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2",
+  check: "M20 6 9 17l-5-5",
+  external: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6 M15 3h6v6 M10 14 21 3",
+  heart: "M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z",
+  chevronDown: "m6 9 6 6 6-6",
+  chevronUp: "m18 15-6-6-6 6",
+  sparkles: "m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z",
+  terminal: "m4 17 6-6-6-6m8 14h8",
 };
 
 const USES = [
@@ -800,8 +1811,105 @@ async function more(everything) {
   b.textContent = failed ? "Try again" : "Search again"; $("#more-wrap").hidden = !failed;
 }
 
+let activeModel = null;
+
+function dlFile(m) {
+  if (!m) return "";
+  if (m.file) return m.file;
+  if (m.files && m.files[0] && m.files[0][0]) return m.files[0][0];
+  const repoName = (m.repo || "").split("/")[1] || m.repo || "model";
+  return (m.name || repoName) + ".gguf";
+}
+
+function dlUrl(m) {
+  if (!m) return "";
+  if (m.download_url) return m.download_url;
+  const f = dlFile(m);
+  return m.repo ? "https://huggingface.co/" + m.repo + "/resolve/main/" + f : "";
+}
+
+function terminalCmd(m) {
+  if (!m) return "";
+  const f = dlFile(m);
+  const u = dlUrl(m);
+  return 'curl -L -C - -o "models/' + f + '" "' + u + '"';
+}
+
+function cliCmd(m) {
+  if (!m || !m.repo) return "";
+  return 'python3 utils/hf_radar.py --download "' + m.repo + '"';
+}
+
+function renderInstallTerminalBox(j) {
+  const box = $("#i-terminal-box");
+  if (!box) return;
+  const repo = (j && j.repo) || (activeModel ? activeModel.repo : "");
+  const file = (j && j.file) || (activeModel ? dlFile(activeModel) : "");
+  const url = (j && j.download_url) || (activeModel ? dlUrl(activeModel) : (repo && file ? "https://huggingface.co/" + repo + "/resolve/main/" + file : ""));
+  const curl = url && file ? 'curl -L -C - -o "models/' + file + '" "' + url + '"' : "";
+  const cli = repo ? 'python3 utils/hf_radar.py --download "' + repo + '"' : "";
+  if (!curl && !cli) { box.replaceChildren(); return; }
+  box.replaceChildren(
+    h("div", { class: "terminal-box-head" },
+      h("span", { class: "terminal-icon" }, ">_"),
+      h("span", { class: "terminal-title" }, "Live Terminal Monitoring & Direct Link")
+    ),
+    h("p", { class: "sub small" },
+      j && j.source === "terminal"
+        ? "This download was initiated in your terminal and is syncing progress live here in the web browser."
+        : "Download progress is streamed live to your terminal stdout/stderr. To resume or download via command line:"
+    ),
+    curl ? h("div", { class: "code-copy-row" },
+      h("span", { class: "inline-code" }, curl),
+      h("button", {
+        class: "btn small ghost",
+        onclick: (e) => copyText(curl, e.currentTarget, "Copied!")
+      }, "Copy curl")
+    ) : null,
+    cli ? h("div", { class: "code-copy-row", style: "margin-top:6px;" },
+      h("span", { class: "inline-code" }, cli),
+      h("button", {
+        class: "btn small ghost",
+        onclick: (e) => copyText(cli, e.currentTarget, "Copied!")
+      }, "Copy CLI")
+    ) : null
+  );
+}
+
+function renderErrorTerminalBox(j) {
+  const box = $("#e-terminal-box");
+  if (!box) return;
+  const curl = (j && j.curl_cmd) || (activeModel ? terminalCmd(activeModel) : "");
+  const cli = (j && j.cli_cmd) || (activeModel ? cliCmd(activeModel) : "");
+  if (!curl && !cli) { box.replaceChildren(); return; }
+  box.replaceChildren(
+    h("div", { class: "terminal-box-head", style: "color:var(--warn);" },
+      h("span", { class: "terminal-icon" }, ">_"),
+      h("span", { class: "terminal-title" }, "Resume Download via Terminal")
+    ),
+    h("p", { class: "sub small" },
+      "Browser connection interrupted? The download supports HTTP Range resume so no progress is lost. Run either in your terminal:"
+    ),
+    curl ? h("div", { class: "code-copy-row" },
+      h("span", { class: "inline-code" }, curl),
+      h("button", {
+        class: "btn small ghost",
+        onclick: (e) => copyText(curl, e.currentTarget, "Copied!")
+      }, "Copy curl")
+    ) : null,
+    cli ? h("div", { class: "code-copy-row", style: "margin-top:6px;" },
+      h("span", { class: "inline-code" }, cli),
+      h("button", {
+        class: "btn small ghost",
+        onclick: (e) => copyText(cli, e.currentTarget, "Copied!")
+      }, "Copy CLI")
+    ) : null
+  );
+}
+
 async function install(m) {
   lastId = m.id;
+  activeModel = m;
   let r;
   try { r = await api("/api/install", { id: m.id }); } catch (e) { return fail(UNREACHABLE); }
   if (r.error) return fail(r.error);
@@ -820,21 +1928,23 @@ function watch() {
       timer = setTimeout(tick, 500);
       return;
     }
-    const away = view === "v-tools" || view === "v-radar";
+    const away = view === "v-tools" || view === "v-radar" || view === "v-history";
     if (j.state === "downloading") {
       if (!away) show("v-install");
       $("#i-title").textContent = "Downloading " + j.title;
       $("#bar").classList.remove("busy");
       $("#bar-i").style.width = (j.total ? Math.min(100, (j.done * 100) / j.total) : 0) + "%";
-      $("#i-text").textContent = fmt(j.done) + " of " + fmt(j.total);
+      $("#i-text").textContent = fmt(j.done) + " of " + fmt(j.total) + (j.source === "terminal" ? " (Synced from terminal)" : "");
+      renderInstallTerminalBox(j);
     } else if (j.state === "testing") {
       if (!away) show("v-install");
       $("#i-title").textContent = "Testing speed…";
       $("#bar").classList.add("busy");
       $("#i-text").textContent = "About 10 seconds";
+      renderInstallTerminalBox(j);
     } else if (away) return;
     else if (j.state === "done") return done(j);
-    else if (j.state === "error") return fail(j.error);
+    else if (j.state === "error") return fail(j);
     else return;
     timer = setTimeout(tick, 500);
   };
@@ -850,7 +1960,12 @@ function done(j) {
   $("#cmd").textContent = S.serve_cmd;
   show("v-done");
 }
-function fail(msg) { $("#e-text").textContent = msg; show("v-error"); }
+function fail(msgOrJob) {
+  const msg = typeof msgOrJob === "string" ? msgOrJob : ((msgOrJob && msgOrJob.error) || "Download failed");
+  $("#e-text").textContent = msg;
+  renderErrorTerminalBox(typeof msgOrJob === "object" ? msgOrJob : null);
+  show("v-error");
+}
 
 // --- Installed Tools Screen ---
 const STATUS = { installed: "Installed", "data-only": "Only leftovers found", "not-found": "Not found" };
@@ -886,12 +2001,54 @@ $("#tools-back").onclick = async () => {
   if (jobLive && ["downloading", "testing", "done", "error"].includes(j.state)) { view = ""; watch(); } else renderUse();
 };
 
-// --- Hugging Face Model Radar ---
+// --- Hugging Face Model Radar (Steve Jobs Edition) ---
 let radarModels = [];
 let radarGpuOnly = false;
+let radarTab = "all";
+let radarArch = "all";
+let radarCluster = "all";
 let radarSortKey = "downloads";
 let radarSortAsc = false;
 let radarFilter = "";
+let radarExpanded = new Set();
+
+let historyData = null;
+let historyTab = "new";
+
+function authorAvatar(author) {
+  const initial = (author || "HF")[0].toUpperCase();
+  const gradients = [
+    "linear-gradient(135deg, #4f46e5, #7c3aed)",
+    "linear-gradient(135deg, #059669, #10b981)",
+    "linear-gradient(135deg, #d97706, #f59e0b)",
+    "linear-gradient(135deg, #2563eb, #38bdf8)",
+    "linear-gradient(135deg, #db2777, #f472b6)",
+    "linear-gradient(135deg, #7c2d12, #ea580c)",
+    "linear-gradient(135deg, #4338ca, #6366f1)",
+    "linear-gradient(135deg, #0f766e, #14b8a6)",
+  ];
+  let hash = 0;
+  for (let i = 0; i < (author || "").length; i++) hash = (hash * 31 + author.charCodeAt(i)) & 0xffffffff;
+  const grad = gradients[Math.abs(hash) % gradients.length];
+  return h("div", { class: "radar-avatar", style: "background: " + grad }, initial);
+}
+
+async function copyText(text, btn, feedback = "Copied!") {
+  const orig = btn.innerHTML;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    }
+  } catch (e) {}
+  btn.textContent = feedback;
+  setTimeout(() => { btn.innerHTML = orig; }, 1800);
+}
+
+function toggleDrawer(repo) {
+  if (radarExpanded.has(repo)) radarExpanded.delete(repo);
+  else radarExpanded.add(repo);
+  renderRadarList();
+}
 
 function updateSortButtons() {
   document.querySelectorAll(".sort-btn").forEach((b) => {
@@ -914,31 +2071,280 @@ function handleSort(key) {
   renderRadarList();
 }
 
+function updateRadarHorizon(updatedAt) {
+  const hwName = $("#radar-hw-name");
+  const hwSub = $("#radar-hw-sub");
+  const scanned = $("#radar-stat-scanned");
+  const gpuStat = $("#radar-stat-gpu");
+  const tpsStat = $("#radar-stat-tps");
+  const countAll = $("#count-all");
+  const countGpu = $("#count-gpu");
+  const updated = $("#radar-updated");
+
+  if (hwName) {
+    if (S.mode === "gpu" && S.gpu) {
+      hwName.textContent = S.gpu + (S.vram_gb ? " (" + S.vram_gb + " GB VRAM)" : "");
+      if (hwSub) hwSub.textContent = S.ram_gb + " GB System RAM · Dedicated GPU Acceleration";
+    } else {
+      hwName.textContent = (S.ram_gb || 16) + " GB Memory Architecture";
+      if (hwSub) hwSub.textContent = S.mode === "gpu" ? "Unified Memory Architecture · Zero-Copy GPU Bandwidth" : "Standard CPU Execution Environment";
+    }
+  }
+
+  const gpuCount = radarModels.filter((m) => m.fit_mode === "gpu").length;
+  const maxTps = Math.max(...radarModels.map((m) => m.tps || 0), 0);
+
+  if (scanned) scanned.textContent = radarModels.length;
+  if (gpuStat) gpuStat.textContent = gpuCount;
+  if (tpsStat) tpsStat.textContent = maxTps > 0 ? "~" + maxTps + " t/s" : "—";
+  if (countAll) countAll.textContent = radarModels.length;
+  if (countGpu) countGpu.textContent = gpuCount;
+
+  if (updated) {
+    if (updatedAt) {
+      updated.textContent = "Synced " + updatedAt.slice(0, 10);
+    } else {
+      updated.textContent = "";
+    }
+  }
+}
+
+function renderClusterBadges(clusters) {
+  if (!clusters || !clusters.length) return [];
+  const map = {
+    coding: { label: "Coding", icon: "💻", cls: "cluster-coding" },
+    agentic: { label: "Agentic", icon: "🤖", cls: "cluster-agentic" },
+    chat: { label: "Chat", icon: "💬", cls: "cluster-chat" },
+    reasoning: { label: "Reasoning", icon: "🧠", cls: "cluster-reasoning" },
+    creative: { label: "Creative", icon: "🎭", cls: "cluster-creative" },
+  };
+  return clusters.map((c) => {
+    const info = map[c] || { label: c, icon: "🏷️", cls: "cluster-gen" };
+    return h("button", {
+      class: "radar-cluster-badge " + info.cls,
+      title: "Filter by " + info.label + " cluster",
+      onclick: (e) => {
+        e.stopPropagation();
+        selectRadarCluster(c);
+      }
+    }, info.icon + " " + info.label);
+  });
+}
+
+function selectRadarCluster(c) {
+  radarCluster = c;
+  document.querySelectorAll("#radar-cluster-pills .cluster-pill").forEach((b) => {
+    b.classList.toggle("active", b.getAttribute("data-cluster") === c);
+  });
+  renderSpotlight();
+  renderRadarList();
+}
+
+function renderSpotlight() {
+  const container = $("#radar-spotlight");
+  if (!container) return;
+  if (radarTab !== "all" || radarArch !== "all" || radarCluster !== "all" || radarFilter.trim() || !radarModels.length) {
+    container.hidden = true;
+    return;
+  }
+  const hero = radarModels.find((m) => m.fit_mode === "gpu") || radarModels[0];
+  if (!hero) {
+    container.hidden = true;
+    return;
+  }
+  container.hidden = false;
+
+  const author = (hero.repo || "").split("/")[0] || "HF";
+  const repoName = (hero.repo || "").split("/")[1] || hero.repo || "";
+  const displayName = hero.name || repoName;
+  const totalMb = ((S.mode === "gpu" && S.vram_gb ? S.vram_gb : S.ram_gb) || 16) * 1024;
+  const sizeMb = hero.size_mb || Math.round((hero.size_bytes || 0) / 1048576);
+  const memPct = Math.min(Math.max(Math.round((sizeMb / totalMb) * 100), 2), 100);
+  const sizeGb = (sizeMb / 1024).toFixed(1);
+  const totalGb = Math.round(totalMb / 1024);
+  const tps = hero.tps || 0;
+
+  const isInstalled = S.installed && (
+    (typeof S.installed === "object" && (S.installed.repo === hero.repo || S.installed.name === hero.name)) ||
+    S.installed === hero.name || S.installed === hero.repo
+  );
+
+  const card = h("div", { class: "spotlight-card" },
+    h("div", { class: "spotlight-badge-row" },
+      h("span", { class: "spotlight-crown-badge" }, icon("sparkles", "chip-svg"), " KEYNOTE SPOTLIGHT · BEST HARDWARE MATCH"),
+      h("span", { class: "badge fit-gpu" }, "100% GPU OFFLOAD · ~" + tps + " tok/s")
+    ),
+    h("div", { class: "spotlight-body" },
+      h("div", { class: "spotlight-info" },
+        h("div", { class: "spotlight-author" }, "Curated by " + author),
+        h("h2", { class: "spotlight-title" }, displayName),
+        h("p", { class: "spotlight-desc" },
+          "Optimized open weights ready for instantaneous local execution on your silicon with zero disk thrashing."
+        ),
+        h("div", { class: "spotlight-meter-wrap" },
+          h("div", { class: "spotlight-meter-labels" },
+            h("span", {}, "Memory Footprint: ", h("b", {}, sizeGb + " GB of " + totalGb + " GB (" + memPct + "%)")),
+            h("span", { class: "speed" }, "⚡ ~" + tps + " tok/s (Real-Time)")
+          ),
+          h("div", { class: "meter-track" },
+            h("div", { class: "meter-fill fill-gpu", style: "width: " + memPct + "%" })
+          )
+        ),
+        h("div", { class: "chips-row" },
+          hero.params_b ? h("span", { class: "chip-meta highlight" }, hero.params_b + "B Params") : null,
+          hero.quant ? h("span", { class: "chip-meta" }, hero.quant) : null,
+          hero.moe ? h("span", { class: "chip-meta moe-badge" }, "MoE") : null,
+          hero.arch ? h("span", { class: "chip-meta" }, hero.arch) : null,
+          h("span", { class: "chip-meta" }, sizeGb + " GB"),
+          ...renderClusterBadges(hero.clusters),
+          hero.downloads != null ? h("span", { class: "chip-meta" }, icon("download", "chip-svg"), " " + (hero.downloads || 0).toLocaleString()) : null
+        )
+      ),
+      h("div", { class: "spotlight-cta" },
+        isInstalled
+          ? h("button", { class: "btn small installed", disabled: true }, icon("check", "chip-svg"), " Installed")
+          : (hero.id ? h("button", { class: "btn spotlight-install-btn", onclick: () => install(hero) }, "Install & Launch") : null),
+        h("button", {
+          class: "btn small ghost",
+          style: "margin-top:6px;width:100%;font-size:12px;",
+          onclick: (e) => copyText(terminalCmd(hero), e.currentTarget, "Copied curl!")
+        }, icon("terminal", "chip-svg"), " Copy curl")
+      )
+    )
+  );
+  container.replaceChildren(card);
+}
+
 function radarCard(m) {
   const author = (m.repo || "").split("/")[0] || "HF";
-  const authorInitial = author[0].toUpperCase();
-  const fitClass = m.fit_mode === "gpu" ? "fit-gpu" : m.fit_mode === "cpu" ? "fit-cpu" : "fit-tight";
-  const fitLabel = m.fit_mode.toUpperCase() + (m.tps ? " · ~" + m.tps + " t/s" : "");
+  const repoName = (m.repo || "").split("/")[1] || m.repo || "";
+  const displayName = m.name || repoName;
+  const fitMode = m.fit_mode || "cpu";
+  const fitClass = fitMode === "gpu" ? "fit-gpu" : fitMode === "cpu" ? "fit-cpu" : "fit-tight";
+  const fitText = fitMode === "gpu" ? "Full GPU" : fitMode === "cpu" ? "CPU Hybrid" : "Tight Fit";
+  const fitLabel = fitText + (m.tps ? " · ~" + m.tps + " t/s" : "");
 
-  const card = h("div", { class: "radar-card" },
-    h("div", { class: "radar-head" },
-      h("div", { class: "radar-avatar" }, authorInitial),
+  const totalMb = ((S.mode === "gpu" && S.vram_gb ? S.vram_gb : S.ram_gb) || 16) * 1024;
+  const sizeMb = m.size_mb || Math.round((m.size_bytes || 0) / 1048576);
+  const memPct = Math.min(Math.max(Math.round((sizeMb / totalMb) * 100), 2), 100);
+  const sizeGb = (sizeMb / 1024).toFixed(1);
+  const totalGb = Math.round(totalMb / 1024);
+
+  const tps = m.tps || 0;
+  const speedClass = tps >= 40 ? "speed-fast" : tps >= 15 ? "speed-med" : "speed-slow";
+
+  const isInstalled = S.installed && (
+    (typeof S.installed === "object" && (S.installed.repo === m.repo || S.installed.name === m.name)) ||
+    S.installed === m.name || S.installed === m.repo
+  );
+
+  const isExpanded = radarExpanded.has(m.repo);
+
+  const card = h("article", { class: "radar-card" + (isInstalled ? " is-installed" : "") },
+    h("header", { class: "radar-head" },
+      authorAvatar(author),
       h("div", { class: "radar-title-group" },
-        h("div", { class: "radar-repo" }, m.repo),
-        h("div", { class: "radar-subname" }, m.name || m.repo)
+        h("div", { class: "radar-repo" }, displayName),
+        h("div", { class: "radar-subname" }, m.repo)
       ),
       h("span", { class: "badge " + fitClass }, fitLabel)
     ),
-    h("div", { class: "chips-row" },
-      m.arch ? h("span", { class: "chip-meta" }, m.arch) : null,
-      m.params_b ? h("span", { class: "chip-meta highlight" }, m.params_b + "B") : null,
-      m.quant ? h("span", { class: "chip-meta" }, m.quant) : null,
-      m.size_mb ? h("span", { class: "chip-meta" }, (m.size_mb / 1024).toFixed(1) + " GB") : null,
-      h("span", { class: "chip-meta" }, icon("download", "chip-svg"), " " + (m.downloads || 0).toLocaleString())
+
+    h("div", { class: "card-meter" },
+      h("div", { class: "card-meter-labels" },
+        h("span", { class: "card-meter-title" },
+          "Memory Footprint: ",
+          h("b", {}, sizeGb + " GB of " + totalGb + " GB (" + memPct + "%)")
+        ),
+        h("span", { class: "card-meter-speed " + speedClass }, "⚡ ~" + tps + " tok/s")
+      ),
+      h("div", { class: "meter-track" },
+        h("div", {
+          class: "meter-fill fill-" + fitMode,
+          style: "width: " + memPct + "%"
+        })
+      )
     ),
-    h("div", { class: "radar-foot" },
-      h("span", { class: "radar-date" }, m.created_at ? "Added " + m.created_at : ""),
-      m.id ? h("button", { class: "btn small", onclick: () => install(m) }, "Install") : null
+
+    h("div", { class: "chips-row" },
+      m.params_b ? h("span", { class: "chip-meta highlight" }, m.params_b + "B Params") : null,
+      m.quant ? h("span", { class: "chip-meta" }, m.quant) : null,
+      m.moe ? h("span", { class: "chip-meta moe-badge" }, "MoE") : null,
+      m.arch ? h("span", { class: "chip-meta" }, m.arch) : null,
+      h("span", { class: "chip-meta" }, sizeGb + " GB"),
+      ...renderClusterBadges(m.clusters),
+      m.downloads != null ? h("span", { class: "chip-meta" }, icon("download", "chip-svg"), " " + (m.downloads || 0).toLocaleString()) : null,
+      m.likes != null ? h("span", { class: "chip-meta" }, icon("heart", "chip-svg"), " " + (m.likes || 0).toLocaleString()) : null,
+      m.created_at ? h("span", { class: "chip-meta" }, "Added " + m.created_at) : null
+    ),
+
+    isExpanded ? h("div", { class: "radar-drawer" },
+      h("dl", {},
+        h("dt", {}, "Architecture:"), h("dd", {}, m.arch || "Standard Transformer"),
+        h("dt", {}, "Quantization:"), h("dd", {}, (m.quant || "Standard") + " (" + (m.other_quants || 0) + " other quants on Hub)"),
+        h("dt", {}, "Context KV Cache:"), h("dd", {}, "Configured for 4,096 tokens"),
+        h("dt", {}, "Execution Mode:"), h("dd", {}, fitMode === "gpu" ? "100% Full GPU (Zero CPU bottleneck)" : fitMode === "cpu" ? "CPU Memory Bandwidth" : "Memory Tight"),
+        h("dt", {}, "Hugging Face ID:"), h("dd", {}, m.repo),
+        h("dt", {}, "Direct Link:"), h("dd", {},
+          h("div", { class: "code-copy-row" },
+            h("span", { class: "inline-code" }, dlUrl(m)),
+            h("button", {
+              class: "btn small ghost",
+              onclick: (e) => copyText(dlUrl(m), e.currentTarget, "Copied!")
+            }, "Copy URL")
+          )
+        ),
+        h("dt", {}, "Terminal (curl):"), h("dd", {},
+          h("div", { class: "code-copy-row" },
+            h("span", { class: "inline-code" }, terminalCmd(m)),
+            h("button", {
+              class: "btn small ghost",
+              onclick: (e) => copyText(terminalCmd(m), e.currentTarget, "Copied!")
+            }, "Copy curl")
+          )
+        ),
+        h("dt", {}, "Launchpad CLI:"), h("dd", {},
+          h("div", { class: "code-copy-row" },
+            h("span", { class: "inline-code" }, cliCmd(m)),
+            h("button", {
+              class: "btn small ghost",
+              onclick: (e) => copyText(cliCmd(m), e.currentTarget, "Copied!")
+            }, "Copy CLI")
+          )
+        )
+      )
+    ) : null,
+
+    h("footer", { class: "radar-foot" },
+      h("div", { class: "radar-foot-actions" },
+        h("button", {
+          class: "radar-icon-btn",
+          title: "Copy terminal curl download command",
+          onclick: (e) => copyText(terminalCmd(m), e.currentTarget, "Copied curl!")
+        }, icon("terminal", "chip-svg"), " Copy curl"),
+
+        h("button", {
+          class: "radar-icon-btn",
+          title: "Copy model repository ID",
+          onclick: (e) => copyText(m.repo, e.currentTarget, "Copied ID!")
+        }, icon("copy", "chip-svg"), " Copy ID"),
+
+        h("button", {
+          class: "radar-icon-btn",
+          title: "View technical specifications & terminal links",
+          onclick: () => toggleDrawer(m.repo)
+        }, icon(isExpanded ? "chevronUp" : "chevronDown", "chip-svg"), isExpanded ? " Less" : " Specs & CLI"),
+
+        h("button", {
+          class: "radar-icon-btn",
+          title: "Open on Hugging Face Hub",
+          onclick: () => window.open("https://huggingface.co/" + m.repo, "_blank", "noopener,noreferrer")
+        }, icon("external", "chip-svg"), " Hub")
+      ),
+
+      isInstalled
+        ? h("button", { class: "btn small installed", disabled: true }, icon("check", "chip-svg"), " Installed")
+        : (m.id ? h("button", { class: "btn small", onclick: () => install(m) }, "Install") : null)
     )
   );
   return card;
@@ -947,7 +2353,30 @@ function radarCard(m) {
 function renderRadarList() {
   const list = $("#radar-list");
   let ms = radarModels.slice();
-  if (radarGpuOnly) ms = ms.filter((m) => m.fit_mode === "gpu");
+
+  // Tab filter
+  if (radarTab === "gpu" || radarGpuOnly) {
+    ms = ms.filter((m) => m.fit_mode === "gpu");
+  } else if (radarTab === "fast") {
+    ms = ms.filter((m) => (m.tps || 0) >= 30);
+  }
+
+  // Family / arch filter
+  if (radarArch !== "all") {
+    if (radarArch === "moe") {
+      ms = ms.filter((m) => m.moe || /moe|8x|a3b|a2b/i.test(m.repo || "") || /moe|8x|a3b|a2b/i.test(m.name || ""));
+    } else {
+      const re = new RegExp(radarArch, "i");
+      ms = ms.filter((m) => re.test(m.repo || "") || re.test(m.name || "") || re.test(m.arch || ""));
+    }
+  }
+
+  // Cluster filter
+  if (radarCluster !== "all") {
+    ms = ms.filter((m) => (m.clusters || []).includes(radarCluster));
+  }
+
+  // Free text search
   if (radarFilter.trim()) {
     const q = radarFilter.trim().toLowerCase();
     ms = ms.filter((m) =>
@@ -957,6 +2386,8 @@ function renderRadarList() {
       (m.name || "").toLowerCase().includes(q)
     );
   }
+
+  // Sorting
   ms.sort((a, b) => {
     let va, vb;
     if (radarSortKey === "speed") {
@@ -973,30 +2404,125 @@ function renderRadarList() {
     if (va > vb) return radarSortAsc ? 1 : -1;
     return 0;
   });
+
+  if (radarTab === "new" && radarSortKey === "downloads") {
+    ms.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+  }
+
   if (!ms.length) {
-    list.replaceChildren(h("p", { class: "sub center" }, "No models found matching your criteria."));
+    const emptyBox = h("div", { class: "radar-empty" },
+      icon("radar", "radar-empty-icon"),
+      h("h3", {}, "No matching models found"),
+      h("p", {}, radarFilter.trim()
+        ? "No models matching \"" + radarFilter + "\". Try searching by architecture or clearing filters."
+        : "No models match the selected filter criteria."
+      ),
+      h("button", { class: "btn small ghost", onclick: resetRadarFilters }, "Reset All Filters")
+    );
+    list.replaceChildren(emptyBox);
     return;
   }
   list.replaceChildren(...ms.map(radarCard));
 }
 
-async function loadRadar() {
-  const list = $("#radar-list"); list.replaceChildren(h("div", { class: "spin" }));
+function resetRadarFilters() {
+  radarFilter = "";
+  radarTab = "all";
+  radarArch = "all";
+  radarCluster = "all";
+  radarGpuOnly = false;
+  if (searchInput) searchInput.value = "";
+  const clearBtn = $("#radar-search-clear");
+  if (clearBtn) clearBtn.hidden = true;
+  document.querySelectorAll("#radar-tabs .seg-btn").forEach((b) => {
+    b.classList.toggle("active", b.getAttribute("data-tab") === "all");
+  });
+  document.querySelectorAll("#radar-arch-pills .arch-pill").forEach((b) => {
+    b.classList.toggle("active", b.getAttribute("data-arch") === "all");
+  });
+  document.querySelectorAll("#radar-cluster-pills .cluster-pill").forEach((b) => {
+    b.classList.toggle("active", b.getAttribute("data-cluster") === "all");
+  });
+  renderSpotlight();
+  renderRadarList();
+}
+
+async function loadRadar(sync = false) {
+  const list = $("#radar-list");
+  const syncBtn = $("#radar-sync-btn");
+  if (sync && syncBtn) syncBtn.classList.add("syncing");
+
+  const scanner = h("div", { class: "radar-scanner-wrap" },
+    h("div", { class: "radar-dish" },
+      h("div", { class: "radar-dish-sweep" }),
+      icon("radar", "nav-svg")
+    ),
+    h("div", { class: "radar-scanner-title" }, sync ? "Synchronizing Hugging Face Radar..." : "Scanning Hugging Face Radar..."),
+    h("div", { class: "radar-scanner-sub" }, "Benchmarking open weights against your silicon memory bandwidth...")
+  );
+  list.replaceChildren(scanner);
+
   try {
-    const d = await api("/api/radar?gpu_only=" + (radarGpuOnly ? "1" : "0"));
+    const q = sync ? "1" : "0";
+    const d = await api("/api/radar?sync=" + q);
     if (d.error) throw new Error(d.error);
-    $("#radar-updated").textContent = d.updated_at ? "Updated " + d.updated_at.slice(0, 10) : "";
     radarModels = d.models || [];
+    updateRadarHorizon(d.updated_at);
+    renderSpotlight();
     renderRadarList();
-  } catch (e) { list.replaceChildren(h("p", { class: "warn" }, "Could not load radar: " + e.message)); }
+  } catch (e) {
+    list.replaceChildren(h("p", { class: "warn" }, "Could not load radar: " + e.message));
+  } finally {
+    if (syncBtn) syncBtn.classList.remove("syncing");
+  }
 }
 
 $("#radar-btn").onclick = () => { show("v-radar"); loadRadar(); };
 $("#radar-toggle-gpu").onclick = () => {
   radarGpuOnly = !radarGpuOnly;
-  $("#radar-toggle-gpu").classList.toggle("active", radarGpuOnly);
+  radarTab = radarGpuOnly ? "gpu" : "all";
+  document.querySelectorAll("#radar-tabs .seg-btn").forEach((b) => {
+    b.classList.toggle("active", b.getAttribute("data-tab") === radarTab);
+  });
+  renderSpotlight();
   renderRadarList();
 };
+
+const syncBtn = $("#radar-sync-btn");
+if (syncBtn) {
+  syncBtn.onclick = () => loadRadar(true);
+}
+
+document.querySelectorAll("#radar-tabs .seg-btn").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll("#radar-tabs .seg-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    radarTab = btn.getAttribute("data-tab") || "all";
+    radarGpuOnly = radarTab === "gpu";
+    renderSpotlight();
+    renderRadarList();
+  };
+});
+
+document.querySelectorAll("#radar-arch-pills .arch-pill").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll("#radar-arch-pills .arch-pill").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    radarArch = btn.getAttribute("data-arch") || "all";
+    renderSpotlight();
+    renderRadarList();
+  };
+});
+
+document.querySelectorAll("#radar-cluster-pills .cluster-pill").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll("#radar-cluster-pills .cluster-pill").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    radarCluster = btn.getAttribute("data-cluster") || "all";
+    renderSpotlight();
+    renderRadarList();
+  };
+});
 
 $("#sort-downloads").onclick = () => handleSort("downloads");
 $("#sort-speed").onclick = () => handleSort("speed");
@@ -1009,11 +2535,47 @@ $("#sort-dir").onclick = () => {
 };
 
 const searchInput = $("#radar-search");
+const searchClear = $("#radar-search-clear");
 if (searchInput) {
   searchInput.oninput = (e) => {
     radarFilter = e.target.value || "";
+    if (searchClear) searchClear.hidden = !radarFilter;
     renderRadarList();
+    renderSpotlight();
   };
+}
+if (searchClear) {
+  searchClear.onclick = () => {
+    if (searchInput) searchInput.value = "";
+    radarFilter = "";
+    searchClear.hidden = true;
+    renderRadarList();
+    renderSpotlight();
+    if (searchInput) searchInput.focus();
+  };
+}
+
+if (typeof window !== "undefined" && window.addEventListener) {
+  window.addEventListener("keydown", (e) => {
+    const radarView = $("#v-radar");
+    if (!radarView || radarView.hidden) return;
+    if ((e.key === "/" || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k"))) {
+      const active = document.activeElement;
+      if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
+      e.preventDefault();
+      if (searchInput) {
+        searchInput.focus();
+        searchInput.select();
+      }
+    } else if (e.key === "Escape" && document.activeElement === searchInput) {
+      if (searchInput) searchInput.value = "";
+      radarFilter = "";
+      if (searchClear) searchClear.hidden = true;
+      if (searchInput) searchInput.blur();
+      renderSpotlight();
+      renderRadarList();
+    }
+  });
 }
 
 $("#radar-back").onclick = async () => {
@@ -1021,6 +2583,199 @@ $("#radar-back").onclick = async () => {
   try { j = await api("/api/progress"); } catch (e) {}
   if (jobLive && ["downloading", "testing", "done", "error"].includes(j.state)) { view = ""; watch(); } else renderUse();
 };
+
+// --- History Page ("What Changed Since Last Sync") ---
+async function loadHistory(baseSnap = "") {
+  const content = $("#history-content");
+  if (!content) return;
+  content.replaceChildren(h("div", { class: "spin" }));
+  try {
+    const url = "/api/radar/history" + (baseSnap ? "?base=" + encodeURIComponent(baseSnap) : "");
+    const d = await api(url);
+    if (d.error) throw new Error(d.error);
+    historyData = d;
+    renderHistoryView(baseSnap);
+  } catch (e) {
+    content.replaceChildren(h("p", { class: "warn" }, "Could not load history: " + e.message));
+  }
+}
+
+function renderHistoryView(selectedBase = "") {
+  if (!historyData) return;
+  const d = historyData;
+  const sm = d.summary || {};
+
+  const currVal = $("#hist-curr-val");
+  const currSub = $("#hist-curr-sub");
+  const prevSub = $("#hist-prev-sub");
+  const baseSelect = $("#hist-base-select");
+
+  if (currVal) currVal.textContent = d.latest_sync ? d.latest_sync.replace("T", " ").slice(0, 19) + " UTC" : "Current";
+  if (currSub) currSub.textContent = (sm.total_current || 0) + " frontier models tracked";
+  if (prevSub) prevSub.textContent = d.previous_sync ? "Baseline from " + d.previous_sync.slice(0, 10) + " (" + (sm.total_previous || 0) + " models)" : "No prior baseline recorded";
+
+  if (baseSelect) {
+    const opts = [h("option", { value: "" }, "Previous Sync (Auto)")];
+    (d.snapshots || []).forEach((s) => {
+      const optProps = { value: s.date };
+      if (s.date === selectedBase) optProps.selected = "selected";
+      opts.push(h("option", optProps, s.date + " (" + (s.count || 0) + " models)"));
+    });
+    baseSelect.replaceChildren(...opts);
+    baseSelect.onchange = (e) => loadHistory(e.target.value);
+  }
+
+  const statNew = $("#hist-stat-new");
+  const statSurge = $("#hist-stat-surge");
+  const statGpu = $("#hist-stat-gpu");
+  const statDepart = $("#hist-stat-depart");
+
+  if (statNew) statNew.textContent = "+" + (sm.new_count || 0);
+  const topGain = (d.top_movers && d.top_movers[0] && d.top_movers[0].delta_downloads) || 0;
+  if (statSurge) statSurge.textContent = topGain > 0 ? "+" + (topGain >= 1000 ? (topGain / 1000).toFixed(1) + "k" : topGain) : "—";
+  if (statGpu) statGpu.textContent = sm.gpu_ready_new || 0;
+  if (statDepart) statDepart.textContent = sm.removed_count || 0;
+
+  const cNew = $("#hist-count-new");
+  const cMovers = $("#hist-count-movers");
+  const cDepart = $("#hist-count-depart");
+
+  if (cNew) cNew.textContent = (d.new_models || []).length;
+  if (cMovers) cMovers.textContent = (d.top_movers || []).length;
+  if (cDepart) cDepart.textContent = (d.removed_models || []).length;
+
+  renderHistoryTabContent();
+}
+
+function renderHistoryTabContent() {
+  const content = $("#history-content");
+  if (!content || !historyData) return;
+  const d = historyData;
+
+  if (historyTab === "new") {
+    const list = d.new_models || [];
+    if (!list.length) {
+      content.replaceChildren(h("div", { class: "history-empty" },
+        h("h3", {}, "No New Models in this Window"),
+        h("p", { class: "sub" }, "All models in the current scan were already present in the selected baseline snapshot.")
+      ));
+      return;
+    }
+    const cards = list.map((m) => {
+      const card = radarCard(m);
+      const head = card.querySelector(".radar-head");
+      if (head) {
+        head.prepend(h("div", { style: "width:100%;margin-bottom:8px" },
+          h("span", { class: "delta-new-badge" }, icon("sparkles", "chip-svg"), " NEW ON FRONTIER")
+        ));
+      }
+      return card;
+    });
+    content.replaceChildren(...cards);
+  } else if (historyTab === "movers") {
+    const list = d.top_movers || [];
+    if (!list.length) {
+      content.replaceChildren(h("div", { class: "history-empty" },
+        h("h3", {}, "No Velocity Movers Found"),
+        h("p", { class: "sub" }, "No models were tracked across both the baseline and current scan to measure download velocity.")
+      ));
+      return;
+    }
+    const cards = list.map((m) => {
+      const card = radarCard(m);
+      const head = card.querySelector(".radar-head");
+      if (head) {
+        const gain = m.delta_downloads || 0;
+        const gainStr = gain >= 0 ? "+" + gain.toLocaleString() : gain.toLocaleString();
+        head.prepend(h("div", { style: "width:100%;margin-bottom:8px;display:flex;gap:8px;align-items:center" },
+          h("span", { class: "delta-surge-badge" }, "📈 " + gainStr + " downloads"),
+          m.delta_likes ? h("span", { class: "chip-meta" }, "❤️ +" + m.delta_likes.toLocaleString() + " likes") : null
+        ));
+      }
+      return card;
+    });
+    content.replaceChildren(...cards);
+  } else if (historyTab === "depart") {
+    const list = d.removed_models || [];
+    if (!list.length) {
+      content.replaceChildren(h("div", { class: "history-empty" },
+        h("h3", {}, "Zero Departures"),
+        h("p", { class: "sub" }, "None of the models from the previous scan dropped below the trending radar horizon.")
+      ));
+      return;
+    }
+    const rows = list.map((m) => {
+      const author = (m.repo || "").split("/")[0] || "HF";
+      return h("div", { class: "history-snapshot-row" },
+        h("div", { style: "display:flex;align-items:center;gap:12px;" },
+          authorAvatar(author),
+          h("div", {},
+            h("div", { class: "radar-repo" }, m.name || m.repo),
+            h("div", { class: "radar-subname" }, m.repo + " · " + (m.quant || "GGUF") + " · " + ((m.downloads || 0).toLocaleString()) + " dl")
+          )
+        ),
+        h("div", { style: "display:flex;gap:8px;align-items:center;" },
+          h("span", { class: "badge fit-tight" }, "Cooled Off"),
+          h("button", {
+            class: "btn small ghost",
+            onclick: () => window.open("https://huggingface.co/" + m.repo, "_blank", "noopener,noreferrer")
+          }, icon("external", "chip-svg"), " View on Hub")
+        )
+      );
+    });
+    content.replaceChildren(...rows);
+  } else if (historyTab === "snapshots") {
+    const snaps = d.snapshots || [];
+    if (!snaps.length) {
+      content.replaceChildren(h("div", { class: "history-empty" },
+        h("h3", {}, "No Historical Snapshots"),
+        h("p", { class: "sub" }, "Run sync to archive daily snapshots in data/hf_history/snapshots/.")
+      ));
+      return;
+    }
+    const rows = snaps.map((s) => {
+      return h("div", { class: "history-snapshot-row" },
+        h("div", { class: "history-snap-meta" },
+          h("div", { class: "history-snap-date" }, "Snapshot " + s.date),
+          h("div", { class: "history-snap-sub" }, (s.count || 0) + " models recorded · " + (s.updated_at ? s.updated_at.slice(0, 19).replace("T", " ") + " UTC" : ""))
+        ),
+        h("button", {
+          class: "btn small ghost",
+          onclick: () => {
+            const sel = $("#hist-base-select");
+            if (sel) sel.value = s.date;
+            loadHistory(s.date);
+          }
+        }, "Compare with this")
+      );
+    });
+    content.replaceChildren(...rows);
+  }
+}
+
+document.querySelectorAll("#history-tabs .seg-btn").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll("#history-tabs .seg-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    historyTab = btn.getAttribute("data-tab") || "new";
+    renderHistoryTabContent();
+  };
+});
+
+const histNavBtn = $("#history-btn");
+if (histNavBtn) {
+  histNavBtn.onclick = () => { show("v-history"); loadHistory(); };
+}
+
+const openHistBtn = $("#radar-open-history-btn");
+if (openHistBtn) {
+  openHistBtn.onclick = () => { show("v-history"); loadHistory(); };
+}
+
+const histBackBtn = $("#history-back");
+if (histBackBtn) {
+  histBackBtn.onclick = () => { show("v-radar"); loadRadar(); };
+}
 
 $("#back").onclick = renderUse;
 $("#more-btn").onclick = () => more(false);
@@ -1042,6 +2797,7 @@ $("#copy").onclick = async () => {
   renderUse();
   if (location.hash === "#tools") $("#tools-btn").click();
   if (location.hash === "#radar") $("#radar-btn").click();
+  if (location.hash === "#history") $("#history-btn").click();
   let j = { state: "idle" };
   try { j = await api("/api/progress"); } catch (e) {}
   if (j.state === "downloading" || j.state === "testing") watch();

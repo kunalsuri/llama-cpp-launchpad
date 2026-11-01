@@ -1,0 +1,12 @@
+@echo off
+rem Thin wrapper: Model Radar & History for Windows.
+where py >nul 2>nul && ( py -3 "%~dp0..\..\utils\hf_radar.py" %* & goto :done )
+where python >nul 2>nul && ( python "%~dp0..\..\utils\hf_radar.py" %* & goto :done )
+echo hf-radar needs Python 3 (standard library only, nothing to pip install).
+echo Install it with:  winget install Python.Python.3.12   (or https://www.python.org/downloads/)
+exit /b 1
+:done
+set "rc=%errorlevel%"
+if not "%rc%"=="0" pause
+exit /b %rc%
+
