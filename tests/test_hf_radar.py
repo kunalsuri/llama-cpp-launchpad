@@ -308,28 +308,57 @@ class TestRadarMain(unittest.TestCase):
 
 
 class TestAppRadarApi(unittest.TestCase):
+    """Regression (rule 2): this used to read the real radar folder, the real hardware and, with no saved scan,
+    the real Hugging Face, so it passed only on a machine that had synced before. Now everything is pinned."""
+
+    def setUp(self):
+        import model_setup
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        env = mock.patch.dict("os.environ", {"LP_RADAR_DIR": str(self.tmp / "radar"),
+                                             "STATE_FILE": str(self.tmp / "state"), "MODELS_DIR": str(self.tmp / "m")})
+        env.start()
+        self.addCleanup(env.stop)
+        hw = hardware.Hw(ram_mb=16384, cores=8, gpu_kind="nvidia", gpu_name="Test GPU", vram_mb=8192, gpu_usable=True)
+        for target, value in ((model_setup, "detect_hw"), (hf_radar, "http_json")):
+            fake = (lambda: hw) if value == "detect_hw" else self.no_network
+            p = mock.patch.object(target, value, fake)
+            p.start()
+            self.addCleanup(p.stop)
+        old = [{"repo": "a/old-coder-GGUF", "name": "old-coder-Q4_K_M", "size_bytes": 2 << 30, "downloads": 10,
+                "fit_mode": "gpu", "tps": 40, "clusters": ["coding"]}]
+        new = old + [{"repo": "b/new-chat-GGUF", "name": "new-chat-Q4_K_M", "size_bytes": 3 << 30, "downloads": 5,
+                      "fit_mode": "cpu", "tps": 9, "clusters": ["chat"]}]
+        snaps = self.tmp / "radar" / "snapshots"
+        snaps.mkdir(parents=True)
+        for day, models in (("2026-10-31", old), ("2026-11-01", new)):
+            (snaps / f"{day}.json").write_text(json.dumps({"updated_at": day + "T08:00:00Z", "models": models}))
+        (self.tmp / "radar" / "latest.json").write_text(json.dumps({"updated_at": "2026-11-01T08:00:00Z", "models": new}))
+
+    def no_network(self, url, timeout=25):
+        raise AssertionError("tried to reach the network: " + url)
+
     def test_app_radar_clusters_and_history(self):
         import model_setup
         import ui_server
 
         app = ui_server.App(model_setup)
         data = app.radar()
-        self.assertIn("models", data)
-        self.assertIn("updated_at", data)
-        if data["models"]:
-            self.assertIn("clusters", data["models"][0])
-            self.assertIn("file", data["models"][0])
-            self.assertIn("download_url", data["models"][0])
+        self.assertEqual(data["updated_at"], "2026-11-01T08:00:00Z")
+        self.assertEqual(len(data["models"]), 2)
+        for m in data["models"]:
+            self.assertIn("clusters", m)
+            self.assertIn("file", m)
+            self.assertIn("download_url", m)
 
         coding_data = app.radar(cluster="coding")
-        for m in coding_data["models"]:
-            self.assertIn("coding", m["clusters"])
+        self.assertEqual([m["repo"] for m in coding_data["models"]], ["a/old-coder-GGUF"])
 
         hist = app.radar_history()
         self.assertIn("summary", hist)
-        self.assertIn("new_models", hist)
+        self.assertEqual([m["repo"] for m in hist["new_models"]], ["b/new-chat-GGUF"])
         self.assertIn("snapshots", hist)
-        self.assertGreater(len(app.offered), 0)
+        self.assertEqual(len(app.offered), 2)
 
         # Verify offered entries have exact file and download_url
         for mid, offer in app.offered.items():
@@ -342,7 +371,7 @@ class TestAppRadarApi(unittest.TestCase):
         import model_setup
         import ui_server
 
-        app = ui_server.App(model_setup)
+        app = ui_server.App(model_setup)        # setUp pins the hardware and the state file
         # Mock active terminal download in model_setup state
         state_vals = {
             "dl_active": "1",
