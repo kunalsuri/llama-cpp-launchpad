@@ -39,3 +39,7 @@ __pycache__/
 .hardware.env
 .pytest_cache/
 .coverage
+
+# Developer tools for the real-browser test (package.json)
+node_modules/
+test-results/

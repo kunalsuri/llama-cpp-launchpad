@@ -33,9 +33,18 @@ reason, and CI runs on all three OSes. `test_source_audit.py` guards what the co
 
 - `fakes.py`: `FakeProbe`, a whole fake computer (virtual files, PATH, program output, record of programs run) so
   Windows, macOS and Linux paths are tested on any host and nothing real is executed.
-- `page_harness.js`: runs the setup page's real script under Node with a fake DOM, fetch and timers, so page behaviour
-  (screens, polling, Back) is tested without a browser. Skipped, with a reason, if Node is not installed.
+- `page_harness.js`: runs the setup page's real script under Node with a fake DOM, fetch, timers, clipboard and URL
+  history, so page behaviour (screens, polling, Back/Forward, focus) is tested without a browser. The fake DOM follows
+  the real one where it matters (`append(null)` shows "null"). Skipped, with a reason, if Node is not installed.
+- `browser_check.js` (driven by `test_browser.py`): the real page and real server in Chromium via Playwright, at
+  360 / 768 / 1280 px in light and dark. Fails on sideways scrolling, script errors, "null"/"undefined" on screen,
+  buttons without a name, tap targets under 32 px on phones; walks choose -> download -> copy, and browser history.
+  Needs `npm ci && npx playwright install chromium`; skipped with that reason otherwise. CI runs it on all three OSes
+  with `LP_REQUIRE_BROWSER=1`, where a missing browser fails instead of skipping.
+- `run.py` (and `conftest.py` for pytest) point `STATE_FILE`, `MODELS_DIR` and `LP_RADAR_DIR` at a temp dir for the
+  whole run, so no test can overwrite your own setup in the checkout.
 - `fixtures/`: canned Hugging Face responses, a `/proc/meminfo`, benchmark output.
 - Tests that start the real server use a random localhost port; none needs network, GPU or llama.cpp.
 
-CI (`.github/workflows/ci.yml`) runs the suite 3x on {ubuntu, macos, windows} x {Python 3.10, 3.13}, plus coverage.
+CI (`.github/workflows/ci.yml`) runs the suite 3x on {ubuntu, macos, windows} x {Python 3.10, 3.13}, plus coverage,
+the four `--as` personas, and the real-browser check on all three OSes.

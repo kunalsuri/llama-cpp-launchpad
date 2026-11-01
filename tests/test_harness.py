@@ -62,7 +62,7 @@ class TestEveryModuleHasTests(unittest.TestCase):
                     ok = isinstance(reason, ast.Constant) and isinstance(reason.value, str) and len(reason.value) >= 8
                     self.assertTrue(ok, f"{path.name}:{node.lineno} a skip needs a written reason")
                     skips.append((path.name, node.lineno))
-        self.assertLessEqual(len(skips), 3, skips)       # node missing, POSIX permission bits, no git checkout
+        self.assertLessEqual(len(skips), 4, skips)       # node missing, POSIX bits, no git checkout, no playwright
 
 
 class TestLaunchers(unittest.TestCase):

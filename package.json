@@ -1,0 +1,14 @@
+{
+  "name": "llama-cpp-launchpad-dev",
+  "private": true,
+  "description": "Developer tools only. The app itself needs nothing but Python 3: this installs the real-browser test (tests/browser_check.js).",
+  "license": "MIT",
+  "scripts": {
+    "browsers": "playwright install chromium",
+    "test:browser": "python tests/run.py -k TestBrowser",
+    "test:page": "node tests/page_harness.js ui/setup/index.html"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

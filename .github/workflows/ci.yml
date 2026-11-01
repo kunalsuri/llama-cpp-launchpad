@@ -34,6 +34,33 @@ jobs:
       - name: Coverage of utils/ (line + branch)
         run: python tests/run.py --quiet --cov --min 85
 
+  # The setup page in a real browser (tests/test_browser.py -> tests/browser_check.js): layout at phone, tablet and
+  # desktop widths, light and dark, script errors, the clipboard and browser history. On every OS, because each one
+  # draws the page with its own fonts and scrollbars. Everywhere else this test is skipped with a reason.
+  browser:
+    name: browser / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Real-browser check (must run, not skip)
+        run: python tests/run.py --failfast -k TestBrowser -k TestPageScript
+        env:
+          LP_REQUIRE_BROWSER: "1"
+
   # Runs the suite while pretending to be another machine (tests/run.py --as NAME). Catches tests that quietly
   # depend on the machine they run on. Real macOS and Windows are covered by the matrix above.
   personas:
