@@ -30,6 +30,11 @@ def _size(path: Path) -> int:
         return 0
 
 
+def file_size(path) -> int:
+    """Size of a file in bytes, 0 when it cannot be read."""
+    return _size(Path(path))
+
+
 def _mtime(path: Path) -> float:
     try:
         return path.stat().st_mtime
@@ -77,6 +82,17 @@ def scan(models_dir) -> list:
         extra += [f + ".part" for f in e["files"] if f + ".part" in have and e["kind"] != "partial"]
         e["files"] = e["files"] + extra
     return sorted(out, key=lambda e: (-e["size"], e["id"]))
+
+
+def projector_for(models_dir, model_id: str) -> str:
+    """The vision projector downloaded from the same Hugging Face repo as this model -> its file name, or "".
+    Pairing is by the .source record both files carry; a file dropped in by hand has none, so it is never guessed."""
+    d = Path(models_dir)
+    repo = _source(d / model_id) if model_id and model_id == Path(model_id).name else ""
+    if not repo:
+        return ""
+    return next((e["id"] for e in sorted(scan(d), key=lambda e: e["id"])
+                 if e["kind"] == "projector" and e["repo"] == repo), "")
 
 
 def _inside(models_dir: Path, name: str) -> bool:

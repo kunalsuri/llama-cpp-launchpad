@@ -457,6 +457,7 @@
       <div id="speed-notes" hidden></div>
       <div class="next" id="done-next"></div>
       <div class="next chat" id="chat-box" aria-live="polite"></div>
+      <div class="next" id="vision-box" aria-live="polite" hidden></div>
       <p class="center" style="margin:24px 0 0"><button class="link" id="again">Get another model</button></p>
     </div>
   </section>
@@ -975,6 +976,7 @@ async function done(j) {
     if (chatModel) try { d = await api("/api/chat?id=" + encodeURIComponent(chatModel)); } catch (e) {}
     renderChatStart(next, d && d.preview);
     if (d && d.chat && ["starting", "running"].includes(d.chat.state)) { renderChat(d.chat); pollChat(); }
+    if (d && d.preview && !d.preview.missing) loadVision();
   }
   show("v-done");
   say(text);
@@ -995,6 +997,54 @@ function lookedDetails(b) {
   if (!b.looked || !b.looked.length) return null;
   return h("details", { class: "terminal" }, h("summary", {}, icon("info"), "Where it looked"),
     h("ul", { class: "looked" }, b.looked.map((l) => h("li", {}, l))));
+}
+
+// --- Image support: the model's vision projector (mmproj), offered when its repository has one -----------------
+let visionTimer = null, visionGen = 0;
+function renderVision(v) {
+  const box = $("#vision-box");
+  const job = v.job || {};
+  let kids = [];
+  if (job.state === "downloading") {
+    const pct = job.total ? Math.floor((job.done * 100) / job.total) : 0;
+    kids = [h("p", {}, h("b", {}, "Downloading image support… "), pct + "% of " + fmt(job.total)),
+      h("div", { class: "progress" }, h("i", { style: "width:" + pct + "%" }))];
+  } else if (v.have && v.flag) {
+    kids = [h("p", {}, h("b", {}, "Image support is on. "), "The chat can read pictures you attach (" + v.file + ")."),
+      h("p", { class: "muted" }, "If a chat is running, stop it and start it again to load image support.")];
+  } else if (v.have) {
+    kids = [h("p", { class: "note" }, v.why)];
+  } else if (v.available) {
+    kids = [h("p", {}, h("b", {}, "This model can also read images. "), "It needs one more file from the same repository."),
+      job.state === "error" ? h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, job.error)) : null,
+      h("div", { class: "actions" }, h("button", { class: "btn small ghost", onclick: getVision }, icon("download"),
+        "Add image support (" + fmt(v.available.size) + ")"))];
+  } else if (job.state === "error") {
+    kids = [h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, job.error))];
+  }
+  box.hidden = !kids.length;
+  box.replaceChildren(...kids.filter(Boolean));
+}
+async function loadVision(wasDownloading) {
+  clearTimeout(visionTimer);
+  const g = ++visionGen;
+  let v = null;
+  try { v = await api("/api/vision?id=" + encodeURIComponent(chatModel)); } catch (e) {}
+  if (g !== visionGen || view !== "v-done" || !v || v.error) return;
+  renderVision(v);
+  const state = (v.job || {}).state;
+  if (state === "downloading") visionTimer = setTimeout(() => loadVision(true), 1000);
+  else if (wasDownloading && state === "done") {        // the command now loads the projector: show it
+    let d = null;
+    try { d = await api("/api/chat?id=" + encodeURIComponent(chatModel) + (chatPreset ? "&preset=" + chatPreset : "") + (chatCtx ? "&ctx=" + chatCtx : "")); } catch (e) {}
+    if (d && d.preview && !(S.chat && ["starting", "running"].includes(S.chat.state))) renderChatStart($("#done-next"), d.preview);
+  }
+}
+async function getVision() {
+  let r;
+  try { r = await api("/api/vision/get", { id: chatModel }); } catch (e) { r = { error: UNREACHABLE }; }
+  if (r.error) { say(r.error); renderVision({ available: null, job: { state: "error", error: r.error } }); return; }
+  loadVision(true);
 }
 
 // A slow speed test: the reasons model_setup.diagnose_speed found on this computer, each with what to do.

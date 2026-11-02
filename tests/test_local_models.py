@@ -67,6 +67,23 @@ class TestScan(Base):
         self.assertEqual(lm.scan(self.tmp / "nope"), [])
 
 
+class TestProjector(Base):
+    """A vision model's projector (mmproj) is paired with its model by the repo both were downloaded from."""
+
+    def test_the_projector_from_the_same_repo(self):
+        self.put("gemma-3-4b-it-Q4_K_M.gguf", source="ggml-org/gemma-3-4b-it-GGUF")
+        self.put("mmproj-model-f16.gguf", source="ggml-org/gemma-3-4b-it-GGUF")
+        self.put("o--Other-GGUF--mmproj-model-f16.gguf", source="o/Other-GGUF")
+        self.assertEqual(lm.projector_for(self.dir, "gemma-3-4b-it-Q4_K_M.gguf"), "mmproj-model-f16.gguf")
+
+    def test_no_pairing_without_a_record_of_where_the_model_came_from(self):
+        self.put("dropped-in.gguf")
+        self.put("mmproj-model-f16.gguf")
+        self.assertEqual(lm.projector_for(self.dir, "dropped-in.gguf"), "")
+        self.put("m.gguf", source="o/M-GGUF")
+        self.assertEqual(lm.projector_for(self.dir, "m.gguf"), "", "a projector from another repo is not used")
+
+
 class TestDelete(Base):
     def test_deletes_the_model_and_its_record(self):
         self.put("a.gguf", source="o/A-GGUF")

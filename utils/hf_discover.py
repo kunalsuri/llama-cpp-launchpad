@@ -110,6 +110,23 @@ def group_files(siblings, min_bytes: int = MIN_MODEL_BYTES) -> list:
     return sorted((g for g in groups if g["size"] >= min_bytes), key=lambda g: g["size"])
 
 
+PROJECTOR_ORDER = ("f16", "bf16", "q8_0", "f32")       # projector precision, best first (f32: twice the size of f16)
+
+
+def projector_for(siblings):
+    """A vision model's projector (mmproj) file in a repo -> (path, size) or None. llama.cpp loads it next to the
+    model (--mmproj). The highest-precision one that is not wastefully large is picked."""
+    found = [(s.get("rfilename", ""), int(s.get("size") or 0)) for s in siblings or []
+             if isinstance(s, dict) and s.get("rfilename", "").lower().endswith(".gguf")
+             and "mmproj" in s.get("rfilename", "").lower()]
+
+    def rank(item):
+        name = item[0].lower()
+        return next((i for i, p in enumerate(PROJECTOR_ORDER) if re.search(rf"(?<![a-z0-9]){p}(?![a-z0-9])", name)),
+                    len(PROJECTOR_ORDER)), name
+    return min(found, key=rank) if found else None
+
+
 # --- Memory and speed ---------------------------------------------------------------------------------
 def kv_cache_mb(params_b: float, ctx: int, train_ctx: int = 0) -> int:
     """Rough size of the context cache (f16) in MB. The Hub does not list layer or head counts, so this is

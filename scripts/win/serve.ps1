@@ -80,7 +80,7 @@ if ($Py -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirect
 # A split model (name-00001-of-00003.gguf ...) is one model: list its first part once, sized as the whole set,
 # and leave out the other parts and any set that is missing a part (llama-server must start from part 1).
 $allGguf = @(Get-ChildItem -Path $ModelsDir -Filter '*.gguf' -File -ErrorAction SilentlyContinue |
-             Where-Object { $_.Name -notlike 'mmproj*' } | Sort-Object Name)
+             Where-Object { $_.Name -notlike '*mmproj*' } | Sort-Object Name)   # projectors, also repo-prefixed ones
 $models = @()
 foreach ($f in $allGguf) {
     if ($f.Name -match '^(?<stem>.+)-(?<n>\d{5})-of-(?<total>\d{5})\.gguf$') {
@@ -250,6 +250,30 @@ if ($UiMode -ne 'default') {      # translation, tasks: a page of this project, 
         $serverArgs += @('--path', $uiDir)
     } else {
         Write-Host "$($uiNames[$uiIdx]) UI not found at $uiDir, using the default." -ForegroundColor Red
+    }
+}
+# Image support: the projector downloaded from the same repo as the model (both carry a .source record), passed
+# only when this llama-server lists --mmproj in its --help (an old build would refuse to start).
+$sourceFile = "$($model.FullName).source"
+if (Test-Path -LiteralPath $sourceFile) {
+    $repo = (Get-Content -LiteralPath $sourceFile -Raw).Trim()
+    $proj = Get-ChildItem -Path $ModelsDir -Filter '*.gguf' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like '*mmproj*' } | Sort-Object Name |
+        Where-Object { (Test-Path -LiteralPath "$($_.FullName).source") -and
+                       ((Get-Content -LiteralPath "$($_.FullName).source" -Raw).Trim() -eq $repo) } |
+        Select-Object -First 1
+    if ($proj) {
+        # Windows PowerShell 5.1 turns a program's stderr lines (llama.cpp's backend log) into errors, and 'Stop'
+        # would end the script: read --help with errors allowed.
+        $savedPref = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try { $helpText = (& $Server --help 2>&1 | Out-String) } catch { $helpText = '' }
+        finally { $ErrorActionPreference = $savedPref }
+        if ($helpText -match '--mmproj') {
+            $serverArgs += @('--mmproj', $proj.FullName)
+            Write-Host "  Image support $($proj.Name)" -ForegroundColor DarkGray
+        } else {
+            Write-Host '  Image support file found, but this llama-server has no --mmproj: not loaded' -ForegroundColor DarkGray
+        }
     }
 }
 if ($ExtraArgs) { $serverArgs += @($ExtraArgs -split '\s+' | Where-Object { $_ }) }

@@ -75,7 +75,8 @@ shard_re='^(.*)-([0-9]{5})-of-([0-9]{5})\.gguf$'
 for f in "$MODELS_DIR"/*.gguf; do
   [ -f "$f" ] || continue
   base="$(basename "$f")"
-  case "$base" in mmproj*) continue ;; esac
+  # vision projectors (mmproj), also when saved under a repo-prefixed name: loaded with a model, not models
+  case "$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')" in *mmproj*) continue ;; esac
   parts=("$f")
   if [[ $base =~ $shard_re ]]; then
     stem="${BASH_REMATCH[1]}"; n=$((10#${BASH_REMATCH[2]})); total=$((10#${BASH_REMATCH[3]}))
@@ -214,5 +215,23 @@ if [ "$UI_MODE" != "default" ]; then             # translation, tasks: a page of
   fi
 fi
 
+# --- Image support: the projector downloaded from the same repo as the model (both carry a .source record) ----
+# Passed only when this llama-server lists --mmproj in its --help (an old build would refuse to start).
+mmproj_args=()
+if [ -f "$MODELS_DIR/$name.source" ]; then
+  repo="$(cat "$MODELS_DIR/$name.source")"
+  for f in "$MODELS_DIR"/*.gguf; do
+    case "$(basename "$f" | tr '[:upper:]' '[:lower:]')" in *mmproj*) ;; *) continue ;; esac
+    [ -f "$f.source" ] && [ "$(cat "$f.source")" = "$repo" ] || continue
+    if "$LLAMA_SERVER" --help 2>&1 | grep -q -- '--mmproj'; then
+      mmproj_args=(--mmproj "$f")
+      echo "  ${D}Image support${R} $(basename "$f")"
+    else
+      echo "  ${D}Image support file found, but this llama-server has no --mmproj: not loaded${R}"
+    fi
+    break
+  done
+fi
+
 # shellcheck disable=SC2086
-exec "$LLAMA_SERVER" -m "$MODELS_DIR/$name" --port "$PORT" ${ui_args[@]+"${ui_args[@]}"} $EXTRA_ARGS
+exec "$LLAMA_SERVER" -m "$MODELS_DIR/$name" --port "$PORT" ${ui_args[@]+"${ui_args[@]}"} ${mmproj_args[@]+"${mmproj_args[@]}"} $EXTRA_ARGS

@@ -852,6 +852,80 @@ class TestChatApi(UiBase):
         self.assertEqual(status, 409)
         self.assertIn("--ctx-size", body["error"])
 
+    # --- image support: the model's vision projector (mmproj) ---
+    def hub_with_projector(self, projector=("mmproj-model-f16.gguf", 7)):
+        sibs = [{"rfilename": f, "size": s} for f, s in self.app.offered[self.top["id"]]["files"]]
+        if projector:
+            sibs.append({"rfilename": projector[0], "size": projector[1]})
+        seen = []
+
+        def http_json(url):
+            seen.append(url)
+            return {"siblings": sibs} if "/api/models/" in url else None
+        p = unittest.mock.patch.object(ms, "http_json", http_json)
+        p.start()
+        self.addCleanup(p.stop)
+        return seen
+
+    def vision(self):
+        return self.get_json("/api/vision?id=" + urllib.parse.quote(self.top["id"]))
+
+    def get_vision(self):
+        status, body = self.post("/api/vision/get", {"id": self.top["id"]})
+        self.assertEqual(status, 202, body)
+        for _ in range(100):
+            v = self.vision()
+            if v["job"].get("state") in ("done", "error"):
+                return v
+            time.sleep(0.05)
+        self.fail(self.vision())
+
+    def test_image_support_is_offered_when_the_repo_has_a_projector(self):
+        self.download()
+        seen = self.hub_with_projector()
+        v = self.vision()
+        self.assertEqual((v["have"], v["flag"]), (False, True))
+        self.assertEqual(v["available"], {"file": "mmproj-model-f16.gguf", "size": 7})
+        self.vision()
+        self.assertEqual(len(seen), 1, "the Hub is asked once per repo")
+
+    def test_getting_image_support_downloads_it_and_the_chat_loads_it(self):
+        self.download()
+        self.hub_with_projector()
+        v = self.get_vision()
+        self.assertEqual((v["job"]["state"], v["have"]), ("done", True), v)
+        proj = ms.models_dir() / v["file"]
+        self.assertTrue(proj.is_file())
+        self.assertEqual(ms.source_file(proj).read_text(encoding="utf-8"), self.app.offered[self.top["id"]]["repo"])
+        p = self.preview()
+        self.assertIn(f"--mmproj {proj}", p["cmd"])
+        self.assertTrue(all(f"--mmproj {proj}" in x["cmd"] for x in p["presets"] if x["available"]))
+
+    def test_a_projector_this_llama_server_cannot_load_is_not_passed(self):
+        self.download()
+        self.hub_with_projector()
+        self.get_vision()
+        self.app.chat.help = lambda argv: "-m,    --model FNAME      model path\n"
+        self.app.chat._flags.clear()
+        v = self.vision()
+        self.assertEqual((v["have"], v["flag"]), (True, False))
+        self.assertIn("--mmproj", v["why"])
+        self.assertNotIn("--mmproj", self.preview()["cmd"])
+
+    def test_a_model_without_a_projector_says_it_does_not_read_images(self):
+        self.download()
+        self.hub_with_projector(None)
+        v = self.vision()
+        self.assertIsNone(v["available"])
+        self.assertIn("does not read images", v["why"])
+        self.assertEqual(self.post("/api/vision/get", {"id": self.top["id"]})[0], 409)
+
+    def test_getting_image_support_needs_the_token_and_an_offered_model(self):
+        self.download()
+        self.hub_with_projector()
+        self.assertEqual(self.post("/api/vision/get", {"id": self.top["id"]}, token=False)[0], 403)
+        self.assertEqual(self.post("/api/vision/get", {"id": "evil/x|y.gguf"})[0], 404)
+
     def test_who_uses_the_port_is_asked_of_the_pinned_machine_not_the_host(self):
         """Rule 2: the lookup programs come from the (fake) probe, and the OS rules from its system."""
         self.download()

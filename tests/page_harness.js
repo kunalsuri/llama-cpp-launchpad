@@ -684,6 +684,50 @@ const scenarios = {
     if (sel.join() !== "gpu") return "aria-selected on: " + sel.join();
   },
 
+  // --- Image support (a vision projector) on the done screen --------------------------------------------------
+  async "image support is offered, downloads with progress, then the chat command loads it"() {
+    const posts = [];
+    let vis = { have: false, flag: true, file: "", available: { file: "mmproj-model-f16.gguf", size: 851443712 }, why: "", job: { state: "idle" } };
+    const base = chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW });
+    const chatCalls = [];
+    const p = makePage({ routes: (path, opts, full) => {
+      if (path === "/api/vision") return vis;
+      if (path === "/api/vision/get") {
+        posts.push(JSON.parse(opts.body));
+        vis = { ...vis, job: { state: "downloading", done: 425721856, total: 851443712 } };
+        return { ok: true };
+      }
+      if (path === "/api/chat" && full.includes("id=")) chatCalls.push(full);
+      return base(path, opts, full);
+    } });
+    await p.start();
+    await p.advance(1000);
+    const btn = p.button("vision-box", "Add image support");
+    if (!btn) return "no button to add image support: " + p.text("vision-box");
+    if (!p.text("vision-box").includes("812 MB")) return "the download size is not shown: " + p.text("vision-box");
+    btn.click(); await p.settle();
+    if (posts.length !== 1 || posts[0].id !== "o/M-GGUF|m.gguf") return "the request was not sent: " + JSON.stringify(posts);
+    await p.advance(1100);
+    if (!p.text("vision-box").includes("50%")) return "no progress: " + p.text("vision-box");
+    const before = chatCalls.length;
+    vis = { ...vis, have: true, file: "mmproj-model-f16.gguf", available: null, job: { state: "done", file: "mmproj-model-f16.gguf" } };
+    await p.advance(1100);
+    if (!/Image support is on/.test(p.text("vision-box"))) return "not shown as on: " + p.text("vision-box");
+    if (chatCalls.length === before) return "the chat command was not asked for again (it must now include --mmproj)";
+    const n = chatCalls.length;
+    await p.advance(5000);
+    if (chatCalls.length !== n) return "kept polling after the download finished";
+  },
+
+  async "a model that does not read images shows no image box"() {
+    const vis = { have: false, flag: true, file: "", available: null, why: "This model does not read images.", job: { state: "idle" } };
+    const base = chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW });
+    const p = makePage({ routes: (path, opts, full) => (path === "/api/vision" ? vis : base(path, opts, full)) });
+    await p.start();
+    await p.advance(1000);
+    if (!p.el("vision-box").hidden) return "a box is shown for a text-only model: " + p.text("vision-box");
+  },
+
   // --- My models: the models folder, and deleting with a second click -------------------------------------------
   async "My models lists the folder and deletes only after a second, explicit click"() {
     const posts = [];

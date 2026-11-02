@@ -535,6 +535,15 @@ def published_sha256(repo: str, file: str) -> str:
     return ""
 
 
+def find_projector(repo: str):
+    """A vision model's projector file in its Hugging Face repo -> ((file, size), "") or (None, why not)."""
+    data = http_json(f"{HF_API}/models/{repo}?blobs=true")
+    if not isinstance(data, dict):
+        return None, "Could not reach Hugging Face to check whether this model can read images."
+    found = hf_discover.projector_for(data.get("siblings"))
+    return (found, "") if found else (None, "This model does not read images (its repository has no mmproj file).")
+
+
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:

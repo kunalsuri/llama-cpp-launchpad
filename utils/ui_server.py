@@ -292,10 +292,14 @@ class App:
         """Every preset for this model: its flags (or why it cannot run here), exact command and memory."""
         flags, d = self.chat.help_flags(), self._describe(path)
         train = d["shape"]["train_ctx"] if "shape" in d else 0
+        vision = self._projector_args(path)
+        if "shape" in d and vision:                         # the projector is loaded too: count it
+            d = dict(d, weights_bytes=d["weights_bytes"] + local_models.file_size(vision[1]))
         out = []
         for pid in chat_server.PRESET_ORDER:
             p = chat_server.PRESETS[pid]
             args, why = chat_server.settings_args(pid, flags, ctx, self._gpu(), train)
+            args = args + vision if not why else args
             row = {"id": pid, "label": p["label"], "text": p["text"], "available": not why, "why": why,
                    "args": args, "memory": None, "memory_error": d.get("error", "")}
             if not why:
@@ -306,13 +310,76 @@ class App:
         return out
 
     def _settings_for(self, path: Path, preset, ctx) -> tuple:
-        """-> (preset id, llama-server arguments, "") or (preset id, [], why not)."""
+        """-> (preset id, llama-server arguments, "") or (preset id, [], why not). A vision projector downloaded for
+        this model is passed with --mmproj when this llama-server lists that flag."""
         flags = self.chat.help_flags()
         preset = preset or chat_server.default_preset(flags)
         d = self._describe(path)
         args, why = chat_server.settings_args(preset, flags, ctx, self._gpu(),
                                               d["shape"]["train_ctx"] if "shape" in d else 0)
-        return preset, args, why
+        return preset, (args + self._projector_args(path) if not why else args), why
+
+    # --- image support: the model's vision projector (mmproj) -------------------------------------------------
+    def _projector(self, path: Path):
+        name = local_models.projector_for(Path(path).parent, Path(path).name)
+        return Path(path).parent / name if name else None
+
+    def _projector_args(self, path: Path) -> list:
+        proj = self._projector(path)
+        return ["--mmproj", str(proj)] if proj and "--mmproj" in self.chat.help_flags() else []
+
+    def _projector_offer(self, repo: str) -> tuple:
+        """(file, size) of the repo's projector, or None, and why not: asked of the Hub once per repo."""
+        cache = self.__dict__.setdefault("_projectors", {})
+        if repo not in cache or cache[repo][0] is None and "reach" in cache[repo][1]:
+            cache[repo] = self.ms.find_projector(repo)
+        return cache[repo]
+
+    def vision(self, mid) -> tuple:
+        found, refused = self._chat_model(mid)
+        if refused:
+            return refused
+        proj, flag = self._projector(found[0]), "--mmproj" in self.chat.help_flags()
+        out = {"have": bool(proj), "file": proj.name if proj else "", "flag": flag, "available": None, "why": "",
+               "job": dict(self.__dict__.get("vision_job") or {"state": "idle"})}
+        if proj and not flag:
+            out["why"] = ("The image support file is here, but this llama-server does not list --mmproj in its --help "
+                          "(it may be an old build), so it is not loaded.")
+        if not proj:
+            offer, why = self._projector_offer(self.offered[mid]["repo"])
+            out["available"] = {"file": offer[0], "size": offer[1]} if offer else None
+            out["why"] = why
+        return 200, out
+
+    def vision_get(self, body: dict) -> tuple:
+        mid = body.get("id")
+        found, refused = self._chat_model(mid)
+        if refused:
+            return refused
+        repo = self.offered[mid]["repo"]
+        offer, why = self._projector_offer(repo)
+        if not offer:
+            return 409, {"error": why}
+        with self.lock:
+            if (self.__dict__.get("vision_job") or {}).get("state") == "downloading":
+                return 409, {"error": "Image support is already downloading."}
+            self.vision_job = {"state": "downloading", "done": 0, "total": offer[1], "file": offer[0]}
+
+        def run():
+            def progress(done):
+                with self.lock:
+                    self.vision_job["done"] = done
+            try:
+                path = self.ms.download(repo, offer[0], offer[1], progress)
+            except Exception as e:                          # noqa: BLE001 - report, never take the page down
+                path, err = None, str(e)
+            else:
+                err = DOWNLOAD_ERRORS.get(getattr(self.ms, "last_download_error", ""), DOWNLOAD_ERRORS[""])
+            with self.lock:
+                self.vision_job = ({"state": "done", "file": Path(path).name} if path
+                                   else {"state": "error", "error": err})
+        threading.Thread(target=run, daemon=True).start()
+        return 202, {"ok": True}
 
     def chat_status(self, mid=None, preset=None, ctx=None) -> dict:
         out = {"chat": self.chat.status()}
@@ -703,6 +770,9 @@ def make_handler(app: App):
                 return self.reply(200, app.llama_info())
             if url.path == "/api/models":
                 return self.reply(200, app.local_models())
+            if url.path == "/api/vision":
+                code, out = app.vision((q.get("id") or [None])[0])
+                return self.reply(code, out)
             if url.path == "/api/tools":
                 ids = q.get("tool") or None
                 if ids and any(i not in detect_tools.SPECS for i in ids):
@@ -747,6 +817,9 @@ def make_handler(app: App):
                 return self.reply(200, app.chat.stop())
             if path == "/api/llama/install":
                 code, out = app.llama_install(body)
+                return self.reply(code, out)
+            if path == "/api/vision/get":
+                code, out = app.vision_get(body)
                 return self.reply(code, out)
             if path == "/api/models/delete":
                 code, out = app.delete_model(body)

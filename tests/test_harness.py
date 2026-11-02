@@ -126,12 +126,15 @@ class TestServeMenuSplitModels(unittest.TestCase):
         for name in ("a-Q4_K_M-00001-of-00002.gguf", "a-Q4_K_M-00002-of-00002.gguf", "b-Q4_K_M.gguf",
                      "c-Q4_K_M-00001-of-00003.gguf", "c-Q4_K_M-00003-of-00003.gguf", "mmproj-b.gguf"):
             (self.models / name).write_bytes(b"x" * 1000)
+        # A stand-in llama-server: --help lists --mmproj (as real builds do); anything else prints its arguments.
         if sys.platform == "win32":
             self.server = self.tmp / "llama-server.cmd"
-            self.server.write_text("@echo SERVED %*\r\n", encoding="utf-8")
+            self.server.write_text('@echo off\r\nif "%~1"=="--help" (\r\n  echo -mm,   --mmproj FILE      path to a '
+                                   'multimodal projector file\r\n  exit /b 0\r\n)\r\necho SERVED %*\r\n', encoding="utf-8")
         else:
             self.server = self.tmp / "llama-server"
-            self.server.write_text("#!/bin/sh\necho SERVED \"$@\"\n", encoding="utf-8")
+            self.server.write_text('#!/bin/sh\nif [ "$1" = "--help" ]; then echo "-mm,   --mmproj FILE      path to a '
+                                   'multimodal projector file"; exit 0; fi\necho SERVED "$@"\n', encoding="utf-8")
             self.server.chmod(0o755)
 
     def serve(self, choice, ui="default", stdin_extra=""):
@@ -147,6 +150,23 @@ class TestServeMenuSplitModels(unittest.TestCase):
     def served(self, choice, ui="default", stdin_extra=""):
         done = self.serve(choice, ui, stdin_extra)
         return done.returncode, (done.stdout + done.stderr)
+
+    def test_a_vision_projector_is_loaded_with_its_model_and_never_listed_as_one(self):
+        """The setup page saves a projector under a repo-prefixed name when the plain name is taken. Both names
+        are projectors, never models; the one from the model's own repo (.source) is passed with --mmproj."""
+        proj = self.models / "o--R-GGUF--mmproj-model-f16.gguf"
+        proj.write_bytes(b"p")
+        for f in (proj, self.models / "b-Q4_K_M.gguf"):
+            (self.models / (f.name + ".source")).write_text("o/R-GGUF", encoding="utf-8")
+        rc, out = self.served(3)
+        self.assertIn("Invalid model choice", out, "the prefixed projector must not be listed as a model")
+        _, out = self.served(2)
+        served = next(line for line in out.splitlines() if "SERVED" in line)
+        self.assertIn("--mmproj", served)
+        self.assertIn(str(proj), served)
+        _, out = self.served(1)
+        self.assertNotIn("--mmproj", next(line for line in out.splitlines() if "SERVED" in line),
+                         "a model from another repo does not get this projector")
 
     def test_each_interface_serves_its_own_folder(self):
         """UI=tasks / UI=translation serve that page with --path; the default serves llama.cpp's own chat."""
