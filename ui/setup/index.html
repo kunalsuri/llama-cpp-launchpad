@@ -1290,7 +1290,10 @@ function radarCard(m) {
     h("div", { class: "m-foot" },
       h("div", { class: "left" },
         cmds.length ? h("button", { class: "icon-btn", onclick: (e) => copyText(cmds[0].cmd, e.currentTarget) }, icon("terminal"), "Copy command") : null,
-        h("button", { class: "icon-btn", "aria-expanded": String(open), onclick: () => { open ? radarExpanded.delete(m.repo) : radarExpanded.add(m.repo); renderRadarList(); } },
+        h("button", { class: "icon-btn", "aria-expanded": String(open), onclick: () => {
+          open ? radarExpanded.delete(m.repo) : radarExpanded.add(m.repo);
+          if (view === "v-history") renderHistoryTabContent(); else renderRadarList();     // cards live in both views
+        } },
           icon(open ? "chevronUp" : "chevronDown"), open ? "Less" : "Details"),
         h("button", { class: "icon-btn", title: "Open on Hugging Face", "aria-label": "Open " + m.repo + " on Hugging Face", onclick: () => openHub(m.repo) }, icon("external"), "Hub")),
       installed ? h("span", { class: "btn small done" }, icon("check"), "Downloaded")

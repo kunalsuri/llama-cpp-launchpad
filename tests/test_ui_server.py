@@ -3,6 +3,7 @@ a fake Hugging Face, a fake downloader. No network, GPU or llama.cpp needed.
 Run: python3 -m unittest discover -s tests -v
 """
 import http.client
+import io
 import json
 import re
 import shutil
@@ -42,7 +43,7 @@ class UiBase(tms.Base):
         self.app = ui_server.App(ms)
         self.app.probe = FakeProbe("Linux")     # rule 2: commands and hints must not depend on the host
         self.app.llama_version = lambda argv: (True, "version: 4242 (abc1234)")
-        self.server =ThreadingHTTPServer(("127.0.0.1", 0), ui_server.make_handler(self.app))
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), ui_server.make_handler(self.app))
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
@@ -570,6 +571,18 @@ class TestOsAwareHelp(UiBase):
         kinds = {c["kind"]: c["cmd"] for c in card["commands"]}
         self.assertEqual(kinds, {"resume": './scripts/unix/radar.sh --download "o/Big-GGUF"'})
 
+    def test_a_split_download_started_in_a_terminal_is_resumed_whole(self):
+        """Review finding: the state file only names the first shard (with the whole model's size). Rebuilding a
+        one-file offer from it gave `--file <first shard>` and a shard-only curl command, which checked that shard
+        against the whole size and never fetched the other parts."""
+        self.use("Linux", {"curl": "/usr/bin/curl"})
+        values = {"dl_active": "1", "dl_state": "downloading", "dl_repo": "o/Big-GGUF",
+                  "dl_file": "Big-Q4_K_M-00001-of-00003.gguf", "dl_done": "1", "dl_total": "30"}
+        with unittest.mock.patch.object(ms, "state_get", side_effect=lambda k: values.get(k, "")):
+            snap = self.app.snapshot()
+        self.assertEqual([(c["kind"], c["cmd"]) for c in snap["commands"]],
+                         [("resume", './scripts/unix/radar.sh --download "o/Big-GGUF"')])
+
     def test_a_failed_download_offers_the_resume_that_really_resumes(self):
         self.use("Windows", WIN_CURL)
         unittest.mock.patch.object(ms, "download", lambda *a, **k: None).start()
@@ -840,7 +853,7 @@ class TestLlamaApi(UiBase):
 class TestRadarOffline(UiBase):
     def test_a_sync_that_cannot_reach_the_hub_says_so_and_keeps_the_saved_scan(self):
         saved = {"updated_at": "2026-10-30T00:00:00Z", "models": [{"repo": "t/saved-GGUF", "fit_mode": "gpu"}]}
-        with unittest.mock.patch("hf_radar.fetch_hf_repos", return_value=[]), \
+        with unittest.mock.patch("hf_radar.http_json", return_value=None), \
                 unittest.mock.patch("hf_radar.load_latest", return_value=saved):
             d = self.get_json("/api/radar?sync=1")
         self.assertTrue(d["offline"])
@@ -849,25 +862,49 @@ class TestRadarOffline(UiBase):
 
 
 class TestServe(unittest.TestCase):
-    def test_busy_port_falls_forward(self):
-        busy = ThreadingHTTPServer(("127.0.0.1", 0), ui_server.BaseHTTPRequestHandler)
-        self.addCleanup(busy.server_close)
-        port = busy.server_address[1]
-        started = []
+    """serve() takes the first free port from `port` upward.
 
-        class Stop(Exception):
-            pass
+    Regression (rule 2): this used to hold a real OS-assigned port P and assume one of P+1..P+19 was free. On the
+    Windows CI runner that whole range was unavailable (Windows reserves blocks of ports around 49xxx, and other
+    test servers use ephemeral ports), so the test failed by machine, not by code. The ports are now simulated."""
 
-        def fake_forever(self_):
-            started.append(self_.server_address[1])
-            raise KeyboardInterrupt
+    def run_serve(self, busy, port=8765):
+        tried, started = [], []
 
+        class FakeServer:
+            def __init__(self, addr, handler):
+                tried.append(addr[1])
+                if addr[1] in busy:
+                    raise OSError(98, "Address already in use")
+                self.server_address = addr
+
+            def serve_forever(self):
+                started.append(self.server_address[1])
+                raise KeyboardInterrupt
+
+            def server_close(self):
+                pass
+
+        out = io.StringIO()
         with unittest.mock.patch.object(ui_server, "App", lambda ms_: None), \
-                unittest.mock.patch.object(ui_server, "make_handler", lambda app: ui_server.BaseHTTPRequestHandler), \
-                unittest.mock.patch.object(ThreadingHTTPServer, "serve_forever", fake_forever):
-            self.assertEqual(ui_server.serve(None, port, open_browser=False), 0)
-        self.assertEqual(len(started), 1)
-        self.assertNotEqual(started[0], port)
+                unittest.mock.patch.object(ui_server, "make_handler", lambda app: None), \
+                unittest.mock.patch.object(ui_server, "Server", FakeServer), \
+                unittest.mock.patch("sys.stdout", out):
+            rc = ui_server.serve(None, port, open_browser=False)
+        return rc, tried, started, out.getvalue()
+
+    def test_busy_port_falls_forward(self):
+        rc, tried, started, _ = self.run_serve(busy={8765, 8766})
+        self.assertEqual(rc, 0)
+        self.assertEqual(tried, [8765, 8766, 8767])
+        self.assertEqual(started, [8767])
+
+    def test_no_free_port_in_range_is_a_clear_error(self):
+        rc, tried, started, text = self.run_serve(busy=set(range(8765, 8785)))
+        self.assertEqual(rc, 1)
+        self.assertEqual(tried, list(range(8765, 8785)))
+        self.assertEqual(started, [])
+        self.assertIn("Could not open a port between 8765 and 8784", text)
 
 
 if __name__ == "__main__":

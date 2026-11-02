@@ -402,11 +402,24 @@ class TestSyncOffline(unittest.TestCase):
         self.hw = hardware.Hw(ram_mb=16384, cores=8, gpu_kind="none", gpu_name="", vram_mb=0, gpu_usable=False)
 
     def test_no_listing_means_offline_and_nothing_is_recorded(self):
-        with mock.patch.object(hf_radar, "fetch_hf_repos", return_value=[]):
+        with mock.patch.object(hf_radar, "http_json", return_value=None):          # every request failed
             out = hf_radar.sync_radar(self.hw, hdir=self.tmp)
         self.assertTrue(out["offline"])
         self.assertEqual(out["models"], [])
         self.assertFalse((self.tmp / "latest.json").exists())
+
+    def test_a_search_that_matches_nothing_is_not_offline(self):
+        """Review finding: an answered request with no matches used to be reported as "could not reach the Hub"."""
+        with mock.patch.object(hf_radar, "http_json", return_value=[]):            # answered: zero results
+            out = hf_radar.sync_radar(self.hw, hdir=self.tmp, search="no-such-model-xyz")
+        self.assertFalse(out["offline"])
+        self.assertEqual(out["models"], [])
+
+    def test_fetch_tells_a_failed_request_from_an_empty_answer(self):
+        with mock.patch.object(hf_radar, "http_json", return_value=None):
+            self.assertIsNone(hf_radar.fetch_hf_repos())
+        with mock.patch.object(hf_radar, "http_json", return_value=[]):
+            self.assertEqual(hf_radar.fetch_hf_repos(), [])
 
     def test_a_listing_that_came_back_is_not_offline(self):
         with mock.patch.object(hf_radar, "fetch_hf_repos", return_value=[{"id": "a/b-GGUF", "siblings": []}]):
@@ -428,6 +441,60 @@ class TestRadarDownloadCli(unittest.TestCase):
         self.assertIn('scripts\\win\\radar.bat --download "t/m"', text)
         self.assertNotIn("python3", text)
         self.assertNotIn("-C -", text, "curl cannot continue the app's .part file")
+
+
+class TestDownloadCliResolvesTheRequestedFile(unittest.TestCase):
+    """Review findings on the resume command the setup page shows (`radar --download REPO --file FILE`)."""
+
+    DETAIL = {"id": "o/M-GGUF", "siblings": [
+        {"rfilename": "M-Q4_K_M.gguf", "size": 400},
+        {"rfilename": "M-Q8_0.gguf", "lfs": {"size": 800}},
+    ]}
+
+    def setUp(self):
+        self.urls, self.calls = [], []
+        hw = hardware.Hw(ram_mb=16384, cores=8, gpu_kind="none", gpu_name="", vram_mb=0, gpu_usable=False)
+        for target, attr, value in (
+                (hardware, "detect_hw", lambda: hw),
+                (hf_radar, "http_json", self.fake_http),
+                (hf_radar, "evaluate_repo", lambda meta, sibs, hw_: {"repo": meta["id"], "name": "M-Q8_0",
+                                                                     "file": "M-Q8_0.gguf", "size_bytes": 800}),
+                (hf_radar.model_setup, "download", self.fake_download),
+                (hf_radar.model_setup, "local_path", lambda repo, f, size: (Path(f), False)),
+                (hf_radar.model_setup, "state_update", lambda *a, **k: None),
+                (hf_radar.model_setup, "record_installed", lambda *a, **k: None),
+                (hf_radar.model_setup, "check_model_speed", lambda *a, **k: 2)):
+            p = mock.patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def fake_http(self, url, timeout=25):
+        self.urls.append(url)
+        return dict(self.DETAIL) if url.startswith("https://huggingface.co/api/models/o/M-GGUF") else None
+
+    def fake_download(self, repo, f, size, on_progress=None):
+        self.calls.append((f, size))
+        return Path(f)
+
+    def run_cli(self, *args, cached=None, **kw):
+        with mock.patch.object(hf_radar, "load_latest", return_value=cached), mock.patch("sys.stdout", io.StringIO()):
+            return hf_radar.download_model_cli(*args, **kw)
+
+    def test_with_no_radar_cache_the_metadata_url_is_right(self):
+        """It requested .../api/models/models/REPO (HF_API already ends in /api/models), so a fresh checkout failed."""
+        self.assertEqual(self.run_cli("o/M-GGUF", custom_file="M-Q4_K_M.gguf"), 0)
+        self.assertTrue(self.urls)
+        self.assertNotIn("/models/models/", " ".join(self.urls))
+
+    def test_a_named_file_is_checked_against_its_own_size(self):
+        """The radar picked Q8 (800 bytes); resuming the Q4 file (400 bytes) checked it against 800 and failed."""
+        cached = {"models": [{"repo": "o/M-GGUF", "name": "M-Q8_0", "file": "M-Q8_0.gguf", "size_bytes": 800}]}
+        self.assertEqual(self.run_cli("o/M-GGUF", custom_file="M-Q4_K_M.gguf", cached=cached), 0)
+        self.assertEqual(self.calls, [("M-Q4_K_M.gguf", 400)])
+
+    def test_without_a_named_file_the_chosen_one_keeps_its_size(self):
+        self.assertEqual(self.run_cli("o/M-GGUF"), 0)
+        self.assertEqual(self.calls, [("M-Q8_0.gguf", 800)])
 
     def test_normalize_model_entry(self):
         m = {"repo": "author/model-name", "size_bytes": 1024}
