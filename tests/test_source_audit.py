@@ -22,8 +22,9 @@ ALLOWED_IMPORTS = {"__future__", "argparse", "csv", "ctypes", "datetime", "io", 
                    "collections", "shlex", "time",   # chat_server.py: in-memory log, quoting the shown command, polling
                    "hashlib", "tarfile", "zipfile",  # llama_install.py: SHA-256 check, unpacking release archives
                    "struct",                         # gguf.py: decoding a model file's binary header
+                   "statistics",                     # compare.py: mean speed over the prompts
                    "hardware", "hf_discover", "ui_server", "detect_tools", "hf_radar", "model_setup",
-                   "chat_server", "llama_install", "gguf", "local_models"}      # local modules
+                   "chat_server", "llama_install", "gguf", "local_models", "compare"}      # local modules
 LOCAL_MODULES = {p.stem for p in SOURCES}
 # 127.0.0.1 = the setup page itself (ui_server.py); api.github.com = the llama.cpp release listing (llama_install.py)
 ALLOWED_HOSTS = {"huggingface.co", "github.com", "api.github.com", "127.0.0.1"}
@@ -160,6 +161,12 @@ class TestSourceAudit(unittest.TestCase):
         self.assertIn("if entry is None or not all(_inside(d, f) for f in entry[\"files\"]):", text)
         self.assertIn("(d / name).unlink()", text)
         self.assertNotRegex(text, r"(subprocess|urllib|http\.client|run_cmd|write_text|write_bytes|open\()")
+
+    def test_compare_starts_servers_only_through_chat_server_and_talks_only_to_them(self):
+        text = (UTILS / "compare.py").read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"(subprocess|urllib|run_cmd|write_text|write_bytes|open\(|unlink|shutil)")
+        self.assertIn("chat_server.ChatServer(", text)
+        self.assertIn('chat_server.http_post_json(port, "/v1/chat/completions"', text)
 
     def test_gguf_reader_only_reads(self):
         """gguf.py decodes model headers. It opens files for reading only, writes nothing, runs nothing and has no

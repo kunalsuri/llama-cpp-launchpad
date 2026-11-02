@@ -84,6 +84,25 @@ def http_get(port: int, path: str, timeout: float = 1.0):
         conn.close()
 
 
+def http_post_json(port: int, path: str, body: dict, timeout: float = 600.0):
+    """POST JSON to http://127.0.0.1:port/path, directly (never through a proxy) -> (status, parsed JSON or None),
+    or None when nothing answered."""
+    data = json.dumps(body).encode("utf-8")
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        conn.request("POST", path, body=data, headers={"Content-Type": "application/json"})
+        r = conn.getresponse()
+        raw = r.read()
+        try:
+            return r.status, json.loads(raw)
+        except ValueError:
+            return r.status, None
+    except (OSError, http.client.HTTPException):
+        return None
+    finally:
+        conn.close()
+
+
 def http_probe(port: int) -> tuple:
     """What answers HTTP on the port? -> (description or "", what was checked, for the log)."""
     where = f"HTTP on 127.0.0.1:{port}"

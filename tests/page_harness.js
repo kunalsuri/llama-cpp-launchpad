@@ -757,6 +757,42 @@ const scenarios = {
     if (p.text("models-list").includes("o/Shape-GGUF")) return "the list was not refreshed: " + p.text("models-list");
   },
 
+  async "Compare: pick two models, run, and see their answers side by side with their speed"() {
+    const posts = [];
+    const two = { dir: "/p/models", total: 2, free: 9, models: ["a.gguf", "b.gguf"].map((id) => ({ id, kind: "model", size: 1e9, repo: "", files: [id], header_error: "" })) };
+    const res = (f) => [{ prompt: "Explain", text: "[" + f + "] sky", tps: 40, first_ms: 12, tokens: 7, error: "" }];
+    let cmp = { state: "idle", models: [], prompts: [] };
+    const p = makePage({ hash: "#models", routes: idle((path, opts) => {
+      if (path === "/api/models") return two;
+      if (path === "/api/compare/start") {
+        posts.push(JSON.parse(opts.body));
+        cmp = { state: "running", prompts: ["Explain"], models: [{ file: "a.gguf", title: "a.gguf", state: "loading", results: [] }, { file: "b.gguf", title: "b.gguf", state: "waiting", results: [] }] };
+        return cmp;
+      }
+      if (path === "/api/compare") return cmp;
+      return {};
+    }) });
+    await p.start();
+    if (p.button("compare-box", "Compare these")) return "Compare is offered before two models are picked";
+    p.button("models-list", "Pick to compare", 0).click(); await p.settle();
+    p.button("models-list", "Pick to compare", 0).click(); await p.settle();   // the first is now "Picked"
+    const go = p.button("compare-box", "Compare these");
+    if (!go) return "no Compare button with two picked: " + p.text("compare-box");
+    go.click(); await p.settle();
+    if (posts.length !== 1 || posts[0].ids.join() !== "a.gguf,b.gguf") return "wrong models sent: " + JSON.stringify(posts);
+    if (!/Loading a\.gguf/.test(p.text("compare-box"))) return "no progress: " + p.text("compare-box");
+    cmp = { state: "done", prompts: ["Explain"], models: [
+      { file: "a.gguf", title: "a.gguf", state: "done", load_s: 1.5, tps: 40, results: res("a.gguf") },
+      { file: "b.gguf", title: "b.gguf", state: "done", load_s: 2.5, tps: 20, results: res("b.gguf") }] };
+    await p.advance(1100);
+    const t = p.text("compare-box");
+    for (const want of ["[a.gguf] sky", "[b.gguf] sky", "40.0 tokens/s", "20.0 tokens/s", "Explain"])
+      if (!t.includes(want)) return `missing "${want}": ` + t;
+    const calls = p.state.calls.filter((c) => c === "/api/compare").length;
+    await p.advance(5000);
+    if (p.state.calls.filter((c) => c === "/api/compare").length !== calls) return "kept polling after the comparison finished";
+  },
+
   async "a refused delete says why and keeps the model"() {
     const list = { dir: "/p/models", total: 1, free: 1, models: [{ id: "a.gguf", kind: "model", size: 1e9, repo: "", files: ["a.gguf"], header_error: "" }] };
     const p = makePage({ hash: "#models", routes: idle((path) => (path === "/api/models" ? list

@@ -994,6 +994,76 @@ class TestModelsApi(UiBase):
         self.assertIn("download", body["error"])
 
 
+class TestCompareApi(UiBase):
+    """Compare models: two or three models from My models, the same prompts, one model in memory at a time."""
+
+    def setUp(self):
+        super().setUp()
+        import test_chat_server as tcs
+        self.tcs = tcs
+        p = unittest.mock.patch.dict("os.environ", {"PORT": str(tcs.free_port()), "EXTRA_ARGS": ""})
+        p.start()
+        self.addCleanup(p.stop)
+        self.app.chat.find_server = lambda: list(tcs.SERVER)
+        self.addCleanup(self.app.chat.stop)
+        d = ms.models_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        for n in ("a.gguf", "b.gguf", "c.gguf"):
+            (d / n).write_bytes(b"x")
+        (d / "mmproj-x.gguf").write_bytes(b"x")
+        self.addCleanup(lambda: self.app.compare and self.app.compare.stop())
+
+    def wait(self, *states):
+        for _ in range(600):
+            s = self.get_json("/api/compare")
+            if s["state"] in states:
+                return s
+            time.sleep(0.05)
+        self.fail(self.get_json("/api/compare"))
+
+    def test_compares_the_chosen_models_and_reports_each_answer(self):
+        self.assertEqual(self.get_json("/api/compare")["state"], "idle")
+        status, body = self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})
+        self.assertEqual(status, 202, body)
+        s = self.wait("done")
+        self.assertEqual([m["file"] for m in s["models"]], ["a.gguf", "b.gguf"])
+        self.assertEqual(len(s["models"][0]["results"]), len(s["prompts"]))
+        self.assertTrue(s["models"][1]["results"][0]["text"].startswith("[b.gguf] "))
+        self.assertIn("-c 4096", s["models"][0]["cmd"], "every model gets the same short context")
+
+    def test_only_models_from_the_folder_two_or_three_of_them(self):
+        for ids in (["a.gguf"], ["a.gguf", "a.gguf"], ["a.gguf", "../x.gguf"], ["a.gguf", "mmproj-x.gguf"],
+                    ["a.gguf", "b.gguf", "c.gguf", "a.gguf"], "a.gguf", None):
+            with self.subTest(ids=ids):
+                self.assertEqual(self.post("/api/compare/start", {"ids": ids})[0], 400)
+        self.assertEqual(self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]}, token=False)[0], 403)
+
+    def test_a_comparison_and_a_chat_never_run_at_once(self):
+        self.app.chat.job = {"state": "running"}
+        status, body = self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})
+        self.app.chat.job = {"state": "idle"}
+        self.assertEqual(status, 409)
+        self.assertIn("Stop the chat", body["error"])
+        with unittest.mock.patch.dict("os.environ", {"FAKE_LLAMA_REPLY_S": "3"}):
+            self.assertEqual(self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})[0], 202)
+            status, body = self.app.chat_start({"id": "whatever"})
+        self.assertEqual(status, 409)
+        self.assertIn("comparison", body["error"])
+
+    def test_no_model_is_deleted_during_a_comparison(self):
+        with unittest.mock.patch.dict("os.environ", {"FAKE_LLAMA_REPLY_S": "3"}):
+            self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})
+            status, body = self.post("/api/models/delete", {"id": "c.gguf"})
+        self.assertEqual(status, 409)
+        self.assertIn("comparison", body["error"])
+
+    def test_stop(self):
+        with unittest.mock.patch.dict("os.environ", {"FAKE_LLAMA_REPLY_S": "5"}):
+            self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})
+            status, body = self.post("/api/compare/stop", {})
+        self.assertEqual((status, body["state"]), (200, "stopped"))
+
+
 class TestLlamaApi(UiBase):
     """Install llama.cpp from the page: /api/llama (what was found, why an install is offered, how) and
     /api/llama/install. The installer's own behaviour is in test_llama_install.py; this is the wiring and the rules."""

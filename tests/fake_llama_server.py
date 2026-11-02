@@ -61,6 +61,22 @@ def main():
                 return self.answer(200, {"model_path": model})
             return self.answer(404, {"error": "not found"})
 
+        def do_POST(self):
+            # /v1/chat/completions, not streamed: answers "[model file] prompt", with llama-server's timings object.
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")          # read before answering (CLAUDE.md rule 8)
+            if self.path != "/v1/chat/completions":
+                return self.answer(404, {"error": "not found"})
+            prompt = (body.get("messages") or [{}])[-1].get("content", "")
+            delay = float(os.environ.get("FAKE_LLAMA_REPLY_S", "0"))
+            if delay:
+                time.sleep(delay)
+            text = f"[{os.path.basename(model)}] {prompt}"
+            return self.answer(200, {"choices": [{"message": {"role": "assistant", "content": text}}],
+                                     "usage": {"completion_tokens": 7},
+                                     "timings": {"prompt_n": 5, "prompt_ms": 12.5, "prompt_per_second": 400.0,
+                                                 "predicted_n": 7, "predicted_ms": 175.0, "predicted_per_second": 40.0}})
+
         def answer(self, code, obj):
             data = json.dumps(obj).encode()
             self.send_response(code)

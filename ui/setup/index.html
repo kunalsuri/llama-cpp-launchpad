@@ -260,6 +260,13 @@
   .tool { margin-top: 12px; }
   .tool-head b.wrap { min-width: 0; overflow-wrap: anywhere; }
   .btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .cmp-grid { display: grid; grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr)); gap: 10px; margin: 6px 0 14px; }
+  .cmp-col { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .cmp-col .log { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+  .cmp-col b.wrap, .cmp-col .why { overflow-wrap: anywhere; }
+  .cmp-col .why { color: var(--bad); margin: 0; }
+  #compare-box { margin-bottom: 8px; }
+  @media (max-width: 560px) { .cmp-grid { grid-template-columns: 1fr; } }
   .tool-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .tool-head b { font-size: 17px; }
   .tool p { margin: 8px 0 0; font-size: 14px; color: var(--text-2); overflow-wrap: anywhere; }
@@ -468,6 +475,7 @@
       <h1 id="models-title" tabindex="-1">My models</h1>
       <p class="sub" id="models-sum">The models in this project's models folder.</p>
     </div>
+    <div id="compare-box" aria-live="polite"></div>
     <div id="models-list" aria-live="polite"></div>
   </section>
 
@@ -1371,7 +1379,9 @@ function modelCard(m) {
         h("b", {}, "Delete " + m.id + " (" + fmt(m.size) + ")?"), " It is removed from this computer; you can download it again later.",
         h("div", { class: "actions" }, h("button", { class: "btn small danger", onclick: () => deleteModel(m.id) }, "Yes, delete"),
           h("button", { class: "btn small ghost", onclick: () => { modelsAsk = ""; renderModels(); } }, "Cancel"))))
-    : h("div", { class: "actions" }, h("button", { class: "btn small ghost", "aria-label": "Delete " + m.id, onclick: () => { modelsAsk = m.id; renderModels(); } }, "Delete"));
+    : h("div", { class: "actions" }, h("button", { class: "btn small ghost", "aria-label": "Delete " + m.id, onclick: () => { modelsAsk = m.id; renderModels(); } }, "Delete"),
+        m.kind === "model" ? h("button", { class: "btn small ghost", "aria-pressed": comparePicked.includes(m.id) ? "true" : "false",
+          onclick: () => togglePick(m.id) }, comparePicked.includes(m.id) ? "Picked" : "Pick to compare") : null);
   return h("div", { class: "card tool" },
     h("div", { class: "tool-head" }, h("b", { class: "wrap" }, m.id), h("span", { class: "fact" }, fmt(m.size))),
     m.repo ? h("p", {}, "From " + m.repo) : null,
@@ -1387,6 +1397,67 @@ function renderModels() {
     ? d.models.length + (d.models.length === 1 ? " file set" : " file sets") + ", " + fmt(d.total) + " in " + d.dir + " · " + fmt(d.free) + " free on that disk"
     : "Nothing in " + d.dir + " yet. " + fmt(d.free) + " free on that disk.";
   $("#models-list").replaceChildren(...d.models.map(modelCard));
+  renderCompare();
+}
+
+// --- Compare (utils/compare.py): the same prompts on 2-3 models, one after another; answers side by side ---------
+let comparePicked = [], compareData = null, compareTimer = null, compareGen = 0;
+function togglePick(id) {
+  comparePicked = comparePicked.includes(id) ? comparePicked.filter((x) => x !== id) : comparePicked.concat(id).slice(-3);
+  renderModels();
+}
+const CMP_STATE = { waiting: "Waiting", loading: "Loading", asking: "Asking", done: "Done", failed: "Failed", stopped: "Stopped" };
+function renderCompare() {
+  const box = $("#compare-box");
+  const c = compareData && Array.isArray(compareData.models) && Array.isArray(compareData.prompts) ? compareData : null;
+  const models = (modelsData && modelsData.models.filter((m) => m.kind === "model")) || [];
+  const kids = [];
+  if (c && c.state === "running") {
+    kids.push(h("p", {}, h("b", {}, "Comparing… "), "Each model is loaded in turn, so only one is in memory at a time."),
+      h("ul", { class: "reasons" }, c.models.map((m) => h("li", {}, (CMP_STATE[m.state] || m.state) + " " + m.file +
+        (m.state === "asking" ? " (" + m.results.length + " of " + c.prompts.length + " answers)" : "")))),
+      h("div", { class: "actions" }, h("button", { class: "btn small ghost", onclick: stopCompare }, "Stop")));
+  } else if (c && c.models.length && ["done", "stopped"].includes(c.state)) {
+    kids.push(h("p", {}, h("b", {}, c.state === "done" ? "Comparison finished. " : "Comparison stopped. "),
+      "Speeds are measured by llama-server on this computer. Judge the answers yourself: a few prompts cannot rank models."));
+    kids.push(h("div", { class: "cmp-grid", style: "--cols:" + c.models.length }, c.models.map((m) => h("div", { class: "cmp-col" },
+      h("b", { class: "wrap" }, m.file),
+      m.state === "failed" ? h("p", { class: "why" }, "Failed: " + (m.error || "it did not load")) :
+        h("p", { class: "muted" }, (m.tps || 0).toFixed(1) + " tokens/s · loaded in " + (m.load_s || 0).toFixed(1) + " s")))));
+    c.prompts.forEach((name, k) => kids.push(h("p", { class: "rows-title" }, name),
+      h("div", { class: "cmp-grid", style: "--cols:" + c.models.length }, c.models.map((m) => {
+        const r = m.results[k];
+        return h("div", { class: "cmp-col" }, h("pre", { class: "log" }, r ? (r.error || r.text) : "(no answer)"),
+          r && !r.error ? h("span", { class: "muted" }, r.tps.toFixed(1) + " tokens/s · first token after " + Math.round(r.first_ms) + " ms") : null);
+      }))));
+  }
+  if (!(c && c.state === "running") && models.length >= 2) {
+    kids.push(h("p", { class: "muted" }, "Compare: pick two or three models below (" + comparePicked.length + " picked). They answer the same prompts one after another."),
+      comparePicked.length >= 2 ? h("div", { class: "actions" }, h("button", { class: "btn small", onclick: startCompare }, "Compare these")) : null);
+  }
+  box.replaceChildren(...kids.filter(Boolean));
+}
+async function startCompare() {
+  let r;
+  try { r = await api("/api/compare/start", { ids: comparePicked }); } catch (e) { r = { error: UNREACHABLE }; }
+  if (r.error) { say(r.error); $("#compare-box").prepend(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, r.error))); return; }
+  compareData = r; renderCompare(); pollCompare();
+}
+async function stopCompare() {
+  try { compareData = await api("/api/compare/stop", {}); } catch (e) {}
+  renderCompare();
+}
+function pollCompare() {
+  clearTimeout(compareTimer);
+  const g = ++compareGen;
+  const tick = async () => {
+    if (g !== compareGen || view !== "v-models") return;
+    try { compareData = await api("/api/compare"); } catch (e) { compareTimer = setTimeout(tick, 2000); return; }
+    if (g !== compareGen || view !== "v-models") return;
+    renderCompare();
+    if (compareData.state === "running") compareTimer = setTimeout(tick, 1000);
+  };
+  compareTimer = setTimeout(tick, 1000);
 }
 async function loadModels() {
   const box = $("#models-list"); box.replaceChildren(h("div", { class: "spin", "aria-label": "Loading" }));
@@ -1402,7 +1473,13 @@ async function deleteModel(id) {
   renderModels();
   say("Deleted " + id);
 }
-function openModels() { show("v-models"); return loadModels(); }
+async function openModels() {
+  show("v-models");
+  await loadModels();
+  try { compareData = await api("/api/compare"); } catch (e) {}
+  renderCompare();
+  if (compareData && compareData.state === "running") pollCompare();
+}
 
 $("#home-btn").onclick = () => navigate("");
 $("#models-btn").onclick = () => navigate("#models");

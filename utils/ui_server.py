@@ -26,6 +26,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import chat_server
+import compare
 import detect_tools
 import gguf
 import hf_discover
@@ -404,6 +405,8 @@ class App:
         with self.run_lock:
             if self.installer.status().get("state") in INSTALL_BUSY:
                 return 409, {"error": "llama.cpp is being installed. Start the chat when the install has finished."}
+            if self._comparing():
+                return 409, {"error": "A model comparison is running (My models). Start the chat when it has finished."}
             found, refused = self._chat_model(body.get("id"))
             if refused:
                 return refused
@@ -442,6 +445,8 @@ class App:
             with self.lock:
                 if self.job.get("state") in ("downloading", "testing"):
                     return 409, {"error": "A download is running. Delete models when it has finished."}
+            if self._comparing():
+                return 409, {"error": "A model comparison is running. Delete models when it has finished."}
             chat = self.chat.status()
             in_use = {str(d / f) for f in entry["files"]}
             if chat.get("state") in CHAT_BUSY and chat.get("model_path") in in_use:
@@ -450,6 +455,39 @@ class App:
         if error and not removed:
             return 409, {"error": error}
         return 200, dict(self.local_models(), removed=removed, error=error)
+
+    # --- Compare models (compare.py): the same prompts on 2-3 models, one in memory at a time ------------------
+    compare = None
+
+    def _comparing(self) -> bool:
+        return self.compare is not None and self.compare.status()["state"] == "running"
+
+    def compare_status(self) -> dict:
+        return self.compare.status() if self.compare is not None else {"state": "idle", "models": [], "prompts": []}
+
+    def compare_start(self, body: dict):
+        ids = body.get("ids")
+        d = self.ms.models_dir()
+        models = {e["id"]: e for e in local_models.scan(d) if e["kind"] == "model"}
+        if (not isinstance(ids, list) or not 2 <= len(ids) <= 3 or len(set(map(str, ids))) != len(ids)
+                or not all(isinstance(i, str) and i in models for i in ids)):
+            return 400, {"error": "Pick two or three different models from the models folder."}
+        with self.run_lock:
+            if self.chat.status().get("state") in CHAT_BUSY:
+                return 409, {"error": "Stop the chat first: a comparison loads each model in turn and needs the memory."}
+            if self.installer.status().get("state") in INSTALL_BUSY:
+                return 409, {"error": "llama.cpp is being installed. Compare when the install has finished."}
+            if self._comparing():
+                return 409, {"error": "A comparison is already running."}
+            flags = self.chat.help_flags()
+            self.compare = compare.Comparison(
+                [(d / i, i) for i in ids], find_server=self.chat.find_server, system=lambda: self.probe.system,
+                settings=["-c", "4096"] if "--ctx-size" in flags else [])
+            out = self.compare.start()
+        return (409, out) if out.get("error") else (202, out)
+
+    def compare_stop(self) -> dict:
+        return self.compare.stop() if self.compare is not None else self.compare_status()
 
     def tools(self, ids=None, verbose: bool = False) -> dict:
         """Which of Ollama / llama.cpp / LM Studio / Unsloth are installed: detect_tools.py, plus next-step hints."""
@@ -770,6 +808,8 @@ def make_handler(app: App):
                 return self.reply(200, app.llama_info())
             if url.path == "/api/models":
                 return self.reply(200, app.local_models())
+            if url.path == "/api/compare":
+                return self.reply(200, app.compare_status())
             if url.path == "/api/vision":
                 code, out = app.vision((q.get("id") or [None])[0])
                 return self.reply(code, out)
@@ -818,6 +858,11 @@ def make_handler(app: App):
             if path == "/api/llama/install":
                 code, out = app.llama_install(body)
                 return self.reply(code, out)
+            if path == "/api/compare/start":
+                code, out = app.compare_start(body)
+                return self.reply(code, out)
+            if path == "/api/compare/stop":
+                return self.reply(200, app.compare_stop())
             if path == "/api/vision/get":
                 code, out = app.vision_get(body)
                 return self.reply(code, out)
