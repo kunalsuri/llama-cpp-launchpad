@@ -776,6 +776,47 @@ const scenarios = {
     if (after !== before) return `kept polling the chat from another view: ${after - before} requests`;
   },
 
+  async "a chat started on the done screen is offered on the first screen after Get another model"() {
+    // Regression (review on #3): the done screen did not update S.chat, so the first screen showed no Open/Stop.
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT, STARTING, RUNNING], start: STARTING }) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    await p.advance(3000);
+    if (!/running/i.test(p.text("chat-box"))) return "chat never ran: " + p.text("chat-box");
+    await p.click("again");
+    if (p.visible() !== "v-use") return "expected the first screen, got " + p.visible();
+    const link = findEl(p.el("warn"), (e) => e.getAttribute && e.getAttribute("href") === RUNNING.url);
+    if (!link) return "the running chat is not offered on the first screen: " + p.text("warn");
+    if (!p.button("warn", "Stop")) return "no Stop on the first screen";
+  },
+
+  async "polling a running chat keeps its controls, an opened output panel, and does not repeat the announcement"() {
+    // Regression (review on #3): every poll rebuilt the panel, dropping keyboard focus on Open/Stop and closing the
+    // output the user had opened, and re-announced "running" to screen readers every 3 seconds.
+    const running = { ...RUNNING, log: ["line 1"] };
+    const later = { ...RUNNING, log: ["line 1", "line 2"] };
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT, STARTING, running, later, later, later], start: STARTING }) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    await p.advance(2000);
+    const stop = p.button("chat-box", "Stop");
+    const details = findEl(p.el("chat-box"), (e) => e.text && /output/.test(e.text()) && e.getAttribute && e.getAttribute("class") === null && e.children.some((c) => c.className === "log"));
+    if (!stop || !details) return "running panel incomplete: " + p.text("chat-box");
+    details.setAttribute("open", "");                 // the user opens llama-server's output
+    stop.focus();
+    const said = [];
+    const live = p.el("live");
+    let last = live.textContent;
+    for (let i = 0; i < 4; i++) { await p.advance(3000); if (live.textContent !== last) { said.push(live.textContent); last = live.textContent; } }
+    if (p.button("chat-box", "Stop") !== stop) return "the Stop button was rebuilt by polling (keyboard focus is lost)";
+    if (p.focused() !== stop) return "focus moved off Stop";
+    if (details.getAttribute("open") === null) return "the opened output was closed by polling";
+    if (!p.text("chat-box").includes("line 2")) return "new output was not shown: " + p.text("chat-box");
+    if (said.length) return "re-announced on polling: " + said.join(" | ");
+  },
+
   async "a chat that is running when the page opens can be opened or stopped from the first screen"() {
     const posts = [];
     const st = { ...STATE, chat: RUNNING };

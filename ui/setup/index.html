@@ -892,6 +892,7 @@ async function done(j) {
   $("#d-text").textContent = text;
   const next = $("#done-next");
   $("#chat-box").replaceChildren();
+  chatKey = ""; chatPre = null;
   chatModel = j.id || lastId;
   lastDone = j;
   if (!S.llama_server) {
@@ -974,10 +975,12 @@ function renderChatRefused(r) {
   say(r.error);
 }
 
+let chatKey = "", chatPre = null;       // the panel shown now, and its output element (updated in place by polls)
+const logText = (c) => (c.log || []).slice(-60).join("\n");
 function chatLog(c, open) {
-  if (!c.log || !c.log.length) return null;
-  return h("details", { class: "terminal", open: open ? "" : null }, h("summary", {}, icon("terminal"), "llama-server's output"),
-    h("pre", { class: "log" }, c.log.slice(-60).join("\n")));
+  chatPre = h("pre", { class: "log" }, logText(c));
+  if (!(c.log && c.log.length) && !["starting", "running"].includes(c.state)) return null;
+  return h("details", { class: "terminal", open: open ? "" : null }, h("summary", {}, icon("terminal"), "llama-server's output"), chatPre);
 }
 
 function stopButton(after) {
@@ -990,6 +993,14 @@ function stopButton(after) {
 
 function renderChat(c) {
   const box = $("#chat-box");
+  S.chat = c;                                       // the first screen offers Open / Stop from this too
+  const key = [c.state, c.port, c.cmd, c.error, c.model].join("|");
+  if (key === chatKey && chatPre) {                 // same state: keep the controls (focus) and the open output
+    chatPre.replaceChildren(logText(c));
+    return;
+  }
+  chatKey = key;
+  renderWarn();
   const cmd = c.cmd ? [h("p", { class: "cmd-label" }, "Running:"), cmdRow(c.cmd)] : [];
   const again = (label) => h("button", { class: "btn", onclick: () => startChat(c.port) }, icon("chat"), label);
   const stopped = (r) => { chatGen++; renderChat(r); };
