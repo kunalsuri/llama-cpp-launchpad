@@ -312,6 +312,8 @@ class App:
                 "verdict": "tight" if m.get("mode") == "tight" else ms.verdict(tps),
                 "where": m.get("mode", "cpu"), "gpu_share": m.get("gpu_share", 0), "note": m.get("note", ""),
                 "have": all(ms.local_path(m["repo"], f, sz)[1] for f, sz in files),
+                "need_mb": m.get("need_mb"), "memory_from": m.get("memory_from", "estimate"),
+                "memory_bound": m.get("memory_bound", ""), "memory_note": m.get("memory_note", ""),
                 "commands": self.download_commands(offer)}
 
     def download_commands(self, offer: dict) -> list:
@@ -362,6 +364,7 @@ class App:
             return {"error": "Could not reach Hugging Face. Check your connection and try again."}
         results, _ = ms.discover_check(cands, self.hw, a)
         rows = hf_discover.rank(results, "speed" if use == "fast" else "popular")[:10]
+        rows = [ms.refine_memory(r, self.hw, a.ctx) for r in rows]       # the model file's own header, if readable
         return {"models": [self.card(r) for r in rows]}
 
     def radar(self, gpu_only: bool = False, search: str | None = None,

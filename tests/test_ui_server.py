@@ -377,6 +377,16 @@ class TestApi(UiBase):
         self.assertNotIn("random/Hyped-7B-GGUF", repos)
         self.assertIn("random/Hyped-7B-GGUF", [x["repo"] for x in self.get_json("/api/more?use=chat&all=1")["models"]])
 
+    def test_more_reads_memory_from_each_shown_models_header(self):
+        self.header_file = HERE / "fixtures" / "llama-shape.gguf"
+        d = self.get_json("/api/more?use=chat")
+        mid = next(x for x in d["models"] if x["repo"] == "bartowski/Mid-8B-GGUF")
+        self.assertEqual(mid["memory_from"], "header")
+        self.assertEqual(mid["need_mb"], mid["size"] // 1048576 + 512 + 600)
+        self.header_file = None
+        d = self.get_json("/api/more?use=chat")
+        self.assertEqual({x["memory_from"] for x in d["models"]}, {"estimate"})
+
     def test_more_when_offline(self):
         self.fake_http_get = unittest.mock.Mock(side_effect=urllib.error.URLError("offline"))
         unittest.mock.patch.object(ms, "http_get", self.fake_http_get).start()

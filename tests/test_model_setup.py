@@ -53,6 +53,10 @@ class Base(unittest.TestCase):
         patcher = mock.patch.object(ms, "http_get", self.fake_http_get)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Model headers (utils/gguf.py) are read over the network too: offline unless a test serves one.
+        patcher = mock.patch.object(ms, "http_open", self.fake_http_open)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         # Results must not depend on the machine running the tests: on an Apple Silicon Mac (the macOS CI
         # runner) real detection reports unified-memory "apple" hardware and changes which model is picked.
         chip = mock.patch.object(hwmod.platform, "machine", return_value="x86_64")
@@ -83,6 +87,14 @@ class Base(unittest.TestCase):
         if "/models/random/Hyped-7B" in url:
             return fixture(self.hyped)
         raise urllib.error.HTTPError(url, 404, "nf", None, None)
+
+    def fake_http_open(self, url, headers):
+        self.urls.append(url)
+        self.opened = getattr(self, "opened", []) + [(url, dict(headers))]
+        header = getattr(self, "header_file", None)
+        if header is None:
+            raise urllib.error.URLError("offline (no model header in this test)")
+        return io.BytesIO(Path(header).read_bytes())
 
     def hw(self, ram=16384, vram=0, kind="none", usable=False, cores=4):
         return ms.Hw(ram_mb=ram, cores=cores, gpu_kind=kind, gpu_name="Test", vram_mb=vram, gpu_usable=usable)

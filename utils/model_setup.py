@@ -43,6 +43,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import gguf
 import hf_discover
 from hardware import Hw, detect_hw, find_llama_server
 
@@ -303,6 +304,48 @@ def http_json(url: str):
         return json.loads(http_get(url, int(os.environ.get("LP_HTTP_TIMEOUT", "25"))))
     except (urllib.error.URLError, OSError, ValueError):
         return None
+
+
+HEADER_BYTES = 8 * 1048576      # a model's metadata, read before its vocabulary, fits well inside this
+
+
+def http_open(url: str, headers: dict):
+    """An open binary response (a context manager). Used to read the first megabytes of a model file."""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Range": headers.get("Range", "")})
+    return urllib.request.urlopen(req, timeout=int(os.environ.get("LP_HTTP_TIMEOUT", "25")))
+
+
+def remote_header(repo: str, file: str):
+    """The metadata at the start of a model file on Hugging Face (utils/gguf.py) -> (meta, "") or (None, why).
+    Asks for the first HEADER_BYTES only (HTTP Range), and stops reading at the vocabulary."""
+    url = f"{HF_BASE}/{repo}/resolve/main/{file}"
+    try:
+        with http_open(url, {"Range": f"bytes=0-{HEADER_BYTES - 1}"}) as resp:
+            return gguf.read_header(resp, HEADER_BYTES, stop_at_tokenizer=True), ""
+    except (urllib.error.URLError, OSError) as e:
+        return None, f"could not read the start of {file} ({e})"
+    except gguf.GGUFError as e:
+        return None, f"{file}: {e}"
+
+
+def refine_memory(row: dict, hw: Hw, ctx: int) -> dict:
+    """Replace a discovered model's guessed context cache with the one its own header gives (utils/gguf.py).
+    Where it runs and how fast follow from the new figure. When the header cannot be read, the guess stays and
+    the row says why (memory_from "estimate", memory_note)."""
+    meta, why = remote_header(row["repo"], row["files"][0][0])
+    s = gguf.shape(meta) if meta else None
+    if not s:
+        return dict(row, memory_from="estimate", memory_note=why or "the file does not list its layers")
+    ctx = min(ctx, s["train_ctx"]) if s["train_ctx"] else ctx
+    e = gguf.estimate(s, row["size"], ctx)
+    mode, share = hf_discover.place(e["need_mb"], hw)
+    out = dict(row, kv_mb=e["kv_mb"], need_mb=e["need_mb"], ctx=e["ctx"], memory_from="header",
+               memory_bound=e["bound"], memory_note=" ".join(gguf.NOTE_TEXT[n] for n in e["notes"]))
+    if (mode, round(share, 2)) != (row["mode"], row["gpu_share"]):
+        tps = hf_discover.speed(row["size"], mode, share, lambda size, m: est_tps(size, m, hw),
+                                row.get("moe_ratio", 1.0)) if mode not in ("no", "tight") else 0
+        out.update(mode=mode, gpu_share=round(share, 2), tps=tps)
+    return out
 
 
 def is_trusted(repo_id: str) -> bool:
@@ -786,7 +829,7 @@ def discover_cmd(a) -> int:
             sys.stderr.flush()
 
     results, skipped = discover_check(cands, hw, a, progress)
-    rows = hf_discover.rank(results, a.sort)[: a.top]
+    rows = [refine_memory(r, hw, a.ctx) for r in hf_discover.rank(results, a.sort)[: a.top]]
     if quiet:
         print(json.dumps({"hardware": {"ram_mb": hw.ram_mb, "vram_mb": hw.vram_mb, "gpu": hw.gpu_kind,
                                        "gpu_usable": hw.gpu_usable},
@@ -799,8 +842,8 @@ def discover_cmd(a) -> int:
         return 1
     say(f"\n{len(results)} of {len(cands)} repos checked can run here. Best quantization of each:\n")
     print_discovered(rows)
-    say(f"{Style.D}Skipped: {why_not}. Memory and speed are estimates (the context cache is a rough guess); "
-        f"the speed test after download shows the real number.{Style.R}\n")
+    say(f"{Style.D}Skipped: {why_not}. Memory is read from each model file's header where it could be (else a "
+        f"rough guess); speed is an estimate: the speed test after download shows the real number.{Style.R}\n")
     return 0 if a.list else install_discovered(rows, hw)
 
 
@@ -810,7 +853,9 @@ def print_discovered(rows: list) -> None:
             f"{verdict_label(verdict(r['tps']))}  {Style.D}~{r['tps']} t/s · {mode_label(r)}{Style.R}")
         bits = [r["arch"] or "unknown arch", f"{r['params_b']}B" + (" MoE" if r["moe"] else ""),
                 f"{r['downloads']:,} downloads", f"{r['likes']} likes",
-                f"needs ~{human_size(r['need_mb'] * 1048576)} at {r['ctx']} ctx"]
+                f"needs {'at most ' if r.get('memory_bound') == 'at_most' else '~'}"
+                f"{human_size(r['need_mb'] * 1048576)} at {r['ctx']} ctx "
+                f"({'read from the model file' if r.get('memory_from') == 'header' else 'rough estimate'})"]
         if r["other_quants"]:
             bits.append(f"+{r['other_quants']} other quants fit")
         say(f"       {Style.D}{' · '.join(bits)}{Style.R}")

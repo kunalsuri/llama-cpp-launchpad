@@ -1,6 +1,8 @@
 # Model files are large; never commit them
 *.gguf
 *.bin
+# ...except the tiny metadata-only headers the tests read (tests/fixtures/make_gguf_fixtures.py)
+!tests/fixtures/*.gguf
 
 # Local llama.cpp builds or downloads
 bin/

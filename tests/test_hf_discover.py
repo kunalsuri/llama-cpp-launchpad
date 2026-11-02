@@ -294,6 +294,46 @@ class TestDiscoverCommand(tms.Base):
         self.assertEqual(rc, 0)
         self.assertEqual(ms.state_get("installed"), "")
 
+    # --- memory read from the model file's header (utils/gguf.py) ---
+    def test_memory_comes_from_the_model_header_when_it_can_be_read(self):
+        self.header_file = HERE / "fixtures" / "llama-shape.gguf"      # 32 layers, 8 KV heads: 128 KiB per token
+        data = self.models(["--sort", "size", "--top", "1"])
+        m = data["models"][0]
+        self.assertEqual(m["repo"], "bartowski/Mid-8B-GGUF")
+        self.assertEqual(m["memory_from"], "header")
+        self.assertEqual(m["kv_mb"], 512, "4096 tokens x 128 KiB")
+        self.assertEqual(m["need_mb"], m["size"] // MB + 512 + hd.OVERHEAD_MB)
+        url, headers = self.opened[0]
+        self.assertTrue(url.endswith("/bartowski/Mid-8B-GGUF/resolve/main/" + m["file"]), url)
+        self.assertRegex(headers.get("Range", ""), r"^bytes=0-\d+$", "only the start of the file is asked for")
+
+    def test_only_the_shown_rows_have_their_header_read(self):
+        self.header_file = HERE / "fixtures" / "llama-shape.gguf"
+        self.models(["--top", "1"])
+        self.assertEqual(len(self.opened), 1)
+
+    def test_an_unreadable_header_keeps_the_estimate_and_says_why(self):
+        data = self.models(["--sort", "size", "--top", "1"])            # offline for headers (Base)
+        m = data["models"][0]
+        self.assertEqual(m["memory_from"], "estimate")
+        self.assertIn("offline", m["memory_note"])
+        rc, out, _ = self.run_main(["--discover", "--list", "--sort", "size", "--top", "1"])
+        self.assertIn("rough estimate", out)
+
+    def test_table_says_the_memory_was_read_from_the_file(self):
+        self.header_file = HERE / "fixtures" / "llama-shape.gguf"
+        rc, out, _ = self.run_main(["--discover", "--list", "--sort", "size", "--top", "1"])
+        self.assertEqual(rc, 0)
+        self.assertIn("read from the model file", out)
+
+    def test_a_bigger_cache_than_guessed_moves_the_model_off_the_gpu(self):
+        """The header can change the verdict: at 32k tokens this shape needs 4 GB of cache, not the guess."""
+        self.header_file = HERE / "fixtures" / "llama-shape.gguf"
+        data = self.models(["--sort", "size", "--top", "1", "--ctx", "32768"])
+        m = data["models"][0]
+        self.assertEqual(m["kv_mb"], 4096)
+        self.assertNotEqual(m["mode"], "gpu", "5 GB weights + 4 GB cache do not fit an 8 GB card")
+
 
 if __name__ == "__main__":
     unittest.main()

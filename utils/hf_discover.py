@@ -211,7 +211,7 @@ def evaluate_repo(repo: str, detail, hw, tps_fn, ctx: int = DEFAULT_CTX, min_tps
         "mode": best["mode"], "gpu_share": best["gpu_share"], "tps": best["tps"], "need_mb": best["need_mb"],
         "kv_mb": best["kv_mb"], "ctx": min(ctx, train_ctx) if train_ctx else ctx, "arch": arch,
         "compat": "ok" if arch in KNOWN_ARCHS else "unverified", "params_b": round(best["params_b"], 1),
-        "moe": moe, "low_quality": quant_bits(best["quant"]) < 3, "other_quants": len(fits) - 1,
+        "moe": moe, "moe_ratio": ratio, "low_quality": quant_bits(best["quant"]) < 3, "other_quants": len(fits) - 1,
         "downloads": int(detail.get("downloads") or 0), "likes": int(detail.get("likes") or 0),
         "updated": (detail.get("lastModified") or "")[:10],
     }, ""

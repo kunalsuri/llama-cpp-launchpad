@@ -21,8 +21,9 @@ ALLOWED_IMPORTS = {"__future__", "argparse", "csv", "ctypes", "datetime", "io", 
                    "glob", "importlib",   # detect_tools.py: file-system globbing and installed-package metadata (read-only)
                    "collections", "shlex", "time",   # chat_server.py: in-memory log, quoting the shown command, polling
                    "hashlib", "tarfile", "zipfile",  # llama_install.py: SHA-256 check, unpacking release archives
+                   "struct",                         # gguf.py: decoding a model file's binary header
                    "hardware", "hf_discover", "ui_server", "detect_tools", "hf_radar", "model_setup",
-                   "chat_server", "llama_install"}      # local modules
+                   "chat_server", "llama_install", "gguf"}      # local modules
 LOCAL_MODULES = {p.stem for p in SOURCES}
 # 127.0.0.1 = the setup page itself (ui_server.py); api.github.com = the llama.cpp release listing (llama_install.py)
 ALLOWED_HOSTS = {"huggingface.co", "github.com", "api.github.com", "127.0.0.1"}
@@ -95,7 +96,8 @@ class TestSourceAudit(unittest.TestCase):
 
     def test_http_goes_through_one_function_and_sends_no_personal_data(self):
         text = (UTILS / "model_setup.py").read_text(encoding="utf-8")
-        self.assertEqual(text.count("urllib.request.urlopen("), 2, "only http_get and fetch_file touch the network")
+        self.assertEqual(text.count("urllib.request.urlopen("), 3,
+                         "only http_get, fetch_file and http_open (the first megabytes of a model file) touch the network")
         # request headers are limited to a fixed user-agent and (for resume) a Range header
         headers = set(re.findall(r'headers\[?\s*[\"\']?(?:\[)?"(\w[\w-]*)"', text)) | set(re.findall(r'"(User-Agent|Range)"', text))
         self.assertTrue(headers <= {"User-Agent", "Range"}, headers)
@@ -149,6 +151,14 @@ class TestSourceAudit(unittest.TestCase):
         self.assertEqual(re.findall(r"os\.replace\(([^)]*)\)", text), ["src, target"])
         self.assertIn("target = self.bin.joinpath(", text, "files are only moved into bin/")
         self.assertNotRegex(text, r"(unlink|os\.remove|rmdir|sudo|runas|Program Files|/usr/local)")
+
+    def test_gguf_reader_only_reads(self):
+        """gguf.py decodes model headers. It opens files for reading only, writes nothing, runs nothing and has no
+        network code of its own (model_setup.py fetches remote headers and hands it the stream)."""
+        text = (UTILS / "gguf.py").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"open\(([^)]*)\)", text), ['path, "rb"'])
+        self.assertNotRegex(text, r"(write_text|write_bytes|os\.replace|shutil|unlink|os\.remove|rmdir|subprocess"
+                                  r"|urllib|http\.client|run_cmd)")
 
     def test_no_obfuscation(self):
         for path in SOURCES:
