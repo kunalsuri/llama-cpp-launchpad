@@ -6,7 +6,7 @@
 #   MODELS_DIR      folder with your .gguf files          (default: <project>/models)
 #   LLAMA_SERVER    path to the llama-server binary       (default: auto-detected)
 #   PORT            port to serve on                      (default: 8080)
-#   UI              default | translation: skip the interface menu and use this one
+#   UI              default | translation | tasks: skip the interface menu and use this one
 #   KILL_EXISTING   1 = stop running llama-server first   (default: 1, set 0 to disable)
 #   OPEN_BROWSER    1 = open the web UI when ready        (default: 1, set 0 to disable)
 #   EXTRA_ARGS      extra flags passed to llama-server    (e.g. EXTRA_ARGS="-t 8 -c 8192")
@@ -165,15 +165,15 @@ fi
 name="${models[$model_idx]}"
 
 # --- Step 2: interface -------------------------------------------------------
-UI_NAMES=("llama.cpp Default" "Translation")
-UI_KEYS=("default" "translation")
+UI_NAMES=("llama.cpp Default" "Translation" "Tasks")
+UI_KEYS=("default" "translation" "tasks")
 ui_idx=-1
 for i in "${!UI_KEYS[@]}"; do [ "$UI_CHOICE" = "${UI_KEYS[$i]}" ] && ui_idx=$i; done
 [ "$interactive" = 1 ] && echo "  ${GREEN}✔${R} ${D}Model${R}      ${B}$name${R}"
 if [ "$ui_idx" -lt 0 ]; then
   if [ "$interactive" = 1 ]; then
     echo
-    M_ITEMS=("${UI_NAMES[@]}"); M_NOTES=("built-in chat" "translator")
+    M_ITEMS=("${UI_NAMES[@]}"); M_NOTES=("built-in chat" "translator" "summarize, explain code, rewrite")
     menu_select "Choose an interface"
     ui_idx=$M_SEL
   else
@@ -206,11 +206,11 @@ if [ "$OPEN_BROWSER" = "1" ]; then
 fi
 
 ui_args=()
-if [ "$UI_MODE" = "translation" ]; then
-  if [ -f "$ROOT_DIR/ui/translation/index.html" ]; then
-    ui_args=(--path "$ROOT_DIR/ui/translation")
+if [ "$UI_MODE" != "default" ]; then             # translation, tasks: a page of this project, served with --path
+  if [ -f "$ROOT_DIR/ui/$UI_MODE/index.html" ]; then
+    ui_args=(--path "$ROOT_DIR/ui/$UI_MODE")
   else
-    echo "${RED}Translation UI not found at $ROOT_DIR/ui/translation, using the default.${R}"
+    echo "${RED}${UI_NAMES[$ui_idx]} UI not found at $ROOT_DIR/ui/$UI_MODE, using the default.${R}"
   fi
 fi
 

@@ -111,6 +111,15 @@ class TestBrowser(tui.UiBase):
         failed = [f"{r['name']}: {r['detail']}" for r in rows if not r["ok"]]
         self.assertEqual(failed, [], "\n".join(failed))
 
+    def test_tasks_page_in_a_real_browser(self):
+        """ui/tasks/index.html (Summarize, Explain code, Rewrite) against a stand-in for llama-server's /v1 API."""
+        done = subprocess.run(["node", str(HERE / "tasks_check.js"), str(ROOT / "ui" / "tasks" / "index.html")],
+                              cwd=str(ROOT), env=node_env(), capture_output=True, text=True, timeout=300)
+        rows = [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")]
+        self.assertGreaterEqual(len(rows), 11, done.stdout + done.stderr)
+        failed = [f"{r['name']}: {r['detail']}" for r in rows if not r["ok"]]
+        self.assertEqual(failed, [], "\n".join(failed))
+        self.assertEqual(done.returncode, 0, done.stderr)
 
 
 class TestBrowserRequired(unittest.TestCase):

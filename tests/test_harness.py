@@ -134,19 +134,35 @@ class TestServeMenuSplitModels(unittest.TestCase):
             self.server.write_text("#!/bin/sh\necho SERVED \"$@\"\n", encoding="utf-8")
             self.server.chmod(0o755)
 
-    def serve(self, choice):
+    def serve(self, choice, ui="default", stdin_extra=""):
         scripts = ROOT / "scripts"
         if sys.platform == "win32":
             cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(scripts / "win" / "serve.ps1")]
         else:
             cmd = ["bash", str(scripts / "unix" / "serve.sh")]
         env = dict(os.environ, MODELS_DIR=str(self.models), LLAMA_SERVER=str(self.server), KILL_EXISTING="0",
-                   OPEN_BROWSER="0", CHECK_DAYS="0", UI="default", EXTRA_ARGS="")
-        return subprocess.run(cmd, input=f"{choice}\n", env=env, capture_output=True, text=True, timeout=120)
+                   OPEN_BROWSER="0", CHECK_DAYS="0", UI=ui, EXTRA_ARGS="")
+        return subprocess.run(cmd, input=f"{choice}\n{stdin_extra}", env=env, capture_output=True, text=True, timeout=120)
 
-    def served(self, choice):
-        done = self.serve(choice)
+    def served(self, choice, ui="default", stdin_extra=""):
+        done = self.serve(choice, ui, stdin_extra)
         return done.returncode, (done.stdout + done.stderr)
+
+    def test_each_interface_serves_its_own_folder(self):
+        """UI=tasks / UI=translation serve that page with --path; the default serves llama.cpp's own chat."""
+        for ui, folder in (("tasks", "tasks"), ("translation", "translation")):
+            with self.subTest(ui=ui):
+                _, out = self.served(2, ui)
+                served = next(line for line in out.splitlines() if "SERVED" in line)
+                self.assertIn("--path", served)
+                self.assertTrue(served.rstrip().endswith(str(ROOT / "ui" / folder)) or str(ROOT / "ui" / folder) in served, served)
+        _, out = self.served(2)
+        self.assertNotIn("--path", next(line for line in out.splitlines() if "SERVED" in line))
+
+    def test_the_interface_menu_offers_tasks(self):
+        _, out = self.served(2, ui="", stdin_extra="3\n")
+        served = next(line for line in out.splitlines() if "SERVED" in line)
+        self.assertIn(str(ROOT / "ui" / "tasks"), served)
 
     def test_first_part_of_a_complete_set_is_listed_once(self):
         _, out = self.served(1)

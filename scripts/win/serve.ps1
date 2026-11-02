@@ -7,7 +7,7 @@
 #   PORT            port to serve on                      (default: 8080)
 #   KILL_EXISTING   1 = stop running llama-server first   (default: 1, set 0 to disable)
 #   OPEN_BROWSER    1 = open the web UI when ready        (default: 1, set 0 to disable)
-#   UI              default | translation: skip the interface menu and use this one
+#   UI              default | translation | tasks: skip the interface menu and use this one
 #   EXTRA_ARGS      extra flags passed to llama-server    (e.g. "-t 8 -c 8192")
 
 $ErrorActionPreference = 'Stop'
@@ -201,13 +201,13 @@ $model = $models[$modelIdx]
 if ($interactive) { Write-Choice 'Model' $model.Name }
 
 # --- Step 2: interface -------------------------------------------------------
-$uiNames = @('llama.cpp Default', 'Translation')
-$uiKeys  = @('default', 'translation')
+$uiNames = @('llama.cpp Default', 'Translation', 'Tasks')
+$uiKeys  = @('default', 'translation', 'tasks')
 $uiIdx = [Array]::IndexOf($uiKeys, $UiChoice)
 if ($uiIdx -lt 0) {
     if ($interactive) {
         Write-Host ''
-        $uiIdx = Select-Menu 'Choose an interface' $uiNames @('built-in chat', 'translator')
+        $uiIdx = Select-Menu 'Choose an interface' $uiNames @('built-in chat', 'translator', 'summarize, explain code, rewrite')
     } else {
         $u = $null
         try { $u = Read-Host } catch { }
@@ -244,12 +244,12 @@ if ($OpenBrowser -eq '1') {
 }
 
 $serverArgs = @('-m', $model.FullName, '--port', $Port)
-if ($UiMode -eq 'translation') {
-    $uiDir = Join-Path (Join-Path $RootDir 'ui') 'translation'
+if ($UiMode -ne 'default') {      # translation, tasks: a page of this project, served with --path
+    $uiDir = Join-Path (Join-Path $RootDir 'ui') $UiMode
     if (Test-Path (Join-Path $uiDir 'index.html')) {
         $serverArgs += @('--path', $uiDir)
     } else {
-        Write-Host "Translation UI not found at $uiDir, using the default." -ForegroundColor Red
+        Write-Host "$($uiNames[$uiIdx]) UI not found at $uiDir, using the default." -ForegroundColor Red
     }
 }
 if ($ExtraArgs) { $serverArgs += @($ExtraArgs -split '\s+' | Where-Object { $_ }) }
