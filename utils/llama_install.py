@@ -271,9 +271,20 @@ class UnsafeArchive(Exception):
 def _clean(name: str) -> PurePosixPath:
     name = name.replace("\\", "/")
     p = PurePosixPath(name)
-    if not name or name.startswith("/") or re.match(r"^[A-Za-z]:", name) or ".." in p.parts:
+    # Every part is checked, not only the start: after the top folder is stripped, a later "D:" part would be an
+    # absolute Windows path, and a ':' anywhere in a part is a drive or an NTFS stream name.
+    if not name or name.startswith("/") or ".." in p.parts or any(":" in part for part in p.parts):
         raise UnsafeArchive(f"unsafe path in the archive: {name}")
     return p
+
+
+def _inside(dest: Path, target: Path) -> Path:
+    """Second line of defence: the file must land inside dest on this OS, whatever its path rules are."""
+    root = os.path.realpath(dest)
+    real = os.path.realpath(target)
+    if os.path.commonpath([root, real]) != root:
+        raise UnsafeArchive(f"unsafe path in the archive: {target}")
+    return target
 
 
 def _strip_top(paths: list) -> list:
@@ -294,7 +305,7 @@ def extract(archive: Path, dest: Path) -> None:
             for info, rel in zip(infos, rels):
                 if not rel.parts:
                     continue
-                target = dest.joinpath(*rel.parts)
+                target = _inside(dest, dest.joinpath(*rel.parts))
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as src, open(target, "wb") as out:
                     shutil.copyfileobj(src, out)
@@ -316,14 +327,14 @@ def extract(archive: Path, dest: Path) -> None:
                 continue
             if not m.isfile():
                 raise UnsafeArchive(f"unsupported entry in the archive: {m.name}")
-            target = dest.joinpath(*rel.parts)
+            target = _inside(dest, dest.joinpath(*rel.parts))
             target.parent.mkdir(parents=True, exist_ok=True)
             with tf.extractfile(m) as src, open(target, "wb") as out:
                 shutil.copyfileobj(src, out)
             if os.name != "nt":
                 os.chmod(target, (m.mode & 0o777) or 0o644)
         for rel, linkname in links:                         # same-folder links (libllama.so.0 -> libllama.so.0.0.1)
-            target = dest.joinpath(*rel.parts)
+            target = _inside(dest, dest.joinpath(*rel.parts))
             source = target.parent / linkname
             try:
                 if os.name == "nt":

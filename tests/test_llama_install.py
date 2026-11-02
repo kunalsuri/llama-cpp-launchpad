@@ -419,6 +419,24 @@ class TestInstall(InstallBase):
         self.inst.start()
         self.assertIn("unsafe", self.wait("done", "failed")["error"])
 
+    def test_a_drive_or_stream_name_in_any_part_of_a_path_is_refused(self):
+        """Regression (review on #3): `wrapper/D:/escape.txt` passed the check (only the start was tested); after the
+        top folder is stripped, Windows joins `D:/escape.txt` as an absolute path outside bin/. A ':' in a part is
+        also an NTFS stream name. Refused on every OS, whatever the host would do with it."""
+        for name in ("wrapper/D:/escape.txt", "wrapper/sub/C:escape.txt", "wrapper\\E:\\x.dll", "wrapper/file.txt:stream",
+                     "D:/x", "wrapper/../x", "/abs"):
+            with self.subTest(name=name):
+                with self.assertRaises(li.UnsafeArchive):
+                    li._clean(name)
+        for name in ("llama-b1/llama-server", "llama-b1/lib/libggml.so.0", "ggml-cuda.dll"):
+            self.assertEqual(str(li._clean(name)), name)
+        self.archives.clear()
+        self.serve("llama-b7777-bin-ubuntu-x64.tar.gz", tar_bytes("wrapper", {"llama-server": b"FAKE-OK", "D:/escape.txt": b"x"}))
+        self.inst.start()
+        s = self.wait("done", "failed")
+        self.assertEqual(s["state"], "failed")
+        self.assertIn("unsafe", s["error"])
+
     def test_a_build_that_does_not_run_is_not_installed_and_the_cpu_build_is_offered(self):
         self.gpu = "gpu"
         self.serve("llama-b7777-bin-ubuntu-vulkan-x64.tar.gz", tar_bytes("llama-b7777", {"llama-server": b"BROKEN"}))
