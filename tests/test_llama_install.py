@@ -495,8 +495,12 @@ class TestVersion(unittest.TestCase):
 
 
 class TestWhyInstall(unittest.TestCase):
-    def hw(self, kind="none", usable=False):
-        return unittest.mock.Mock(gpu_kind=kind, gpu_usable=usable)
+    def hw(self, kind="none", usable=False, other="", other_usable=False):
+        return unittest.mock.Mock(gpu_kind=kind, gpu_usable=usable, other_gpu=other, other_gpu_usable=other_usable)
+
+    def test_an_amd_or_arc_gpu_the_build_cannot_use_is_a_reason_to_install(self):
+        self.assertEqual(li.why_install("/x/llama-server", True, self.hw(other="AMD Radeon RX 6800")), "no-gpu")
+        self.assertEqual(li.why_install("/x/llama-server", True, self.hw(other="AMD Radeon RX 6800", other_usable=True)), "")
 
     def test_reasons(self):
         self.assertEqual(li.why_install("", False, self.hw()), "missing")

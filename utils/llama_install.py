@@ -192,6 +192,8 @@ def why_install(found: str, works: bool, hw) -> str:
         return "broken"
     if hw.gpu_kind in ("nvidia", "gpu") and not hw.gpu_usable:
         return "no-gpu"
+    if getattr(hw, "other_gpu", "") and not getattr(hw, "other_gpu_usable", False):     # AMD / Intel Arc
+        return "no-gpu"
     return ""
 
 

@@ -836,6 +836,19 @@ class TestLlamaApi(UiBase):
         self.assertEqual(self.post("/api/llama/install", {"variant": "../../x"})[0], 400)
         self.assertEqual(self.app.installer.status()["state"], "idle")
 
+    def test_an_amd_gpu_gets_the_vulkan_build_and_the_page_says_it_is_unused(self):
+        """AMD / Intel Arc: the installer picks Vulkan, and the page says the current build cannot use the card.
+        Recommendations stay CPU-based (gpu_kind is unchanged), as for existing users."""
+        self.app.hw = ms.Hw(ram_mb=16384, cores=8)
+        self.app.hw.other_gpu, self.app.hw.other_gpu_usable = "AMD Radeon RX 6800", False
+        self.found_server = "/opt/llama/llama-server"
+        offer = self.llama()["offer"]
+        self.assertEqual((offer["how"], offer["kind"]), ("download", "vulkan"))
+        self.assertEqual(self.llama()["need"], "no-gpu")
+        s = self.get_json("/api/state")
+        self.assertTrue(s["gpu_unused"])
+        self.assertEqual(s["mode"], "cpu")
+
     def test_the_installer_is_told_the_drivers_cuda_version(self):
         self.app.hw = ms.Hw(ram_mb=16384, cores=8, gpu_kind="nvidia", gpu_name="G", vram_mb=8192, gpu_usable=False)
         self.app.hw.cuda_version = "12.4"

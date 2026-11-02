@@ -165,12 +165,18 @@ class App:
 
     def make_installer(self, **kw):
         args = dict(bin_dir=lambda: self.bin_dir, system=lambda: self.probe.system, machine=lambda: self.probe.machine,
-                    gpu_kind=lambda: self.hw.gpu_kind, cuda_max=lambda: getattr(self.hw, "cuda_version", ""),
+                    gpu_kind=self._install_gpu_kind, cuda_max=lambda: getattr(self.hw, "cuda_version", ""),
                     find=lambda: self.ms.find_llama_server(),
                     which=lambda name: self.probe.which(name), version=lambda argv: self.llama_version(argv),
                     on_done=self._after_install)
         args.update(kw)
         return llama_install.Installer(**args)
+
+    def _install_gpu_kind(self) -> str:
+        """Which build to install: an AMD / Intel Arc card (hw.other_gpu) wants the Vulkan build, like a GPU set by
+        hand. hw.gpu_kind itself is left alone, so recommendations do not change."""
+        kind = self.hw.gpu_kind
+        return "gpu" if kind == "none" and getattr(self.hw, "other_gpu", "") else kind
 
     def _after_install(self) -> None:
         """A new llama.cpp build may use the GPU where the old one could not: detect again, so picks follow."""
@@ -210,7 +216,8 @@ class App:
             "ram_gb": (hw.ram_mb + 512) // 1024,
             "gpu": hw.gpu_name if hw.gpu_kind != "none" else "",
             "vram_gb": hw.vram_mb // 1024,
-            "gpu_unused": hw.gpu_kind in ("nvidia", "gpu") and not hw.gpu_usable,
+            "gpu_unused": (hw.gpu_kind in ("nvidia", "gpu") and not hw.gpu_usable)
+                          or bool(getattr(hw, "other_gpu", "") and not getattr(hw, "other_gpu_usable", False)),
             "mode": "gpu" if gpu or hw.gpu_kind == "apple" else "cpu",
             "llama_server": bool(llama["found"] and llama["works"]),     # found AND runs (rule 3)
             "llama": llama,

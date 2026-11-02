@@ -57,6 +57,10 @@ class Base(unittest.TestCase):
         chip = mock.patch.object(hwmod.platform, "machine", return_value="x86_64")
         chip.start()
         self.addCleanup(chip.stop)
+        # ...and an AMD card in the developer's machine must not change what detection finds (rule 2).
+        drm = mock.patch.object(hwmod, "DRM_DIR", self.tmp / "no-drm")
+        drm.start()
+        self.addCleanup(drm.stop)
         ms.Ctx.assume_yes = False
         ms.init_style(io.StringIO())          # no colours
 
