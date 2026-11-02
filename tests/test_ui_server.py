@@ -836,6 +836,11 @@ class TestLlamaApi(UiBase):
         self.assertEqual(self.post("/api/llama/install", {"variant": "../../x"})[0], 400)
         self.assertEqual(self.app.installer.status()["state"], "idle")
 
+    def test_the_installer_is_told_the_drivers_cuda_version(self):
+        self.app.hw = ms.Hw(ram_mb=16384, cores=8, gpu_kind="nvidia", gpu_name="G", vram_mb=8192, gpu_usable=False)
+        self.app.hw.cuda_version = "12.4"
+        self.assertEqual(self.app.installer.cuda_max(), "12.4")
+
     def test_hardware_is_detected_again_after_an_install(self):
         """A CUDA build makes the GPU usable: recommendations must follow."""
         calls = []

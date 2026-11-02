@@ -60,6 +60,53 @@ class TestPlan(unittest.TestCase):
         p = li.plan(RELEASE, "Windows", "AMD64", "nvidia")
         self.assertIn("cuda-12.4", names(p)[0])
 
+    def test_cuda_build_must_not_be_newer_than_the_driver_supports(self):
+        """nvidia-smi reports the newest CUDA the driver runs ("CUDA Version: 12.4"). A newer build would not start."""
+        cases = [
+            ("Windows", "AMD64", "12.4", "llama-b7777-bin-win-cuda-12.4-x64.zip"),
+            ("Windows", "AMD64", "13.0", "llama-b7777-bin-win-cuda-12.4-x64.zip"),     # oldest that fits
+            ("Linux", "x86_64", "12.8", "llama-b7777-bin-ubuntu-cuda-12.8-x64.tar.gz"),
+            ("Linux", "x86_64", "13.5", "llama-b7777-bin-ubuntu-cuda-12.8-x64.tar.gz"),
+        ]
+        for system, machine, driver, expect in cases:
+            with self.subTest(system=system, driver=driver):
+                p = li.plan(RELEASE, system, machine, "nvidia", cuda_max=driver)
+                self.assertEqual((p["kind"], names(p)[0]), ("cuda", expect))
+
+    def test_a_driver_too_old_for_every_cuda_build_gets_vulkan_and_is_told_why(self):
+        p = li.plan(RELEASE, "Linux", "x86_64", "nvidia", cuda_max="12.4")      # this release's Linux CUDA: 12.8, 13.4
+        self.assertEqual((p["kind"], names(p)), ("vulkan", ["llama-b7777-bin-ubuntu-vulkan-x64.tar.gz"]))
+        self.assertIn("12.4", p["why"])
+        self.assertIn("12.8", p["why"])
+        self.assertIn("update", p["why"].lower())
+        p = li.plan(RELEASE, "Windows", "ARM64", "nvidia", cuda_max="12.6")      # arm64 has only CUDA 13.4
+        self.assertEqual(p["kind"], "vulkan")
+
+    def test_an_unknown_driver_cuda_version_keeps_the_oldest_build_and_says_so(self):
+        p = li.plan(RELEASE, "Windows", "AMD64", "nvidia", cuda_max="")
+        self.assertEqual(names(p)[0], "llama-b7777-bin-win-cuda-12.4-x64.zip")
+        self.assertIn("not known", p["why"])
+
+    def test_installer_passes_the_drivers_cuda_version_on(self):
+        rel = json.loads(json.dumps(RELEASE))
+        seen = {}
+        real = li.plan
+
+        def spy(*a, **kw):
+            seen.update(kw)
+            return real(*a, **kw)
+        inst = li.Installer(bin_dir=Path(tempfile.mkdtemp()), system="Linux", machine="x86_64", gpu_kind=lambda: "nvidia",
+                            cuda_max=lambda: "12.4", find=lambda: "", which=lambda n: "", fetch_json=lambda u: rel,
+                            fetch_file=lambda *a, **k: None, version=fake_version)
+        self.addCleanup(shutil.rmtree, inst.bin, True)
+        with unittest.mock.patch.object(li, "plan", spy):
+            inst.start()
+            for _ in range(200):
+                if inst.status()["state"] not in ("checking", "downloading", "verifying", "installing", "idle"):
+                    break
+                time.sleep(0.01)
+        self.assertEqual(seen.get("cuda_max"), "12.4")
+
     def test_cpu_can_be_asked_for(self):
         self.assertEqual(names(li.plan(RELEASE, "Linux", "x86_64", "nvidia", "cpu")), ["llama-b7777-bin-ubuntu-x64.tar.gz"])
 

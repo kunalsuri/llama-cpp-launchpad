@@ -165,7 +165,8 @@ class App:
 
     def make_installer(self, **kw):
         args = dict(bin_dir=lambda: self.bin_dir, system=lambda: self.probe.system, machine=lambda: self.probe.machine,
-                    gpu_kind=lambda: self.hw.gpu_kind, find=lambda: self.ms.find_llama_server(),
+                    gpu_kind=lambda: self.hw.gpu_kind, cuda_max=lambda: getattr(self.hw, "cuda_version", ""),
+                    find=lambda: self.ms.find_llama_server(),
                     which=lambda name: self.probe.which(name), version=lambda argv: self.llama_version(argv),
                     on_done=self._after_install)
         args.update(kw)

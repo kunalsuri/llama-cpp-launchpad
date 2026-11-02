@@ -101,7 +101,8 @@ class TestDetection(unittest.TestCase):
 
     def commands(self, outputs):
         """Fake run_cmd: look the program up by its first argument."""
-        p = mock.patch.object(hwmod, "run_cmd", side_effect=lambda args, timeout=20: outputs.get(args[0], ""))
+        p = mock.patch.object(hwmod, "run_cmd", side_effect=lambda args, timeout=20:
+                              outputs.get(tuple(args), outputs.get(args[0], "")))     # exact command first, then program
         p.start()
         self.addCleanup(p.stop)
 
@@ -168,6 +169,27 @@ class TestDetection(unittest.TestCase):
             self.assertFalse(hwmod.detect_hw().gpu_usable)
         with mock.patch.object(hwmod, "find_llama_server", return_value=""):
             self.assertFalse(hwmod.gpu_usable())
+
+    NVIDIA_SMI_HEADER = ("+-----------------------------------------------------------------------------------------+\n"
+                         "| NVIDIA-SMI 550.54.15              Driver Version: 550.54.15      CUDA Version: 12.4     |\n"
+                         "|-----------------------------------------+------------------------+----------------------+\n")
+
+    def test_the_drivers_cuda_version_is_read_from_nvidia_smi(self):
+        """The installer must not pick a CUDA build newer than the driver supports. Plain `nvidia-smi` prints it."""
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "meminfo_16g"), LP_GPU_USABLE="0")
+        self.commands({("nvidia-smi",): self.NVIDIA_SMI_HEADER, "nvidia-smi": "NVIDIA GeForce RTX 3060, 12288\n"})
+        self.assertEqual(hwmod.detect_hw().cuda_version, "12.4")
+        self.commands({"nvidia-smi": "NVIDIA GeForce RTX 3060, 12288\n"})       # header without a CUDA version
+        self.assertEqual(hwmod.detect_hw().cuda_version, "")
+
+    def test_cuda_version_does_not_change_the_saved_hardware_signature(self):
+        """Existing users keep their .launchpad-state: the signature (and so the saved profile) is unchanged."""
+        a = hwmod.Hw(ram_mb=16000, cores=8, gpu_kind="nvidia", gpu_name="G", vram_mb=8192, gpu_usable=True)
+        b = hwmod.Hw(ram_mb=16000, cores=8, gpu_kind="nvidia", gpu_name="G", vram_mb=8192, gpu_usable=True)
+        b.cuda_version = "12.4"
+        self.assertEqual(a.sig(), b.sig())
+        self.assertEqual(a.sig(), "16000-8192-nvidia-1-8")
 
     def test_garbage_from_nvidia_smi_means_no_gpu(self):
         self.system("Linux")

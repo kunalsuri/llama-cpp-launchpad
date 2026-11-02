@@ -69,8 +69,10 @@ def _version_key(v: str) -> tuple:
     return tuple(int(x) for x in v.split("."))
 
 
-def plan(release: dict, system: str, machine: str, gpu_kind: str, variant: str = "auto") -> dict:
-    """The archive(s) for this machine -> {"kind", "tag", "assets", "why"} or {"error": text}."""
+def plan(release: dict, system: str, machine: str, gpu_kind: str, variant: str = "auto", cuda_max: str = "") -> dict:
+    """The archive(s) for this machine -> {"kind", "tag", "assets", "why"} or {"error": text}.
+    cuda_max: the newest CUDA the NVIDIA driver runs (nvidia-smi's "CUDA Version"), "" if unknown. A CUDA build newer
+    than that would not start, so only builds at or below it are used; unknown keeps the oldest build."""
     arch = arch_of(machine)
     if system not in ("Windows", "Linux"):
         return {"error": "Release downloads are used on Windows and Linux only."}
@@ -94,14 +96,25 @@ def plan(release: dict, system: str, machine: str, gpu_kind: str, variant: str =
                 m = re.fullmatch(rf"llama-{t}-bin-{plat}-cuda-(\d+(?:\.\d+)*)-{arch}{ext}", n)
                 if m:
                     builds[m.group(1)] = by_name[n]
+            limit = _version_key(cuda_max) if re.fullmatch(r"\d+(?:\.\d+)*", cuda_max or "") else None
+            too_new = []
             for ver in sorted(builds, key=_version_key):         # oldest CUDA first: it runs on the oldest drivers
+                if limit is not None and _version_key(ver) > limit:
+                    too_new.append(ver)
+                    continue
                 rt = (rf"cudart-llama-bin-win-cuda-{re.escape(ver)}-{arch}\.zip" if system == "Windows"
                       else rf"cudart-llama-{t}-bin-ubuntu-cuda-{re.escape(ver)}-{arch}\.tar\.gz")
                 runtime = one(rt)
                 if runtime:
+                    known = (f" (your driver runs CUDA up to {cuda_max})" if limit is not None
+                             else " (your driver's CUDA version is not known, so the oldest build was chosen)")
                     return {"kind": "cuda", "tag": tag, "assets": [builds[ver], runtime],
-                            "why": f"CUDA {ver} build, for your NVIDIA graphics card"}
-            notes.append("No CUDA build with its CUDA runtime archive was found in this release.")
+                            "why": f"CUDA {ver} build, for your NVIDIA graphics card{known}."}
+            if too_new:
+                notes.append(f"Your NVIDIA driver runs CUDA up to {cuda_max}, but this release's CUDA builds need "
+                             f"{' or '.join(too_new)}. Update the NVIDIA driver to get the CUDA build.")
+            else:
+                notes.append("No CUDA build with its CUDA runtime archive was found in this release.")
         elif kind == "vulkan":
             a = one(rf"llama-{t}-bin-{plat}-vulkan-{arch}{ext}")
             if a:
@@ -268,11 +281,12 @@ class Installer:
     """One install at a time. status() is safe to call from any thread."""
 
     def __init__(self, bin_dir, system, machine, gpu_kind, find, which, fetch_json=http_json, fetch_file=fetch_file,
-                 version=server_version, run=_run_streaming, on_done=None):
+                 version=server_version, run=_run_streaming, on_done=None, cuda_max=lambda: ""):
         # bin_dir, system and machine may be values or functions returning them (the setup page passes functions,
         # so they follow the machine description it was given).
         self._bin, self._system, self._machine = bin_dir, system, machine
         self.gpu_kind = gpu_kind                # function: "nvidia" | "gpu" | "apple" | "none"
+        self.cuda_max = cuda_max                # function: newest CUDA the NVIDIA driver runs ("12.4"), or ""
         self.find, self.which = find, which     # find(): the llama-server the serve scripts would use, or ""
         self.fetch_json, self.fetch_file, self.version, self.run = fetch_json, fetch_file, version, run
         self.on_done = on_done                  # called after a successful install, before "done" is reported
@@ -376,7 +390,8 @@ class Installer:
         except (OSError, ValueError) as e:
             return self._fail(f"The page could not reach GitHub to find the latest llama.cpp release ({e}). "
                               "Check your connection and try again.")
-        p = plan(release if isinstance(release, dict) else {}, self.system, self.machine, self.gpu_kind(), variant)
+        p = plan(release if isinstance(release, dict) else {}, self.system, self.machine, self.gpu_kind(), variant,
+                 cuda_max=self.cuda_max())
         if "error" in p:
             return self._fail(p["error"])
         total = sum(int(a.get("size") or 0) for a in p["assets"])

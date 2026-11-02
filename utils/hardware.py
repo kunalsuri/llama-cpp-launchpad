@@ -39,6 +39,7 @@ class Hw:
         self.ram_mb, self.cores = ram_mb, cores
         self.gpu_kind, self.gpu_name = gpu_kind, gpu_name        # none | nvidia | apple | gpu
         self.vram_mb, self.gpu_usable = vram_mb, gpu_usable
+        self.cuda_version = ""          # newest CUDA the NVIDIA driver runs ("12.4"); not part of sig() or the state
 
     def sig(self) -> str:
         return f"{self.ram_mb}-{self.vram_mb}-{self.gpu_kind}-{int(self.gpu_usable)}-{self.cores}"
@@ -129,6 +130,8 @@ def detect_hw() -> Hw:
         name, _, vram = line.rpartition(", ")
         if name and vram.strip().isdigit() and int(vram) > 0:
             hw.gpu_kind, hw.gpu_name, hw.vram_mb = "nvidia", name, int(vram)
+            m = re.search(r"CUDA Version:\s*(\d+\.\d+)", run_cmd(["nvidia-smi"]))     # in the plain banner only
+            hw.cuda_version = m.group(1) if m else ""
             forced = os.environ.get("LP_GPU_USABLE")
             hw.gpu_usable = (forced == "1") if forced is not None else gpu_usable()
     if os.environ.get("LP_RAM_MB", "").isdigit():
