@@ -258,8 +258,9 @@ def _run_streaming(argv: list, on_line) -> int:
     """Run a program, passing each output line to on_line. -> exit code."""
     proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace")
-    for line in proc.stdout:
-        on_line(line.rstrip("\r\n"))
+    with proc.stdout:
+        for line in proc.stdout:
+            on_line(line.rstrip("\r\n"))
     return proc.wait()
 
 

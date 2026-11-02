@@ -251,9 +251,10 @@ class ChatServer:
         return 202, self.status()
 
     def _read(self, proc) -> None:
-        for line in proc.stdout:
-            with self.lock:
-                self.log.append(line.rstrip("\r\n"))
+        with proc.stdout:                                   # closed when llama-server's output ends
+            for line in proc.stdout:
+                with self.lock:
+                    self.log.append(line.rstrip("\r\n"))
 
     def _watch(self, proc, port: int) -> None:
         while True:
