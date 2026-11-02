@@ -348,13 +348,26 @@ class TestStartIsAtomic(Base):
 class TestOnlyItsOwnServer(Base):
     """Never copy serve.sh's KILL_EXISTING (it stops every llama-server on the machine)."""
 
-    def other_llama_server(self):
+    def other_port(self) -> int:
+        """A free port that is not ours. Two free_port() calls can return the same number (it is only free until
+        something binds it): CI once gave both servers one port, ours bound it first and the other exited 1."""
         port = free_port()
+        while str(port) == self.env["PORT"]:
+            port = free_port()
+        return port
+
+    def other_llama_server(self):
+        port = self.other_port()
         other = subprocess.Popen(SERVER + ["-m", "other.gguf", "--port", str(port)], stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL)
         self.addCleanup(other.wait, 30)
         self.addCleanup(other.kill)
         return other
+
+    def test_the_other_server_never_gets_our_port(self):
+        ours = int(self.env["PORT"])
+        with unittest.mock.patch(f"{__name__}.free_port", side_effect=[ours, ours, ours + 1]):
+            self.assertEqual(self.other_port(), ours + 1)
 
     def test_stop_with_nothing_started_touches_nothing(self):
         other = self.other_llama_server()
