@@ -24,7 +24,8 @@ ALLOWED_IMPORTS = {"__future__", "argparse", "csv", "ctypes", "datetime", "io", 
                    "struct",                         # gguf.py: decoding a model file's binary header
                    "statistics",                     # compare.py: mean speed over the prompts
                    "hardware", "hf_discover", "ui_server", "detect_tools", "hf_radar", "model_setup",
-                   "chat_server", "llama_install", "gguf", "local_models", "compare", "router"}      # local modules
+                   "chat_server", "llama_install", "gguf", "local_models", "compare", "router",
+                   "clients"}      # local modules
 LOCAL_MODULES = {p.stem for p in SOURCES}
 # 127.0.0.1 = the setup page itself (ui_server.py); api.github.com = the llama.cpp release listing (llama_install.py)
 ALLOWED_HOSTS = {"huggingface.co", "github.com", "api.github.com", "127.0.0.1"}
@@ -89,6 +90,8 @@ class TestSourceAudit(unittest.TestCase):
 
     def test_network_hosts_are_only_huggingface_and_github(self):
         for path, tree in trees():
+            if path.name == "clients.py":           # text for the user to paste elsewhere; it connects to nothing
+                continue                            # (test_clients_only_builds_text)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
                     for url in re.findall(r"https?://[^\s\"')]+", node.value):
@@ -167,6 +170,15 @@ class TestSourceAudit(unittest.TestCase):
         self.assertNotRegex(text, r"(subprocess|urllib|run_cmd|write_text|write_bytes|open\(|unlink|shutil)")
         self.assertIn("chat_server.ChatServer(", text)
         self.assertIn('chat_server.http_post_json(port, "/v1/chat/completions"', text)
+
+    def test_clients_only_builds_text(self):
+        """clients.py holds addresses for other programs (Open WebUI in Docker reaches the host through
+        host.docker.internal). It imports nothing, so it can open no connection, file or program."""
+        tree = ast.parse((UTILS / "clients.py").read_text(encoding="utf-8"))
+        imports = [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
+        self.assertEqual([getattr(n, "module", None) for n in imports], ["__future__"])
+        calls = {n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        self.assertLessEqual(calls, {"which", "len"}, "only the which() it is given, to say whether aider was found")
 
     def test_router_writes_only_its_preset_file(self):
         """router.py writes one file, the preset INI it is given, through a temporary file next to it."""

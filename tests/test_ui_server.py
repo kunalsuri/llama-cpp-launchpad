@@ -853,6 +853,29 @@ class TestChatApi(UiBase):
         self.assertEqual(status, 409)
         self.assertIn("--ctx-size", body["error"])
 
+    # --- remembered settings, and what to type into other programs ---
+    def test_the_settings_a_chat_was_started_with_are_remembered_for_that_model(self):
+        self.download()
+        status, body = self.post("/api/chat/start", {"id": self.top["id"], "preset": "long", "ctx": 6000})
+        self.assertEqual(status, 202, body)
+        self.wait_chat("running")
+        self.post("/api/chat/stop", {})
+        p = self.preview()
+        self.assertEqual((p["preset"], p["ctx"]), ("long", 6000))
+        self.assertIn("-c 6000 -ctk q8_0", p["cmd"])
+        self.assertEqual(ms.load_profile(self.model_path().name), {"preset": "long", "ctx": 6000})
+        self.assertEqual(self.preview("&preset=short")["preset"], "short", "a choice on the page still wins")
+
+    def test_other_programs_get_the_address_and_model_of_the_running_chat(self):
+        self.download()
+        self.assertIn("error", self.get_json("/api/clients"), "nothing to connect to before a chat runs")
+        self.post("/api/chat/start", {"id": self.top["id"]})
+        self.wait_chat("running")
+        rows = {r["id"]: r for r in self.get_json("/api/clients")["clients"]}
+        self.assertIn(f"http://127.0.0.1:{self.chat_port}/v1", rows["openai"]["text"])
+        self.assertIn(self.model_path().stem, rows["openai"]["text"])
+        self.assertEqual(rows["aider"]["kind"], "missing", "the fake computer has no aider")
+
     # --- image support: the model's vision projector (mmproj) ---
     def hub_with_projector(self, projector=("mmproj-model-f16.gguf", 7)):
         sibs = [{"rfilename": f, "size": s} for f, s in self.app.offered[self.top["id"]]["files"]]

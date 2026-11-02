@@ -233,5 +233,16 @@ if [ -f "$MODELS_DIR/$name.source" ]; then
   done
 fi
 
+# --- Settings saved for this model on the setup page (model_setup.py --profile-args: one argument per line, already
+# checked against this llama-server's --help). They go before EXTRA_ARGS, so flags set there still win.
+profile_args=()
+if [ -n "$PY" ]; then
+  while IFS= read -r a; do
+    a="${a%$'\r'}"
+    [ -n "$a" ] && profile_args+=("$a")
+  done < <("$PY" "$ROOT_DIR/utils/model_setup.py" --profile-args "$name" 2>/dev/null)
+  [ ${#profile_args[@]} -gt 0 ] && echo "  ${D}Settings saved on the setup page:${R} ${profile_args[*]}"
+fi
+
 # shellcheck disable=SC2086
-exec "$LLAMA_SERVER" -m "$MODELS_DIR/$name" --port "$PORT" ${ui_args[@]+"${ui_args[@]}"} ${mmproj_args[@]+"${mmproj_args[@]}"} $EXTRA_ARGS
+exec "$LLAMA_SERVER" -m "$MODELS_DIR/$name" --port "$PORT" ${ui_args[@]+"${ui_args[@]}"} ${mmproj_args[@]+"${mmproj_args[@]}"} ${profile_args[@]+"${profile_args[@]}"} $EXTRA_ARGS

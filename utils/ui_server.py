@@ -26,6 +26,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import chat_server
+import clients
 import compare
 import detect_tools
 import gguf
@@ -389,10 +390,22 @@ class App:
             found, _ = self._chat_model(mid)
             if found:
                 preset = preset if preset in chat_server.PRESETS else None
+                if preset is None and ctx is None:          # the settings this model last ran with, if any
+                    saved = self.ms.load_profile(Path(found[0]).name)
+                    if saved and saved["preset"] in chat_server.PRESETS:
+                        preset, ctx = saved["preset"], saved["ctx"]
                 preset, args, why = self._settings_for(found[0], preset, ctx)
                 out["preview"] = self.chat.preview(found[0], settings=args)
-                out["preview"].update(preset=preset, presets=self.chat_settings(found[0], ctx), why=why)
+                out["preview"].update(preset=preset, ctx=ctx, presets=self.chat_settings(found[0], ctx), why=why)
         return out
+
+    def clients(self) -> tuple:
+        """What to type into other programs to use the running llama-server (clients.py)."""
+        c = self.chat.status()
+        if c.get("state") != "running":
+            return {"error": "Start a chat (or All my models) first: other programs connect to the running llama-server."}
+        names = c.get("router") or [Path(c.get("model_path") or "local").stem]
+        return {"clients": clients.snippets(c["port"], names, self.probe.system, self.probe.which)}
 
     def chat_start(self, body: dict):
         port, preset, ctx = body.get("port"), body.get("preset"), body.get("ctx")
@@ -411,10 +424,16 @@ class App:
             found, refused = self._chat_model(body.get("id"))
             if refused:
                 return refused
-            _, args, why = self._settings_for(found[0], preset, ctx)
+            used, args, why = self._settings_for(found[0], preset, ctx)
             if why:
                 return 409, {"error": why}
-            return self.chat.start(found[0], found[1], port, args)
+            code, out = self.chat.start(found[0], found[1], port, args)
+            if code == 202:                                  # remembered for next time, and for the serve scripts
+                try:
+                    self.ms.save_profile(Path(found[0]).name, used, ctx)
+                except OSError:
+                    pass
+            return code, out
 
     # --- My models: the models folder, and deleting from it (local_models.py) ---------------------------------
     def local_models(self) -> dict:
@@ -867,6 +886,8 @@ def make_handler(app: App):
                 return self.reply(200, app.compare_status())
             if url.path == "/api/router":
                 return self.reply(200, app.router_info())
+            if url.path == "/api/clients":
+                return self.reply(200, app.clients())
             if url.path == "/api/vision":
                 code, out = app.vision((q.get("id") or [None])[0])
                 return self.reply(code, out)

@@ -260,6 +260,8 @@
   .tool { margin-top: 12px; }
   .tool-head b.wrap { min-width: 0; overflow-wrap: anywhere; }
   .btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .cmd pre.snippet { flex: 1; min-width: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono);
+    font-size: 13px; color: var(--text); user-select: all; -webkit-user-select: all; }
   .cmp-grid { display: grid; grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr)); gap: 10px; margin: 6px 0 14px; }
   .cmp-col { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
   .cmp-col .log { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
@@ -1116,6 +1118,7 @@ async function applyCtx(value) {
 function renderChatStart(next, pv) {
   const kids = [];
   chatPv = pv;
+  if (pv && pv.ctx && chatCtx == null) chatCtx = pv.ctx;     // the context this model last ran with
   if (!pv) {                                         // not a model this page offered (e.g. a terminal download)
     kids.push(h("p", {}, "To start chatting, run this from the project folder:"), cmdRow(S.serve_cmd),
       SERVE_TIP[S.os] ? h("p", { class: "muted", style: "margin-top:10px" }, SERVE_TIP[S.os]) : null);
@@ -1198,7 +1201,7 @@ function renderChat(c) {
   } else if (c.state === "running") {
     box.replaceChildren(h("p", {}, h("b", {}, "The chat is running. "), c.model + " answers at " + c.url),
       h("div", { class: "actions" }, h("a", { class: "btn", href: c.url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open the chat"),
-        stopButton(stopped)), ...cmd, chatLog(c, false));
+        stopButton(stopped)), ...cmd, clientsPanel(), chatLog(c, false));
   } else if (c.state === "failed") {
     box.replaceChildren(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, c.error || "llama-server stopped.")),
       h("div", { class: "actions" }, again("Try again")), ...cmd, chatLog(c, true));
@@ -1474,6 +1477,24 @@ async function deleteModel(id) {
   renderModels();
   say("Deleted " + id);
 }
+// --- What to type into other programs to use the running llama-server (utils/clients.py) -----------------------
+function clientsPanel() {
+  const body = h("div", { class: "terminal-body" }, h("p", { class: "muted" }, "Loading…"));
+  loadClients(body);
+  return h("details", { class: "explain" }, h("summary", {}, icon("layers"), "Use it from other programs"), body);
+}
+async function loadClients(body) {
+  let d = null;
+  try { d = await api("/api/clients"); } catch (e) {}
+  if (!d || !Array.isArray(d.clients)) { body.replaceChildren(h("p", { class: "muted" }, (d && d.error) || "Could not get the details.")); return; }
+  body.replaceChildren(...d.clients.flatMap((c) => [
+    h("p", { class: "cmd-label" }, c.label),
+    c.kind === "missing" ? h("p", { class: "note" }, c.text)
+      : c.kind === "cmd" ? cmdRow(c.text)
+      : h("div", { class: "cmd" }, h("pre", { class: "snippet" }, c.text), copyButton(c.text)),
+    c.note ? h("p", { class: "muted" }, c.note) : null].filter(Boolean)));
+}
+
 // --- All my models at one address (utils/router.py): llama-server's router mode over the models folder ----------
 let routerInfo = null, routerTimer = null, routerGen = 0;
 function renderRouter() {
@@ -1485,6 +1506,7 @@ function renderRouter() {
       : h("p", {}, h("b", {}, "Serving " + c.router.length + " models at " + api + ". "),
         "Programs that use the OpenAI API (Open WebUI, Continue, …) ask for one by name; llama.cpp loads it then, one at a time."),
       h("ul", { class: "reasons" }, c.router.map((n) => h("li", {}, h("code", {}, n)))),
+      c.state === "running" ? clientsPanel() : null,
       h("div", { class: "actions" }, c.state === "running" ? h("a", { class: "btn small", href: c.url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open the chat") : null,
         h("button", { class: "btn small ghost", onclick: stopRouter }, "Stop")));
   } else if (r && r.available) {

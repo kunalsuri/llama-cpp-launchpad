@@ -45,7 +45,7 @@ from pathlib import Path
 
 import gguf
 import hf_discover
-from hardware import Hw, detect_hw, find_llama_server
+from hardware import Hw, detect_hw, find_llama_server, run_cmd
 
 ROOT =Path(__file__).resolve().parent.parent
 HF_API = os.environ.get("HF_API", "https://huggingface.co/api")
@@ -665,6 +665,46 @@ def check_model_speed(path: Path, size: int, hw: Hw) -> int:
     return 0
 
 
+# --- Settings remembered per model (the setup page saves them when a chat starts) ----------------------------
+def _profiles() -> dict:
+    try:
+        data = json.loads(state_get("chat_profiles") or "{}")
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_profile(model_name: str, preset: str, ctx) -> None:
+    profiles = _profiles()
+    profiles[model_name] = {"preset": preset, "ctx": ctx if type(ctx) is int else None}
+    state_set("chat_profiles", json.dumps(profiles, sort_keys=True))
+
+
+def load_profile(model_name: str):
+    p = _profiles().get(model_name)
+    if not isinstance(p, dict) or not isinstance(p.get("preset"), str):
+        return None
+    return {"preset": p["preset"], "ctx": p["ctx"] if type(p.get("ctx")) is int else None}
+
+
+def profile_args(model_name: str) -> list:
+    """The remembered settings of a model as llama-server arguments, checked against the llama-server found now:
+    [] when there are none, or when this llama-server would not accept them (rule 3). Used by the serve scripts."""
+    import chat_server
+    p = load_profile(model_name)
+    server = find_llama_server() if p else ""
+    if not server:
+        return []
+    flags = chat_server.server_flags(run_cmd([server, "--help"]))
+    hw = detect_hw()
+    gpu = (hw.gpu_kind in ("nvidia", "gpu") and hw.gpu_usable) or hw.gpu_kind == "apple"
+    path = models_dir() / Path(model_name).name
+    info = gguf.describe(path) if path.is_file() else {}
+    train = info["shape"]["train_ctx"] if "shape" in info else 0
+    args, why = chat_server.settings_args(p["preset"], flags, p["ctx"], gpu, train)
+    return [] if why else args
+
+
 def record_installed(name: str, repo: str, size: int) -> None:
     state_update({
         "installed": name,
@@ -1009,6 +1049,8 @@ def main(argv: list | None = None) -> int:
     p.add_argument("--port", type=int, default=8765, help="--ui: port to listen on (next free one is used)")
     p.add_argument("--no-browser", action="store_true", help="--ui: do not open the browser")
     p.add_argument("--weekly-prompt", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--profile-args", metavar="MODEL_FILE",
+                   help="print the settings remembered for this model as llama-server arguments, one per line")
     p.add_argument("--use", choices=["chat", "translation", "coding", "fast"])
     p.add_argument("--yes", "-y", action="store_true", help="accept the defaults")
     a = p.parse_args(argv)
@@ -1016,6 +1058,10 @@ def main(argv: list | None = None) -> int:
     Ctx.assume_yes = a.yes
     if a.weekly_prompt:
         return weekly_prompt()
+    if a.profile_args is not None:
+        for arg in profile_args(a.profile_args):
+            print(arg)
+        return 0
     if a.ui:
         import ui_server
         return ui_server.serve(sys.modules[__name__], a.port, not a.no_browser)

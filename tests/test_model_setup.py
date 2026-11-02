@@ -873,6 +873,45 @@ class TestSpeedDiagnosis(Base):
         self.assertEqual(json.loads(ms.state_get("speed_notes")), [], "a new test replaces the old reasons")
 
 
+class TestProfiles(Base):
+    """Settings remembered per model (the setup page saves them when a chat starts); the serve scripts ask for them
+    with --profile-args, which re-checks them against the llama-server found now (rule 3)."""
+    HELP = (HERE / "fixtures" / "llama_server_help.txt").read_text(encoding="utf-8")
+
+    def args(self, name, help_text=None):
+        with mock.patch.object(ms, "find_llama_server", return_value="/x/llama-server"), \
+                mock.patch.object(ms, "run_cmd", return_value=self.HELP if help_text is None else help_text), \
+                mock.patch.object(ms, "detect_hw", return_value=self.hw()):
+            return ms.profile_args(name)
+
+    def test_save_and_load(self):
+        self.assertIsNone(ms.load_profile("m.gguf"))
+        ms.save_profile("m.gguf", "long", 6000)
+        ms.save_profile("other.gguf", "short", None)
+        self.assertEqual(ms.load_profile("m.gguf"), {"preset": "long", "ctx": 6000})
+        self.assertEqual(ms.load_profile("other.gguf"), {"preset": "short", "ctx": None})
+
+    def test_profile_args_are_the_presets_flags_for_this_llama_server(self):
+        ms.save_profile("m.gguf", "long", 6000)
+        self.assertEqual(self.args("m.gguf"), ["-c", "6000", "-ctk", "q8_0"])
+        self.assertEqual(self.args("unknown.gguf"), [])
+        self.assertEqual(self.args("m.gguf", help_text="--port PORT   port\n"), [], "an old build: nothing it would refuse")
+
+    def test_a_broken_record_is_ignored(self):
+        ms.state_set("chat_profiles", "{not json")
+        self.assertIsNone(ms.load_profile("m.gguf"))
+        ms.state_set("chat_profiles", '{"m.gguf": {"preset": "rm -rf", "ctx": "9"}}')
+        self.assertEqual(self.args("m.gguf"), [])
+
+    def test_command_line_prints_one_argument_per_line(self):
+        ms.save_profile("m.gguf", "short", None)
+        with mock.patch.object(ms, "find_llama_server", return_value="/x/llama-server"), \
+                mock.patch.object(ms, "run_cmd", return_value=self.HELP), \
+                mock.patch.object(ms, "detect_hw", return_value=self.hw()):
+            rc, out, _ = self.run_main(["--profile-args", "m.gguf"])
+        self.assertEqual((rc, out), (0, "-c\n4096\n"))
+
+
 class TestCli(Base):
     def setUp(self):
         super().setUp()

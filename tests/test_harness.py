@@ -126,15 +126,19 @@ class TestServeMenuSplitModels(unittest.TestCase):
         for name in ("a-Q4_K_M-00001-of-00002.gguf", "a-Q4_K_M-00002-of-00002.gguf", "b-Q4_K_M.gguf",
                      "c-Q4_K_M-00001-of-00003.gguf", "c-Q4_K_M-00003-of-00003.gguf", "mmproj-b.gguf"):
             (self.models / name).write_bytes(b"x" * 1000)
-        # A stand-in llama-server: --help lists --mmproj (as real builds do); anything else prints its arguments.
+        # A stand-in llama-server: --help lists --mmproj and --ctx-size (as real builds do); anything else prints its
+        # arguments. The settings file is this test's own, never the developer's .launchpad-state.
+        self.state = self.tmp / "state"
         if sys.platform == "win32":
             self.server = self.tmp / "llama-server.cmd"
             self.server.write_text('@echo off\r\nif "%~1"=="--help" (\r\n  echo -mm,   --mmproj FILE      path to a '
-                                   'multimodal projector file\r\n  exit /b 0\r\n)\r\necho SERVED %*\r\n', encoding="utf-8")
+                                   'multimodal projector file\r\n  echo -c,    --ctx-size N      size of the prompt context'
+                                   '\r\n  exit /b 0\r\n)\r\necho SERVED %*\r\n', encoding="utf-8")
         else:
             self.server = self.tmp / "llama-server"
             self.server.write_text('#!/bin/sh\nif [ "$1" = "--help" ]; then echo "-mm,   --mmproj FILE      path to a '
-                                   'multimodal projector file"; exit 0; fi\necho SERVED "$@"\n', encoding="utf-8")
+                                   'multimodal projector file"; echo "-c,    --ctx-size N      size of the prompt context";'
+                                   ' exit 0; fi\necho SERVED "$@"\n', encoding="utf-8")
             self.server.chmod(0o755)
 
     def serve(self, choice, ui="default", stdin_extra=""):
@@ -144,7 +148,7 @@ class TestServeMenuSplitModels(unittest.TestCase):
         else:
             cmd = ["bash", str(scripts / "unix" / "serve.sh")]
         env = dict(os.environ, MODELS_DIR=str(self.models), LLAMA_SERVER=str(self.server), KILL_EXISTING="0",
-                   OPEN_BROWSER="0", CHECK_DAYS="0", UI=ui, EXTRA_ARGS="")
+                   OPEN_BROWSER="0", CHECK_DAYS="0", UI=ui, EXTRA_ARGS="", STATE_FILE=str(self.state))
         return subprocess.run(cmd, input=f"{choice}\n{stdin_extra}", env=env, capture_output=True, text=True, timeout=120)
 
     def served(self, choice, ui="default", stdin_extra=""):
@@ -167,6 +171,16 @@ class TestServeMenuSplitModels(unittest.TestCase):
         _, out = self.served(1)
         self.assertNotIn("--mmproj", next(line for line in out.splitlines() if "SERVED" in line),
                          "a model from another repo does not get this projector")
+
+    def test_the_settings_saved_for_a_model_are_used_before_extra_args(self):
+        """The setup page remembers a model's settings; the serve scripts ask model_setup.py --profile-args for them
+        (one argument per line, already checked against this llama-server's --help)."""
+        self.state.write_text('chat_profiles={"b-Q4_K_M.gguf": {"preset": "short", "ctx": 6000}}\n', encoding="utf-8")
+        _, out = self.served(2)
+        served = next(line for line in out.splitlines() if "SERVED" in line)
+        self.assertTrue(served.rstrip().endswith("--port 8080 -c 6000"), served)
+        _, out = self.served(1)
+        self.assertNotIn(" -c ", next(line for line in out.splitlines() if "SERVED" in line), "only for that model")
 
     def test_each_interface_serves_its_own_folder(self):
         """UI=tasks / UI=translation serve that page with --path; the default serves llama.cpp's own chat."""
@@ -195,6 +209,15 @@ class TestServeMenuSplitModels(unittest.TestCase):
         rc, out = self.served(3)
         self.assertNotEqual(rc, 0, out)
         self.assertIn("Invalid model choice", out)
+
+
+class TestPowerShellPythonLauncher(unittest.TestCase):
+    def test_only_the_py_launcher_gets_dash_3(self):
+        """Regression: serve.ps1 passed -3 when the program's name matched 'py*', which python.exe does too, so a
+        computer with python but no py launcher (conda, for one) ran `python -3 model_setup.py` and failed."""
+        text = source(ROOT / "scripts" / "win" / "serve.ps1")
+        self.assertNotIn("-like 'py*'", text)
+        self.assertIn("-in @('py.exe', 'py')", text)
 
 
 class TestPowerShellVariables(unittest.TestCase):

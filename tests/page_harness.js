@@ -684,6 +684,28 @@ const scenarios = {
     if (sel.join() !== "gpu") return "aria-selected on: " + sel.join();
   },
 
+  // --- Use the running chat from other programs ------------------------------------------------------------------
+  async "a running chat shows what to type into other programs, with a copy button for each"() {
+    const clients = { clients: [
+      { id: "openai", label: "Any program that speaks the OpenAI API", kind: "values", text: "Address (base URL): http://127.0.0.1:8080/v1", note: "any name works" },
+      { id: "continue", label: "Continue", kind: "file", text: "name: Local llama.cpp\nmodels:\n  - provider: llama.cpp", note: "" },
+      { id: "aider", label: "aider", kind: "missing", text: "aider was not found on this computer", note: "" }] };
+    const base = chatRoutes({ chats: [IDLE_CHAT, RUNNING] });
+    const p = makePage({ routes: (path, opts, full) => (path === "/api/clients" ? clients : base(path, opts, full)) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    await p.advance(1100);
+    const t = p.text("chat-box");
+    if (!t.includes("Use it from other programs")) return "no panel for other programs: " + t;
+    for (const want of ["http://127.0.0.1:8080/v1", "provider: llama.cpp", "aider was not found"])
+      if (!t.includes(want)) return `missing "${want}": ` + t;
+    const copies = [];
+    const walk = (e) => { if (e.handlers && e.handlers.click && e.text().includes("Copy")) copies.push(e); (e.children || []).forEach(walk); };
+    walk(p.el("chat-box"));
+    if (copies.length < 3) return "expected a copy button for the command, each snippet and the address; found " + copies.length;
+  },
+
   // --- Image support (a vision projector) on the done screen --------------------------------------------------
   async "image support is offered, downloads with progress, then the chat command loads it"() {
     const posts = [];

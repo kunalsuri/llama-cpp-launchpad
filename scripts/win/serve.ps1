@@ -70,7 +70,8 @@ foreach ($name in 'py', 'python') {
     if ($c -and $c.Source -notlike '*WindowsApps*') { $Py = $c.Source; break }   # skip the Microsoft Store stub
 }
 function Invoke-ModelSetup([string[]]$Arguments) {
-    if ((Split-Path -Leaf $Py) -like 'py*') { & $Py -3 $SetupScript @Arguments } else { & $Py $SetupScript @Arguments }
+    # Only the py launcher takes -3 (python.exe also matches 'py*', and Python 3 rejects -3)
+    if ((Split-Path -Leaf $Py) -in @('py.exe', 'py')) { & $Py -3 $SetupScript @Arguments } else { & $Py $SetupScript @Arguments }
 }
 
 # Weekly nudge: offer to check for new models that fit this machine (silent unless it is due)
@@ -274,6 +275,18 @@ if (Test-Path -LiteralPath $sourceFile) {
         } else {
             Write-Host '  Image support file found, but this llama-server has no --mmproj: not loaded' -ForegroundColor DarkGray
         }
+    }
+}
+# Settings saved for this model on the setup page (model_setup.py --profile-args: one argument per line, already
+# checked against this llama-server's --help). They go before EXTRA_ARGS, so flags set there still win.
+if ($Py) {
+    $savedPref = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $profileArgs = @(Invoke-ModelSetup @('--profile-args', $model.Name) 2>$null | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) }
+    catch { $profileArgs = @() }
+    finally { $ErrorActionPreference = $savedPref }
+    if ($profileArgs.Count -gt 0) {
+        Write-Host "  Settings saved on the setup page: $($profileArgs -join ' ')" -ForegroundColor DarkGray
+        $serverArgs += $profileArgs
     }
 }
 if ($ExtraArgs) { $serverArgs += @($ExtraArgs -split '\s+' | Where-Object { $_ }) }
