@@ -69,7 +69,7 @@ class UiBase(tms.Base):
         return path
 
     def fake_speed(self, path, size, hw):
-        ms.state_set("measured_tps", 42)
+        ms.state_update({"measured_tps": 42, "speed_notes": "[]"})
         return 0
 
     def call(self, method, path, body=None, headers=None, host=None):
@@ -446,6 +446,20 @@ class TestInstall(UiBase):
         self.assertTrue(any(ms.models_dir().glob("*.gguf")))
         self.assertEqual(ms.state_get("installed_repo"), top["repo"])
         self.assertTrue(self.get_json("/api/recommend?use=chat")["models"][0]["have"])
+        self.assertEqual(j["speed_notes"], [], "a fast run has nothing to explain")
+
+    def test_a_slow_speed_test_comes_back_with_its_reasons(self):
+        note = {"code": "gpu_unused", "text": "cannot use your graphics card", "fix": "Get llama.cpp"}
+
+        def slow(path, size, hw):
+            ms.state_update({"measured_tps": 3, "speed_notes": json.dumps([note])})
+            return 0
+        unittest.mock.patch.object(ms, "check_model_speed", slow).start()
+        self.addCleanup(unittest.mock.patch.stopall)
+        top = self.get_json("/api/recommend?use=chat")["models"][0]
+        self.post("/api/install", {"id": top["id"]})
+        j = self.wait_for("done", "error")
+        self.assertEqual(j["speed_notes"], [note])
 
     def test_same_filename_from_another_repo_is_downloaded_not_reused(self):
         row = {"name": "Same-Q4", "size": 5, "tps": 20, "mode": "gpu", "files": [("model.gguf", 5)]}

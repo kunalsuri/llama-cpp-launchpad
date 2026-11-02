@@ -582,7 +582,12 @@ class App:
                 f"[LAUNCHPAD] Ready! Speed: ~{tps} tokens/s. Start server with: {cmd}\n\n"
             )
             sys.stderr.flush()
-            self._set(state="done", bench="ok" if rc == 0 else "skipped" if rc == 2 else "failed", tps=tps)
+            try:                                            # why a slow run was slow (model_setup.diagnose_speed)
+                notes = json.loads(ms.state_get("speed_notes") or "[]") if rc == 0 else []
+            except ValueError:
+                notes = []
+            self._set(state="done", bench="ok" if rc == 0 else "skipped" if rc == 2 else "failed", tps=tps,
+                      speed_notes=notes if isinstance(notes, list) else [])
         except Exception as e:                              # noqa: BLE001 - show the user something, never crash the page
             ms.state_update({"dl_active": "0", "dl_state": "error"})
             sys.stderr.write(f"\n[LAUNCHPAD] Error during download: {e}\n")

@@ -229,8 +229,48 @@ def est_tps(size_bytes: int, mode: str, hw: Hw) -> int:
     eff = state_int("eff_bw")
     if eff > 0 and mode == (state_get("eff_mode") or "cpu"):
         return eff // size_mb
+    return default_tps(size_bytes, mode, hw)
+
+
+def default_tps(size_bytes: int, mode: str, hw: Hw) -> int:
+    """What this kind of computer usually manages (typical memory bandwidth / model size), ignoring any speed
+    measured here before."""
     bw10 = {"gpu": 1000 if hw.gpu_kind == "apple" else 2500, "cpu": 150, "tight": 50}.get(mode, 150)
-    return bw10 * 102 // size_mb
+    return bw10 * 102 // max(size_bytes // 1048576, 1)
+
+
+def diagnose_speed(measured: int, size: int, hw: Hw) -> list:
+    """Why a speed test was slow, from facts this computer can check -> [{code, text, fix}]. Empty when the
+    speed is smooth (15+ tokens/s) or as fast as this kind of computer usually is."""
+    if measured >= 15:
+        return []
+    notes, mode = [], fit(size, hw)
+    gb = lambda mb: f"{(mb + 512) // 1024} GB"                                    # noqa: E731
+    need_mb = (size // 1048576) * 115 // 100 + 512
+    other = getattr(hw, "other_gpu", "")
+    if (hw.gpu_kind in ("nvidia", "gpu") and not hw.gpu_usable) or (other and not getattr(hw, "other_gpu_usable", False)):
+        notes.append({"code": "gpu_unused",
+                      "text": f"The llama.cpp on this computer cannot use your graphics card ({hw.gpu_name or other}), "
+                              "so the model runs on the processor.",
+                      "fix": "Get llama.cpp on the setup page offers a build that uses it; then run the speed test again."})
+    elif hw.gpu_kind in ("nvidia", "gpu") and hw.gpu_usable and mode != "gpu":
+        notes.append({"code": "not_on_gpu",
+                      "text": f"The model needs about {gb(need_mb)} but your graphics card has {gb(hw.vram_mb)}, so it "
+                              "runs on the processor, which is much slower.",
+                      "fix": "A smaller model, or a smaller quantization of this one (Q4_K_M or below), would fit the card."})
+    if mode in ("tight", "no"):
+        notes.append({"code": "tight",
+                      "text": f"The model takes most of this computer's memory ({gb(hw.ram_mb)}), so the system may be "
+                              "moving memory to disk while it runs.",
+                      "fix": "Close other programs, or pick a smaller model."})
+    if not notes:
+        expected = default_tps(size, mode if mode in ("gpu", "cpu") else "cpu", hw)
+        if measured * 2 < expected:
+            notes.append({"code": "below_estimate",
+                          "text": f"It ran at {measured} tokens/s; computers like this one usually manage about {expected}.",
+                          "fix": "Other programs may be busy, or a power-saving mode may be slowing the computer down. "
+                                 "Close them and run the speed test again."})
+    return notes
 
 
 def verdict(tps: int) -> str:
@@ -600,15 +640,19 @@ def check_model_speed(path: Path, size: int, hw: Hw) -> int:
         say(f"{S.RED}The model did not load or the test failed.{S.R} The model may be too big for this machine.")
         return 1
     v = verdict(tps)
+    notes = diagnose_speed(tps, size, hw)
     state_update({
         "measured_tps": tps,
         "eff_bw": tps * max(size // 1048576, 1),
         "eff_mode": fit(size, hw),
+        "speed_notes": json.dumps(notes),
     })
     say(f"{S.GREEN}✔{S.R} Generation speed: {S.B}{tps} t/s{S.R}  {verdict_label(v)}")
     say({"smooth": "  Smooth for chat. You could try a bigger model with --check-updates.",
          "usable": "  Usable. Replies take a moment; a smaller model would feel snappier."}.get(
         v, "  Slow on this machine. Run model-setup again and pick a smaller model."))
+    for n in notes:
+        say(f"  {S.YELLOW}▲{S.R} {n['text']} {S.D}{n['fix']}{S.R}")
     return 0
 
 

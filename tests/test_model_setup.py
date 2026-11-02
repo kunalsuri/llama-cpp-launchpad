@@ -815,6 +815,64 @@ class TestBench(Base):
             self.assertEqual(ms.check_model_speed(Path("m.gguf"), size, h), 2)
 
 
+class TestSpeedDiagnosis(Base):
+    """After a slow speed test: say why, from facts this computer can check, never a generic guess."""
+    GB = 1073741824
+
+    def codes(self, measured, size, hw):
+        return [d["code"] for d in ms.diagnose_speed(measured, size, hw)]
+
+    def test_a_graphics_card_that_llama_cpp_cannot_use(self):
+        h = self.hw(ram=32768, vram=8192, kind="nvidia", usable=False)
+        notes = ms.diagnose_speed(4, 4 * self.GB, h)
+        self.assertEqual([d["code"] for d in notes], ["gpu_unused"])
+        self.assertIn("cannot use your graphics card", notes[0]["text"])
+        self.assertIn("Get llama.cpp", notes[0]["fix"])
+        h = self.hw(ram=32768)
+        h.other_gpu = "AMD Radeon RX 7800 XT"
+        self.assertIn("gpu_unused", self.codes(4, 4 * self.GB, h), "an AMD card without the Vulkan build counts too")
+
+    def test_a_model_too_big_for_the_graphics_card_runs_on_the_processor(self):
+        h = self.hw(ram=65536, vram=4096, kind="nvidia", usable=True)
+        notes = ms.diagnose_speed(6, 6 * self.GB, h)
+        self.assertEqual([d["code"] for d in notes], ["not_on_gpu"])
+        self.assertIn("4 GB", notes[0]["text"])
+
+    def test_a_model_that_barely_fits_memory(self):
+        self.assertEqual(self.codes(2, 11 * self.GB, self.hw(ram=16384)), ["tight"])
+
+    def test_slower_than_this_kind_of_computer_usually_is(self):
+        h = self.hw(ram=16384)
+        expected = ms.default_tps(2 * self.GB, "cpu", h)
+        notes = ms.diagnose_speed(expected // 4, 2 * self.GB, h)
+        self.assertEqual([d["code"] for d in notes], ["below_estimate"])
+        self.assertIn(f"about {expected}", notes[0]["text"])
+
+    def test_nothing_to_say_when_it_runs_as_expected_or_smoothly(self):
+        h = self.hw(ram=16384)
+        self.assertEqual(ms.diagnose_speed(ms.default_tps(2 * self.GB, "cpu", h), 2 * self.GB, h), [])
+        self.assertEqual(ms.diagnose_speed(40, 2 * self.GB, self.hw(ram=32768, vram=8192, kind="nvidia", usable=False)),
+                         [], "40 tokens/s is smooth: no need to explain anything")
+
+    def test_the_estimate_ignores_the_speed_measured_last_time(self):
+        """The comparison is with what this kind of computer manages, not with the last (possibly slow) test."""
+        h = self.hw(ram=16384)
+        before = ms.default_tps(2 * self.GB, "cpu", h)
+        ms.state_update({"eff_bw": 1, "eff_mode": "cpu"})
+        self.assertEqual(ms.default_tps(2 * self.GB, "cpu", h), before)
+
+    def test_the_speed_test_prints_and_saves_the_reasons(self):
+        h = self.hw(ram=32768, vram=8192, kind="nvidia", usable=False)
+        buf = io.StringIO()
+        with mock.patch.object(ms, "run_bench", return_value=3), contextlib.redirect_stdout(buf):
+            ms.check_model_speed(Path("m.gguf"), 4 * self.GB, h)
+        self.assertIn("cannot use your graphics card", buf.getvalue())
+        self.assertEqual([d["code"] for d in json.loads(ms.state_get("speed_notes"))], ["gpu_unused"])
+        with mock.patch.object(ms, "run_bench", return_value=60), contextlib.redirect_stdout(io.StringIO()):
+            ms.check_model_speed(Path("m.gguf"), 4 * self.GB, h)
+        self.assertEqual(json.loads(ms.state_get("speed_notes")), [], "a new test replaces the old reasons")
+
+
 class TestCli(Base):
     def setUp(self):
         super().setUp()

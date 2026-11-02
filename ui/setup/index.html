@@ -183,6 +183,10 @@
   .tile b { font-size: 16px; }
   .tile span { font-size: 14px; color: var(--text-2); }
 
+  .reasons { margin: 6px 0 10px; padding-left: 18px; }
+  .reasons li { margin: 4px 0; }
+  #speed-notes { margin: 18px 0 0; }
+
   /* --- Settings presets (done screen) --- */
   .settings { margin: 0 0 18px; }
   .presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
@@ -447,6 +451,7 @@
     <div class="card">
       <div class="badge-ok"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></div>
       <div class="center"><h1 id="done-title" tabindex="-1">Ready</h1><p class="sub" id="d-text"></p></div>
+      <div id="speed-notes" hidden></div>
       <div class="next" id="done-next"></div>
       <div class="next chat" id="chat-box" aria-live="polite"></div>
       <p class="center" style="margin:24px 0 0"><button class="link" id="again">Get another model</button></p>
@@ -909,6 +914,7 @@ async function done(j) {
   else if (j.bench === "skipped") text += " The speed test was skipped because llama.cpp is not installed yet.";
   else text += " The speed test could not load it; the model may be too big for this computer.";
   $("#d-text").textContent = text;
+  renderSpeedNotes(j.bench === "ok" ? j.speed_notes : []);
   const next = $("#done-next");
   $("#chat-box").replaceChildren();
   chatKey = ""; chatPre = null; chatPreset = ""; chatCtx = null;
@@ -947,6 +953,17 @@ function lookedDetails(b) {
   if (!b.looked || !b.looked.length) return null;
   return h("details", { class: "terminal" }, h("summary", {}, icon("info"), "Where it looked"),
     h("ul", { class: "looked" }, b.looked.map((l) => h("li", {}, l))));
+}
+
+// A slow speed test: the reasons model_setup.diagnose_speed found on this computer, each with what to do.
+function renderSpeedNotes(notes) {
+  const box = $("#speed-notes");
+  notes = notes || [];
+  box.hidden = !notes.length;
+  box.replaceChildren(...(notes.length ? [h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" },
+    h("b", {}, "Why it is slow"),
+    h("ul", { class: "reasons" }, notes.map((n) => h("li", {}, n.text + " ", h("span", { class: "muted" }, n.fix)))),
+    notes.some((n) => n.code === "gpu_unused") ? llamaButton("Get a build that uses it") : null))] : []));
 }
 
 // --- Settings presets: the server says which ones this llama-server can run, their exact command and memory -----

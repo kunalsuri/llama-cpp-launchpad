@@ -684,6 +684,25 @@ const scenarios = {
     if (sel.join() !== "gpu") return "aria-selected on: " + sel.join();
   },
 
+  // --- A slow speed test explains itself ----------------------------------------------------------------------
+  async "a slow speed test shows why it was slow and what to do"() {
+    const done = { state: "done", id: "o/M-GGUF|m.gguf", title: "M", bench: "ok", tps: 3,
+      speed_notes: [{ code: "gpu_unused", text: "cannot use your graphics card (RTX)", fix: "Get llama.cpp offers a build" }] };
+    const state = { ...STATE, llama: { offer: { how: "download", label: "CUDA build" } } };
+    const p = makePage({ routes: finishing(state, done) });
+    await p.start();
+    await p.advance(1000);
+    const t = p.text("speed-notes");
+    if (!t.includes("Why it is slow") || !t.includes("cannot use your graphics card") || !t.includes("Get llama.cpp offers a build"))
+      return "the reasons are not shown: " + t;
+    if (!p.button("speed-notes", "Get a build that uses it")) return "no way to act on a graphics card that is not used";
+    const fast = makePage({ routes: finishing(state, { ...done, tps: 40, speed_notes: [] }) });
+    await fast.start();
+    await fast.advance(1000);
+    if (fast.text("speed-notes").includes("Why it is slow")) return "a fast run still explains slowness";
+    if (!fast.el("speed-notes").hidden) return "an empty reasons box is shown";
+  },
+
   // --- Settings presets on the done screen ----------------------------------------------------------------------
   async "the done screen offers presets with their memory, and Start sends the one picked"() {
     const posts = [];
