@@ -221,6 +221,15 @@
   .next { margin-top: 24px; }
   .next > p { margin: 0 0 8px; font-size: 14px; color: var(--text-2); }
   .next > p + .cmd + p { margin-top: 16px; }
+  .next:empty { display: none; }
+  .next .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
+  .next .actions:empty { display: none; }
+  .next .notice { margin-bottom: 14px; }
+  .notice .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  a.btn { text-decoration: none; }
+  pre.log { margin: 8px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+    font-size: 12px; line-height: 1.5; padding: 10px 12px; border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); }
+  ul.looked { margin: 8px 0 0; padding-left: 18px; font-size: 13px; color: var(--text-2); }
 
   /* --- Installed tools --- */
   .tool { margin-top: 12px; }
@@ -418,6 +427,7 @@
       <div class="badge-ok"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></div>
       <div class="center"><h1 id="done-title" tabindex="-1">Ready</h1><p class="sub" id="d-text"></p></div>
       <div class="next" id="done-next"></div>
+      <div class="next chat" id="chat-box" aria-live="polite"></div>
       <p class="center" style="margin:24px 0 0"><button class="link" id="again">Get another model</button></p>
     </div>
   </section>
@@ -869,7 +879,8 @@ async function done(j) {
   else text += " The speed test could not load it; the model may be too big for this computer.";
   $("#d-text").textContent = text;
   const next = $("#done-next");
-  const tip = { mac: "Or double-click scripts/mac/serve.command in Finder.", windows: "Or double-click scripts\\win\\serve.bat in File Explorer." }[S.os];
+  $("#chat-box").replaceChildren();
+  chatModel = j.id || lastId;
   if (!S.llama_server) {
     const li = S.llama_install || {};
     next.replaceChildren(
@@ -877,11 +888,127 @@ async function done(j) {
       li.install_cmd ? cmdRow(li.install_cmd) : h("p", { class: "note", style: "margin:0" }, li.install || "See the README for install steps."),
       h("p", {}, "Then start chatting with:"), cmdRow(S.serve_cmd));
   } else {
-    next.replaceChildren(h("p", {}, "To start chatting, run this from the project folder:"), cmdRow(S.serve_cmd),
-      tip ? h("p", { class: "muted", style: "margin-top:10px" }, tip) : null);
+    let d = null;
+    if (chatModel) try { d = await api("/api/chat?id=" + encodeURIComponent(chatModel)); } catch (e) {}
+    renderChatStart(next, d && d.preview);
+    if (d && d.chat && ["starting", "running"].includes(d.chat.state)) { renderChat(d.chat); pollChat(); }
   }
   show("v-done");
   say(text);
+}
+
+// --- Start chatting: the setup page runs llama-server for this model (utils/chat_server.py) ---------------------
+let chatModel = "", chatTimer = null, chatGen = 0;
+const SERVE_TIP = { mac: "Or double-click scripts/mac/serve.command in Finder.", windows: "Or double-click scripts\\win\\serve.bat in File Explorer." };
+
+function serveFromTerminal() {
+  return terminalDetails([{ label: "Or pick the model and interface from a menu in a terminal" + (SERVE_TIP[S.os] ? " (" + SERVE_TIP[S.os].replace(/^Or d/, "or d").replace(/\.$/, "") + ")" : "") + ":", cmd: S.serve_cmd }]);
+}
+
+function busyText(b) {
+  return "Port " + b.port + " is in use by " + (b.used_by || "another program (it could not be identified)") + ".";
+}
+function lookedDetails(b) {
+  if (!b.looked || !b.looked.length) return null;
+  return h("details", { class: "terminal" }, h("summary", {}, icon("info"), "Where it looked"),
+    h("ul", { class: "looked" }, b.looked.map((l) => h("li", {}, l))));
+}
+
+// The first view of the chat controls: what it will run, or why it cannot run yet. The server decides both (rule 3).
+function renderChatStart(next, pv) {
+  const kids = [];
+  if (!pv) {                                         // not a model this page offered (e.g. a terminal download)
+    kids.push(h("p", {}, "To start chatting, run this from the project folder:"), cmdRow(S.serve_cmd),
+      SERVE_TIP[S.os] ? h("p", { class: "muted", style: "margin-top:10px" }, SERVE_TIP[S.os]) : null);
+  } else if (pv.missing) {
+    kids.push(h("p", { class: "note" }, pv.missing));
+  } else {
+    if (pv.busy) {
+      kids.push(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" },
+        h("b", {}, busyText(pv.busy)), pv.busy.free_port ? " Port " + pv.busy.free_port + " is free." : " No free port was found near it.")),
+        h("div", { class: "actions" }, pv.busy.free_port ? h("button", { class: "btn", onclick: () => startChat(pv.busy.free_port) },
+          icon("chat"), "Start on port " + pv.busy.free_port) : null),
+        lookedDetails(pv.busy));
+    } else {
+      kids.push(h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => startChat() }, icon("chat"), "Start chatting")),
+        h("p", { class: "cmd-label" }, "It runs:"), cmdRow(pv.cmd),
+        h("p", { class: "muted", style: "margin-top:10px" }, "It runs while this setup page is open. You can stop it here."));
+    }
+    kids.push(serveFromTerminal());
+  }
+  next.replaceChildren(...kids.filter(Boolean));
+}
+
+async function startChat(port) {
+  const body = { id: chatModel };
+  if (port) body.port = port;
+  $("#done-next").replaceChildren(serveFromTerminal() || "");
+  let r;
+  try { r = await api("/api/chat/start", body); } catch (e) { r = { error: UNREACHABLE }; }
+  if (r.error) return renderChatRefused(r);
+  renderChat(r);
+  pollChat();
+}
+
+function renderChatRefused(r) {
+  const b = r.port_busy;
+  $("#chat-box").replaceChildren(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, r.error)),
+    h("div", { class: "actions" }, b && b.free_port ? h("button", { class: "btn", onclick: () => startChat(b.free_port) }, icon("chat"), "Start on port " + b.free_port)
+      : h("button", { class: "btn ghost", onclick: () => startChat() }, "Try again")),
+    b ? lookedDetails(b) : null);
+  say(r.error);
+}
+
+function chatLog(c, open) {
+  if (!c.log || !c.log.length) return null;
+  return h("details", { class: "terminal", open: open ? "" : null }, h("summary", {}, icon("terminal"), "llama-server's output"),
+    h("pre", { class: "log" }, c.log.slice(-60).join("\n")));
+}
+
+function stopButton(after) {
+  return h("button", { class: "btn ghost", onclick: async () => {
+    let r;
+    try { r = await api("/api/chat/stop", {}); } catch (e) { return; }
+    after(r);
+  } }, "Stop");
+}
+
+function renderChat(c) {
+  const box = $("#chat-box");
+  const cmd = c.cmd ? [h("p", { class: "cmd-label" }, "Running:"), cmdRow(c.cmd)] : [];
+  const again = (label) => h("button", { class: "btn", onclick: () => startChat(c.port) }, icon("chat"), label);
+  const stopped = (r) => { chatGen++; renderChat(r); };
+  if (c.state === "starting") {
+    box.replaceChildren(h("p", {}, h("b", {}, "Starting llama-server with " + c.model + "… "), "Loading the model can take a minute."),
+      h("div", { class: "progress busy" }, h("i", {})), h("div", { class: "actions" }, stopButton(stopped)), ...cmd, chatLog(c, false));
+  } else if (c.state === "running") {
+    box.replaceChildren(h("p", {}, h("b", {}, "The chat is running. "), c.model + " answers at " + c.url),
+      h("div", { class: "actions" }, h("a", { class: "btn", href: c.url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open the chat"),
+        stopButton(stopped)), ...cmd, chatLog(c, false));
+  } else if (c.state === "failed") {
+    box.replaceChildren(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, c.error || "llama-server stopped.")),
+      h("div", { class: "actions" }, again("Try again")), ...cmd, chatLog(c, true));
+  } else if (c.state === "stopped") {
+    box.replaceChildren(h("p", {}, "The chat server is stopped."), h("div", { class: "actions" }, again("Start chatting")));
+  } else {
+    box.replaceChildren();
+  }
+  say({ starting: "Starting the chat", running: "The chat is running", failed: c.error || "The chat failed", stopped: "The chat is stopped" }[c.state] || "");
+}
+
+function pollChat() {
+  clearTimeout(chatTimer);
+  const g = ++chatGen;
+  const tick = async () => {
+    if (g !== chatGen || view !== "v-done") return;             // left the screen, or a newer poll took over
+    let d;
+    try { d = await api("/api/chat"); } catch (e) { chatTimer = setTimeout(tick, 2000); return; }
+    if (g !== chatGen || view !== "v-done") return;
+    const c = d.chat || {};
+    renderChat(c);
+    if (c.state === "starting" || c.state === "running") chatTimer = setTimeout(tick, c.state === "starting" ? 1000 : 3000);
+  };
+  chatTimer = setTimeout(tick, 1000);
 }
 
 function fail(msgOrJob) {
@@ -1272,6 +1399,17 @@ function renderMachine() {
 function renderWarn() {
   const warn = $("#warn");
   warn.replaceChildren();
+  const c = S.chat || {};
+  if (c.state === "starting" || c.state === "running") {          // started from this page earlier: Open / Stop
+    warn.append(h("div", { class: "notice info", role: "status" }, icon("chat"), h("div", { class: "notice-body" },
+      h("b", {}, c.state === "running" ? "A chat is running with " + c.model + ". " : "A chat is starting with " + c.model + ". "),
+      h("div", { class: "actions" },
+        c.state === "running" ? h("a", { class: "btn small", href: c.url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open the chat") : null,
+        h("button", { class: "btn small ghost", onclick: async () => {
+          try { S.chat = await api("/api/chat/stop", {}); } catch (e) { return; }
+          renderWarn();
+        } }, "Stop")))));
+  }
   if (!S.llama_server) {
     const li = S.llama_install || {};
     warn.append(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" },

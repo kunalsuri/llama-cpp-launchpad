@@ -13,6 +13,7 @@ import time
 import unittest
 import unittest.mock
 import urllib.error
+import urllib.parse
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -594,6 +595,139 @@ class TestOsAwareHelp(UiBase):
             snap = self.app.snapshot()
         self.assertEqual(snap["source"], "terminal")
         self.assertEqual(snap["commands"][0]["kind"], "resume")
+
+
+FAKE_SERVER = [sys.executable, str(HERE / "fake_llama_server.py")]
+
+
+class TestChatApi(UiBase):
+    """Start chatting: /api/chat (status and what it would run), /api/chat/start and /api/chat/stop.
+    llama-server is tests/fake_llama_server.py, a real process on a free localhost port."""
+
+    def setUp(self):
+        super().setUp()
+        import test_chat_server as tcs
+        self.tcs = tcs
+        self.chat_port = tcs.free_port()
+        p = unittest.mock.patch.dict("os.environ", {"PORT": str(self.chat_port), "EXTRA_ARGS": "-c 4096"})
+        p.start()
+        self.addCleanup(p.stop)
+        self.app.chat.find_server = lambda: list(FAKE_SERVER)
+        self.addCleanup(self.app.chat.stop)
+        self.top = self.get_json("/api/recommend?use=chat")["models"][0]
+
+    def download(self):
+        self.assertEqual(self.post("/api/install", {"id": self.top["id"]})[0], 202)
+        for _ in range(100):
+            if self.app.snapshot()["state"] == "done":
+                return self.app.snapshot()
+            time.sleep(0.05)
+        self.fail(self.app.snapshot())
+
+    def chat(self, path="/api/chat"):
+        return self.get_json(path)
+
+    def wait_chat(self, *states):
+        for _ in range(400):
+            s = self.chat()["chat"]
+            if s["state"] in states:
+                return s
+            time.sleep(0.05)
+        self.fail(f"chat never reached {states}: {self.chat()}")
+
+    def test_finished_download_names_the_model_to_chat_with(self):
+        self.assertEqual(self.download()["id"], self.top["id"])
+
+    def test_preview_shows_the_exact_command_with_port_and_extra_args_from_the_environment(self):
+        self.download()
+        offer = self.app.offered[self.top["id"]]
+        model, _ = ms.local_path(offer["repo"], *offer["files"][0])
+        p = self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]))["preview"]
+        self.assertTrue(p["cmd"].endswith(f"--port {self.chat_port} -c 4096"), p["cmd"])
+        self.assertIn(str(model), p["cmd"])
+        self.assertIsNone(p["busy"])
+
+    def test_start_runs_and_stop_stops(self):
+        self.download()
+        status, body = self.post("/api/chat/start", {"id": self.top["id"]})
+        self.assertEqual(status, 202, body)
+        s = self.wait_chat("running")
+        self.assertEqual(s["url"], f"http://127.0.0.1:{self.chat_port}/")
+        self.assertEqual(s["model"], self.top["title"])
+        self.assertEqual(self.get_json("/api/state")["chat"]["state"], "running")
+        status, body = self.post("/api/chat/stop", {})
+        self.assertEqual((status, body["state"]), (200, "stopped"))
+
+    def test_a_failed_start_is_reported_with_its_log(self):
+        self.download()
+        with unittest.mock.patch.dict("os.environ", {"FAKE_LLAMA_EXIT": "1"}):
+            self.post("/api/chat/start", {"id": self.top["id"]})
+            s = self.wait_chat("failed")
+        self.assertIn("failed to load model", "\n".join(s["log"]))
+
+    def test_busy_port_is_explained_and_the_next_free_port_can_be_used(self):
+        self.download()
+        occ = self.tcs.Occupied(self)
+        with unittest.mock.patch.dict("os.environ", {"PORT": str(occ.port)}):
+            preview = self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]))["preview"]
+            self.assertEqual(preview["busy"]["port"], occ.port)
+            status, body = self.post("/api/chat/start", {"id": self.top["id"]})
+            self.assertEqual(status, 409)
+            free = body["port_busy"]["free_port"]
+            self.assertIn("OtherApp/1.0", body["error"])
+            self.assertEqual(self.post("/api/chat/start", {"id": self.top["id"], "port": free})[0], 202)
+            self.assertEqual(self.wait_chat("running")["port"], free)
+
+    def test_only_downloaded_models_that_were_offered_can_be_started(self):
+        self.assertEqual(self.post("/api/chat/start", {"id": "evil/Repo|x.gguf"})[0], 404)
+        status, body = self.post("/api/chat/start", {"id": self.top["id"]})        # offered, not downloaded
+        self.assertEqual(status, 409)
+        self.assertIn("not downloaded", body["error"])
+        self.assertEqual(self.post("/api/chat/start", {"model": "/etc/passwd"})[0], 404)   # no raw paths
+        self.assertEqual(self.app.chat.status()["state"], "idle")
+
+    def test_port_from_the_page_must_be_a_real_unprivileged_port(self):
+        self.download()
+        for bad in (0, 80, 65536, "8081", 8081.5, True):
+            with self.subTest(port=bad):
+                self.assertEqual(self.post("/api/chat/start", {"id": self.top["id"], "port": bad})[0], 400)
+
+    def test_start_and_stop_are_post_only_behind_the_token_host_and_origin_checks(self):
+        self.download()
+        for path, body in (("/api/chat/start", {"id": self.top["id"]}), ("/api/chat/stop", {})):
+            with self.subTest(path=path):
+                self.assertEqual(self.post(path, body, token=False)[0], 403)
+                self.assertEqual(self.post(path, body, headers={"Origin": "https://evil.example"})[0], 403)
+                self.assertEqual(self.call("POST", path, body, {"X-LP-Token": self.app.token}, host="evil.example")[0], 403)
+                self.assertEqual(self.call("GET", path)[0], 404, "changing things is POST only")
+        self.assertEqual(self.app.chat.status()["state"], "idle")
+
+    def test_without_llama_server_there_is_no_command_and_no_start(self):
+        """Rule 3: say what is missing instead of showing a command."""
+        self.download()
+        self.app.chat.find_server = lambda: []
+        p = self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]))["preview"]
+        self.assertNotIn("cmd", p)
+        self.assertIn("llama-server was not found", p["missing"])
+        self.assertEqual(self.post("/api/chat/start", {"id": self.top["id"]})[0], 409)
+
+    def test_closing_the_page_server_stops_the_chat_it_started(self):
+        self.download()
+        self.post("/api/chat/start", {"id": self.top["id"]})
+        self.wait_chat("running")
+        self.app.close()
+        self.assertEqual(self.app.chat.status()["state"], "stopped")
+
+    def test_who_uses_the_port_is_asked_of_the_pinned_machine_not_the_host(self):
+        """Rule 2: the lookup programs come from the (fake) probe, and the OS rules from its system."""
+        self.download()
+        occ = self.tcs.Occupied(self)
+        self.app.probe = FakeProbe("Windows", path={"netstat": r"C:\Windows\System32\netstat.exe"},
+                                   output={r"C:\Windows\System32\netstat.exe": ""})
+        with unittest.mock.patch.dict("os.environ", {"PORT": str(occ.port)}):
+            busy = self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]))["preview"]["busy"]
+        self.assertTrue(any(line.startswith("netstat:") for line in busy["looked"]), busy["looked"])
+        self.assertEqual(self.app.probe.ran[0][0], r"C:\Windows\System32\netstat.exe")
 
 
 class TestRadarOffline(UiBase):

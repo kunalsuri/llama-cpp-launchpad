@@ -170,6 +170,33 @@ function routes(job) {
   };
 }
 
+// Start chatting: a finished download of model "o/M-GGUF|m.gguf", and the chat's states as the server reports them.
+const PREVIEW = { cmd: "llama-server -m /p/models/m.gguf --port 8080", port: 8080, busy: null };
+const IDLE_CHAT = { state: "idle", log: [] };
+const STARTING = { state: "starting", cmd: PREVIEW.cmd, port: 8080, url: "http://127.0.0.1:8080/", model: "M", log: ["loading"] };
+const RUNNING = { ...STARTING, state: "running" };
+const STOPPED = { ...STARTING, state: "stopped" };
+function chatRoutes({ state = STATE, progress, chats, preview = PREVIEW, posts = [], start = STARTING, stop = STOPPED }) {
+  let i = 0;
+  const done = progress || { state: "done", id: "o/M-GGUF|m.gguf", title: "M", bench: "ok", tps: 20 };
+  let polls = 0;
+  return (path, opts, full) => {
+    if (path === "/api/state") return state;
+    if (path === "/api/progress") return progress ? done : (++polls === 1 ? DOWNLOADING : done);
+    if (path === "/api/chat" && opts && opts.method === "POST") return {};
+    if (path === "/api/chat") {
+      const chat = chats[Math.min(i++, chats.length - 1)];
+      return full.includes("id=") ? { chat, preview } : { chat };
+    }
+    if (path === "/api/chat/start" || path === "/api/chat/stop") {
+      posts.push({ path, body: JSON.parse(opts.body) });
+      i = Math.max(i, 1);
+      return path === "/api/chat/start" ? start : stop;
+    }
+    return {};
+  };
+}
+
 const scenarios = {
   async "opening the tools view during a download is not undone by progress polling"() {
     const job = { current: DOWNLOADING };
@@ -625,7 +652,126 @@ const scenarios = {
     const sel = tabs.filter((t) => t.getAttribute("aria-selected") === "true").map((t) => t.getAttribute("data-tab"));
     if (sel.join() !== "gpu") return "aria-selected on: " + sel.join();
   },
+
+  // --- Start chatting ------------------------------------------------------------------------------------------
+  async "the done screen offers Start chatting and shows the exact command it will run"() {
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT] }) });
+    await p.start();
+    await p.advance(1000);
+    if (p.visible() !== "v-done") return "expected the done screen, got " + p.visible();
+    if (!p.button("done-next", "Start chatting")) return "no Start chatting button: " + p.text("done-next");
+    if (!p.text("done-next").includes(PREVIEW.cmd)) return "the command it runs is not shown: " + p.text("done-next");
+    if (/\b(null|undefined)\b/.test(p.text("done-next"))) return "null or undefined on screen (Linux has no double-click tip): " + p.text("done-next");
+    if (!p.state.calls.includes("/api/chat?id=" + encodeURIComponent("o/M-GGUF|m.gguf"))) return "did not ask about this model: " + p.state.calls.join(" ");
+  },
+
+  async "without llama-server there is no Start chatting button, only what is missing"() {
+    const st = { ...STATE, llama_server: false };
+    const p = makePage({ routes: chatRoutes({ state: st, chats: [IDLE_CHAT] }) });
+    await p.start();
+    await p.advance(1000);
+    if (p.button("done-next", "Start chatting")) return "a Start chatting button was shown without llama-server";
+    if (!/llama\.cpp is not installed/.test(p.text("done-next"))) return "missing piece not named: " + p.text("done-next");
+  },
+
+  async "Start chatting goes starting -> running, links to the chat, and Stop stops it"() {
+    const posts = [];
+    const p = makePage({ routes: chatRoutes({ posts, chats: [IDLE_CHAT, STARTING, STARTING, RUNNING, RUNNING, STOPPED],
+      start: STARTING, stop: STOPPED }) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    if (posts[0].path !== "/api/chat/start" || posts[0].body.id !== "o/M-GGUF|m.gguf") return "start request: " + JSON.stringify(posts);
+    if (!/Starting/.test(p.text("chat-box"))) return "no starting state: " + p.text("chat-box");
+    if (!p.button("chat-box", "Stop")) return "no Stop while starting";
+    await p.advance(3000);
+    const box = p.el("chat-box");
+    if (!/running/i.test(p.text("chat-box"))) return "never showed running: " + p.text("chat-box");
+    const link = findEl(box, (e) => e.getAttribute && e.getAttribute("href") === RUNNING.url);
+    if (!link || !/Open the chat/.test(link.text())) return "no link to the chat at " + RUNNING.url;
+    if (link.getAttribute("rel") !== "noopener noreferrer") return "chat link must not get access to this page";
+    p.button("chat-box", "Stop").click(); await p.settle();
+    if (posts[posts.length - 1].path !== "/api/chat/stop") return "Stop did not ask the server: " + JSON.stringify(posts);
+    if (!/stopped/i.test(p.text("chat-box"))) return "not shown as stopped: " + p.text("chat-box");
+    if (!p.button("chat-box", "Start chatting")) return "cannot start again after stopping";
+  },
+
+  async "a failed start shows why and llama-server's own output"() {
+    const failed = { state: "failed", error: "llama-server stopped before it was ready (exit code 1).", cmd: PREVIEW.cmd,
+      log: ["fake llama-server args", "error: failed to load model 'm.gguf'"], model: "M" };
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT, STARTING, failed], start: STARTING }) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    await p.advance(3000);
+    const t = p.text("chat-box");
+    if (!t.includes("exit code 1")) return "no reason: " + t;
+    if (!t.includes("failed to load model")) return "no log: " + t;
+    if (!p.button("chat-box", "Try again")) return "no way to try again";
+  },
+
+  async "a busy port says what is using it and offers the next free port"() {
+    const posts = [];
+    const busy = { ...PREVIEW, busy: { port: 8080, used_by: "Docker Desktop.exe (process 5150)", free_port: 8081,
+      looked: ["HTTP on 127.0.0.1:8080: no answer over HTTP", "netstat: process 5150 listens on 8080"] } };
+    const p = makePage({ routes: chatRoutes({ posts, preview: busy, chats: [IDLE_CHAT, STARTING], start: STARTING }) });
+    await p.start();
+    await p.advance(1000);
+    const t = p.text("done-next");
+    if (!t.includes("Port 8080 is in use by Docker Desktop.exe (process 5150)")) return "does not say who uses the port: " + t;
+    if (p.button("done-next", "Start chatting")) return "offered to start on the busy port";
+    const alt = p.button("done-next", "Start on port 8081");
+    if (!alt) return "next free port not offered: " + t;
+    alt.click(); await p.settle();
+    if (posts[0].body.port !== 8081) return "did not start on 8081: " + JSON.stringify(posts);
+  },
+
+  async "a start refused by the server shows its message instead of hanging"() {
+    const refused = { error: "Port 8080 is already in use by ollama (process 7). Port 8081 is free.",
+      port_busy: { port: 8080, used_by: "ollama (process 7)", free_port: 8081, looked: [] } };
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT], start: refused }) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    const t = p.text("chat-box");
+    if (!t.includes("already in use by ollama")) return "refusal not shown: " + t;
+    if (!p.button("chat-box", "Start on port 8081")) return "next free port not offered after refusal: " + t;
+  },
+
+  async "leaving the done screen stops asking about the chat"() {
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT, STARTING, RUNNING], start: STARTING }) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    await p.advance(2000);
+    await p.click("tools-btn");
+    const before = p.state.calls.filter((c) => c.startsWith("/api/chat")).length;
+    await p.advance(20000);
+    const after = p.state.calls.filter((c) => c.startsWith("/api/chat")).length;
+    if (after !== before) return `kept polling the chat from another view: ${after - before} requests`;
+  },
+
+  async "a chat that is running when the page opens can be opened or stopped from the first screen"() {
+    const posts = [];
+    const st = { ...STATE, chat: RUNNING };
+    const p = makePage({ routes: chatRoutes({ state: st, progress: { state: "idle" }, posts, chats: [RUNNING], stop: STOPPED }) });
+    await p.start();
+    if (p.visible() !== "v-use") return "expected the first screen, got " + p.visible();
+    const warn = p.el("warn");
+    const link = findEl(warn, (e) => e.getAttribute && e.getAttribute("href") === RUNNING.url);
+    if (!link) return "no link to the running chat: " + p.text("warn");
+    p.button("warn", "Stop").click(); await p.settle();
+    if (!posts.some((x) => x.path === "/api/chat/stop")) return "Stop did not ask the server";
+    if (findEl(p.el("warn"), (e) => e.getAttribute && e.getAttribute("href") === RUNNING.url)) return "still offers the stopped chat";
+  },
 };
+
+function findEl(root, pred) {
+  if (!root) return null;
+  if (pred(root)) return root;
+  for (const c of root.children || []) { const f = findEl(c, pred); if (f) return f; }
+  return null;
+}
 
 (async () => {
   let failed = 0;

@@ -1,0 +1,292 @@
+"""llama-cpp-launchpad: "Start chatting" on the setup page. Runs llama-server for one model and reports on it.
+
+The command is the one the serve scripts run (serve.sh / serve.ps1):
+    llama-server -m MODEL --port PORT [EXTRA_ARGS split on whitespace]
+with PORT (default 8080) and EXTRA_ARGS read from the page server's environment when the command is built.
+
+Rules this file keeps:
+  - it only ever stops the one process it started itself (no "stop every llama-server", unlike KILL_EXISTING)
+  - stopping works the same on Windows, macOS and Linux: Popen.terminate(), then Popen.kill() if it does not exit
+    (TerminateProcess on Windows; no POSIX signals are named here)
+  - a busy port is never taken over: it says what is using it (and where it looked) and offers the next free port
+  - no command is shown or run unless llama-server was found
+
+Python standard library only. Writes nothing to disk: the server's output is kept in memory (the last lines).
+"""
+from __future__ import annotations
+
+import collections
+import http.client
+import json
+import os
+import platform
+import re
+import shlex
+import subprocess
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+DEFAULT_PORT = 8080
+LOG_LINES = 200
+NOT_FOUND = ("llama-server was not found (looked in LLAMA_SERVER, your PATH, this project's bin folder and "
+             "~/llama.cpp/build/bin), so a chat cannot be started yet.")
+
+
+# --- Ports ---------------------------------------------------------------------------------------
+class _BindProbe(HTTPServer):
+    # Windows: SO_REUSEADDR would let us bind a port another program is listening on, so never set it there.
+    # Elsewhere set it as llama-server's HTTP library does, so a port in TIME_WAIT is not reported as busy.
+    allow_reuse_address = platform.system() != "Windows"
+
+
+def port_in_use(port: int) -> bool:
+    """Is something listening on 127.0.0.1:port, or would llama-server fail to bind it?"""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=0.5)
+    try:
+        conn.connect()
+        return True
+    except OSError:
+        pass
+    finally:
+        conn.close()
+    try:
+        probe = _BindProbe(("127.0.0.1", port), BaseHTTPRequestHandler)
+    except OSError:
+        return True
+    probe.server_close()
+    return False
+
+
+def next_free_port(port: int) -> int:
+    for p in range(port + 1, min(port + 101, 65536)):
+        if not port_in_use(p):
+            return p
+    return 0
+
+
+def http_get(port: int, path: str, timeout: float = 1.0):
+    """GET http://127.0.0.1:port/path, directly (never through a proxy) -> (status, headers, body) or None."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        conn.request("GET", path)
+        r = conn.getresponse()
+        return r.status, r, r.read(65536)
+    except (OSError, http.client.HTTPException):
+        return None
+    finally:
+        conn.close()
+
+
+def http_probe(port: int) -> tuple:
+    """What answers HTTP on the port? -> (description or "", what was checked, for the log)."""
+    where = f"HTTP on 127.0.0.1:{port}"
+    props = http_get(port, "/props")
+    if props is None:
+        return "", f"{where}: no answer over HTTP"
+    if props[0] == 200:
+        try:
+            model = json.loads(props[2]).get("model_path") or ""
+        except (ValueError, AttributeError):
+            model = ""
+        if model:
+            name = re.split(r"[\\/]", model)[-1]
+            return f"another llama-server (model {name})", f"{where}: a llama-server answered /props"
+    server = props[1].getheader("Server") or ""
+    if server:
+        return f"a web server that calls itself {server}", f"{where}: answered, Server header {server!r}"
+    return "a program that answers HTTP", f"{where}: answered, but did not say what it is"
+
+
+def _lsof(port, which, run):
+    exe = which("lsof")
+    if not exe:
+        return "", "lsof: not found"
+    out = run([exe, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpc"])
+    pid = re.search(r"(?m)^p(\d+)$", out)
+    cmd = re.search(r"(?m)^c(.+)$", out)
+    if pid and cmd:
+        return f"{cmd.group(1).strip()} (process {pid.group(1)})", f"lsof: process {pid.group(1)} listens on {port}"
+    return "", f"lsof: no listener on {port} that this user can see"
+
+
+def _ss(port, which, run):
+    exe = which("ss")
+    if not exe:
+        return "", "ss: not found"
+    out = run([exe, "-ltnpH", f"sport = :{port}"])
+    m = re.search(r'users:\(\("([^"]+)",pid=(\d+)', out)
+    if m:
+        return f"{m.group(1)} (process {m.group(2)})", f"ss: process {m.group(2)} listens on {port}"
+    return "", f"ss: no listener on {port} that this user can see"
+
+
+def _netstat(port, which, run):
+    exe = which("netstat")
+    if not exe:
+        return "", "netstat: not found"
+    pid = ""
+    for line in run([exe, "-ano", "-p", "TCP"]).splitlines():
+        cols = line.split()
+        if len(cols) >= 5 and cols[0].upper() == "TCP" and cols[1].endswith(f":{port}") and cols[3].upper() == "LISTENING":
+            pid = cols[4]
+            break
+    if not pid:
+        return "", f"netstat: no listener on {port}"
+    tasklist = which("tasklist")
+    if not tasklist:
+        return f"process {pid}", f"netstat: process {pid} listens on {port}; tasklist: not found"
+    m = re.match(r'\s*"([^"]+)"', run([tasklist, "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"]))
+    name = m.group(1) if m else ""
+    return (f"{name} (process {pid})" if name else f"process {pid}"), f"netstat: process {pid} listens on {port}"
+
+
+def who_uses(port: int, system: str, which, run) -> tuple:
+    """-> (what is using the port, or "" if nothing could tell; every place looked, hit or miss)."""
+    http_desc, looked_http = http_probe(port)
+    looked = [looked_http]
+    finders = [_netstat] if system == "Windows" else [_lsof] + ([_ss] if system == "Linux" else [])
+    proc_desc = ""
+    for find in finders:
+        proc_desc, note = find(port, which, run)
+        looked.append(note)
+        if proc_desc:
+            break
+    return ", ".join(d for d in (proc_desc, http_desc) if d), looked
+
+
+# --- The server this page runs -----------------------------------------------------------------
+class ChatServer:
+    """One llama-server started by the setup page. All state lives here; status() is safe to call any time."""
+
+    def __init__(self, find_server, environ=None, system=None, which=None, run=None):
+        import shutil
+        from hardware import run_cmd
+        self.find_server = find_server                     # -> argument list that starts llama-server, or []
+        self.environ = os.environ if environ is None else environ
+        self._system = system                               # "Windows" | "Darwin" | "Linux", or a function giving it
+        self.which = which or shutil.which
+        self.run = run or run_cmd
+        self.lock = threading.Lock()
+        self.proc = None
+        self.job = {"state": "idle"}
+        self.log = collections.deque(maxlen=LOG_LINES)
+
+    @property
+    def system(self) -> str:
+        s = self._system() if callable(self._system) else self._system
+        return s or platform.system()
+
+    # --- the command ---
+    def port(self, chosen=None) -> int:
+        if chosen:
+            return int(chosen)
+        value = str(self.environ.get("PORT") or "").strip()
+        return int(value) if value.isdigit() and 0 < int(value) < 65536 else DEFAULT_PORT
+
+    def command(self, model: Path, port=None) -> tuple:
+        port = self.port(port)
+        extra = str(self.environ.get("EXTRA_ARGS") or "").split()
+        return list(self.find_server()) + ["-m", str(model), "--port", str(port)] + extra, port
+
+    def shown(self, argv: list) -> str:
+        return subprocess.list2cmdline(argv) if self.system == "Windows" else shlex.join(argv)
+
+    def preview(self, model: Path, port=None, check_port: bool = True) -> dict:
+        """What Start chatting would run, and whether its port is free. Starts nothing."""
+        argv, port = self.command(model, port)
+        if not self.find_server():
+            return {"missing": NOT_FOUND, "port": port}
+        out = {"cmd": self.shown(argv), "port": port, "busy": None}
+        if check_port and port_in_use(port):
+            out["busy"] = self.busy(port)
+        return out
+
+    def busy(self, port: int) -> dict:
+        used_by, looked = who_uses(port, self.system, self.which, self.run)
+        return {"port": port, "used_by": used_by, "looked": looked, "free_port": next_free_port(port)}
+
+    # --- status ---
+    def status(self) -> dict:
+        with self.lock:
+            out = dict(self.job)
+            out["log"] = list(self.log)
+        return out
+
+    def _set(self, **kw) -> None:
+        with self.lock:
+            self.job.update(kw)
+
+    # --- start / stop ---
+    def start(self, model: Path, title: str, port=None) -> tuple:
+        """-> (http status, body). 202 when llama-server was started (it is then "starting" until it answers)."""
+        with self.lock:
+            if self.job.get("state") in ("starting", "running"):
+                return 409, {"error": "A chat server is already running. Stop it first.", **self.job}
+        if not self.find_server():
+            return 409, {"error": NOT_FOUND, "missing": True}
+        argv, port = self.command(model, port)
+        if port_in_use(port):
+            busy = self.busy(port)
+            who = busy["used_by"] or "another program (it could not be identified)"
+            free = f" Port {busy['free_port']} is free." if busy["free_port"] else ""
+            return 409, {"error": f"Port {port} is already in use by {who}.{free}", "port_busy": busy}
+        env = dict(os.environ)
+        libdir = str(Path(argv[0]).parent)           # release builds keep their libraries next to llama-server
+        for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+            env[var] = libdir + (os.pathsep + env[var] if env.get(var) else "")
+        try:
+            proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    env=env, text=True, encoding="utf-8", errors="replace")
+        except OSError as e:
+            return 500, {"error": f"llama-server could not be started: {e}"}
+        with self.lock:
+            self.proc = proc
+            self.log.clear()
+            self.job = {"state": "starting", "cmd": self.shown(argv), "port": port, "model": title,
+                        "url": f"http://127.0.0.1:{port}/", "pid": proc.pid, "started": time.time()}
+        threading.Thread(target=self._read, args=(proc,), daemon=True).start()
+        threading.Thread(target=self._watch, args=(proc, port), daemon=True).start()
+        return 202, self.status()
+
+    def _read(self, proc) -> None:
+        for line in proc.stdout:
+            with self.lock:
+                self.log.append(line.rstrip("\r\n"))
+
+    def _watch(self, proc, port: int) -> None:
+        while True:
+            code = proc.poll()
+            with self.lock:
+                if proc is not self.proc:
+                    return
+                state = self.job.get("state")
+            if code is not None:
+                if state in ("starting", "running"):
+                    why = ("llama-server stopped unexpectedly" if state == "running"
+                           else "llama-server stopped before it was ready")
+                    self._set(state="failed", exit_code=code, error=f"{why} (exit code {code}). Its output is below.")
+                return
+            if state == "starting":
+                answer = http_get(port, "/health")
+                if answer and answer[0] == 200:
+                    self._set(state="running")
+            time.sleep(0.25)
+
+    def stop(self) -> dict:
+        """Stop the llama-server this page started, and nothing else."""
+        with self.lock:
+            proc = self.proc
+            if proc is None or self.job.get("state") not in ("starting", "running"):
+                return dict(self.job, log=list(self.log))
+            self.job["state"] = "stopping"
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(10)
+        self._set(state="stopped", exit_code=proc.poll())
+        return self.status()

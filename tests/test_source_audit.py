@@ -19,7 +19,9 @@ ALLOWED_IMPORTS = {"__future__", "argparse", "csv", "ctypes", "datetime", "io", 
                    "re", "shutil", "subprocess", "sys", "urllib", "pathlib", "winreg",
                    "http", "secrets", "threading", "webbrowser",     # ui_server.py: the localhost-only setup page
                    "glob", "importlib",   # detect_tools.py: file-system globbing and installed-package metadata (read-only)
-                   "hardware", "hf_discover", "ui_server", "detect_tools", "hf_radar", "model_setup"}      # local modules
+                   "collections", "shlex", "time",   # chat_server.py: in-memory log, quoting the shown command, polling
+                   "hardware", "hf_discover", "ui_server", "detect_tools", "hf_radar", "model_setup",
+                   "chat_server"}      # local modules
 LOCAL_MODULES = {p.stem for p in SOURCES}
 ALLOWED_HOSTS = {"huggingface.co", "github.com", "127.0.0.1"}   # 127.0.0.1 = the setup page itself (ui_server.py)
 # The only programs the script may start (always as an argument list, never through a shell).
@@ -116,6 +118,16 @@ class TestSourceAudit(unittest.TestCase):
         writers = re.findall(r"(write_text|write_bytes|open\([^)]*[\"'][wa]b?[\"']|os\.replace|shutil\.(move|copy|rmtree)|os\.remove|unlink|rmdir)", text)
         found = {w[0].split("(")[0] for w in writers}
         self.assertFalse({"shutil.rmtree", "os.remove", "unlink", "rmdir"} & found, f"unexpected deletes: {found}")
+
+    def test_chat_server_runs_only_llama_server_and_port_lookups_and_writes_nothing(self):
+        """chat_server.py starts the llama-server it was given, and asks the OS's own tools who holds a busy port.
+        It keeps the server's output in memory: no files are written."""
+        text = (UTILS / "chat_server.py").read_text(encoding="utf-8")
+        self.assertEqual(set(re.findall(r'which\("([^"]+)"\)', text)), {"lsof", "ss", "netstat", "tasklist"})
+        self.assertEqual(text.count("subprocess.Popen("), 1, "one place starts a process: llama-server")
+        writes = re.findall(r"(write_text|write_bytes|\bopen\(|os\.replace|shutil\.(?:move|copy|rmtree)|unlink|os\.remove)", text)
+        self.assertEqual(writes, [], "chat_server.py writes no files")
+        self.assertNotRegex(text, r"https?://(?!127\.0\.0\.1)", "talks only to localhost")
 
     def test_no_obfuscation(self):
         for path in SOURCES:

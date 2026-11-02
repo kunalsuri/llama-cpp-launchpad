@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import chat_server
 import detect_tools
 import hf_discover
 
@@ -150,6 +151,15 @@ class App:
         self.offered = {}                       # id -> what may be downloaded; the browser can only pick from this
         self.lock = threading.Lock()
         self.job = {"state": "idle"}
+        # "Start chatting": the one llama-server this page runs. It follows self.probe, which tests replace.
+        self.chat = chat_server.ChatServer(
+            find_server=lambda: [p] if (p := ms.find_llama_server()) else [],
+            system=lambda: self.probe.system, which=lambda name: self.probe.which(name),
+            run=lambda args, timeout=20: self.probe.run(args, timeout))
+
+    def close(self) -> None:
+        """The page server is stopping: stop the chat it started (and nothing else)."""
+        self.chat.stop()
 
     # --- read-only answers ------------------------------------------------------------------------
     def state(self) -> dict:
@@ -167,7 +177,36 @@ class App:
             "installed": ms.state_get("installed"),
             "os": os_name(self.probe.system),
             "serve_cmd": serve_cmd(self.probe.system),
+            "chat": self.chat.status(),
         }
+
+    # --- Start chatting ------------------------------------------------------------------------------
+    def _chat_model(self, mid):
+        """An offered, fully downloaded model -> (path of its first part, title), or (http status, error body)."""
+        offer = self.offered.get(mid) if isinstance(mid, str) else None
+        if not offer:
+            return None, (404, {"error": "Unknown model. Reload the page."})
+        paths = [self.ms.local_path(offer["repo"], f, size) for f, size in offer["files"]]
+        if not all(have for _, have in paths):
+            return None, (409, {"error": f"{offer['title']} is not downloaded yet. Get it first."})
+        return (paths[0][0], offer["title"]), None
+
+    def chat_status(self, mid=None) -> dict:
+        out = {"chat": self.chat.status()}
+        if mid:
+            found, _ = self._chat_model(mid)
+            if found:
+                out["preview"] = self.chat.preview(found[0])
+        return out
+
+    def chat_start(self, body: dict):
+        port = body.get("port")
+        if port is not None and (type(port) is not int or not 1024 <= port <= 65535):
+            return 400, {"error": "The port must be a number from 1024 to 65535."}
+        found, refused = self._chat_model(body.get("id"))
+        if refused:
+            return refused
+        return self.chat.start(found[0], found[1], port)
 
     def tools(self, ids=None, verbose: bool = False) -> dict:
         """Which of Ollama / llama.cpp / LM Studio / Unsloth are installed: detect_tools.py, plus next-step hints."""
@@ -326,6 +365,7 @@ class App:
                 return 409, {"error": "Another download is running."}
             self.job = {
                 "state": "downloading",
+                "id": mid,                      # the page starts the chat with this model when it is done
                 "title": offer["title"],
                 "done": 0,
                 "total": offer["size"],
@@ -470,6 +510,8 @@ def make_handler(app: App):
                 return self.reply(200, app.radar_history(base=base))
             if url.path == "/api/progress":
                 return self.reply(200, app.snapshot())
+            if url.path == "/api/chat":
+                return self.reply(200, app.chat_status((q.get("id") or [None])[0]))
             if url.path == "/api/tools":
                 ids = q.get("tool") or None
                 if ids and any(i not in detect_tools.SPECS for i in ids):
@@ -501,9 +543,17 @@ def make_handler(app: App):
                 body = json.loads(raw or b"{}")
             except (ValueError, OSError):
                 return self.reply(400, {"error": "bad request"})
-            if urlparse(self.path).path == "/api/install" and isinstance(body, dict) and isinstance(body.get("id"), str):
+            path = urlparse(self.path).path
+            if not isinstance(body, dict):
+                return self.reply(400, {"error": "bad request"})
+            if path == "/api/install" and isinstance(body.get("id"), str):
                 code, out = app.start_install(body["id"])
                 return self.reply(code, out)
+            if path == "/api/chat/start":
+                code, out = app.chat_start(body)
+                return self.reply(code, out)
+            if path == "/api/chat/stop":
+                return self.reply(200, app.chat.stop())
             self.reply(404, {"error": "not found"})
 
     return Handler
@@ -537,4 +587,6 @@ def serve(ms, port: int = 8765, open_browser: bool = True, initial_hash: str = "
         pass
     finally:
         server.server_close()
+        if hasattr(app, "close"):
+            app.close()                 # stops the llama-server this page started, if any
     return 0

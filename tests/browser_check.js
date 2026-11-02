@@ -50,8 +50,43 @@ async function openView(page, hash) {
   await page.waitForLoadState("networkidle");
 }
 
+// Start chatting, end to end against the real server and a fake llama-server: done -> Start -> running -> Stop.
+async function chatFlow(browser) {
+  for (const [width, height, label] of [WIDTHS[0], WIDTHS[2]]) {
+    const name = `${label} ${width}px: start chatting, open the chat, stop it`;
+    const page = await browser.newPage({ viewport: { width, height } });
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(String(e)));
+    let problems = [];
+    try {
+      await openView(page, "");
+      await page.getByRole("button", { name: /General chat/ }).click();
+      await page.waitForSelector("#v-pick:not([hidden]) .pick");
+      await page.getByRole("button", { name: /Get this model|Use this model/ }).click();
+      await page.waitForSelector("#v-done:not([hidden])", { timeout: 15000 });
+      await page.getByRole("button", { name: "Start chatting" }).click();
+      const link = page.getByRole("link", { name: "Open the chat" });
+      await link.waitFor({ timeout: 30000 });
+      problems = problems.concat(await inspect(page, label === "phone"));
+      const href = await link.getAttribute("href");
+      const health = await page.request.get(href + "health");
+      if (health.status() !== 200) problems.push(`the chat link ${href} does not answer: ${health.status()}`);
+      await page.locator("#chat-box").getByRole("button", { name: "Stop" }).click();
+      await page.locator("#chat-box").getByText("The chat server is stopped.").waitFor({ timeout: 15000 });
+      problems = problems.concat(await inspect(page, label === "phone"));
+    } catch (e) { problems.push("flow broke: " + e.message.split("\n")[0]); }
+    check(name, [...problems, ...errors].join("; "));
+    await page.close();
+  }
+}
+
 (async () => {
   const browser = await chromium.launch();
+  if (process.argv[3] === "chat") {
+    try { await chatFlow(browser); } finally { await browser.close(); }
+    for (const r of results) console.log(JSON.stringify(r));
+    process.exit(results.length && results.every((r) => r.ok) ? 0 : 1);
+  }
   try {
     for (const [width, height, label] of WIDTHS) {
       for (const scheme of ["light", "dark"]) {
