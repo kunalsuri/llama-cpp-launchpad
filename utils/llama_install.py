@@ -33,6 +33,12 @@ from urllib.parse import urlparse
 
 REPO = "ggml-org/llama.cpp"
 LATEST_RELEASE = f"https://api.github.com/repos/{REPO}/releases/latest"
+# llama.cpp publishes binaries in bNNNN releases marked prerelease (release-publish.yml); /releases/latest skips
+# those and returns the stable vX.Y release, whose only asset is nightly-tag.txt naming the bNNNN release with the
+# binaries (make-release.yml). So: follow that tag, else take the newest listed release that has a build.
+RELEASE_BY_TAG = f"https://api.github.com/repos/{REPO}/releases/tags/{{tag}}"
+RELEASES_LIST = f"https://api.github.com/repos/{REPO}/releases?per_page=20"
+NIGHTLY_TAG_FILE = "nightly-tag.txt"
 DOWNLOAD_PREFIX = f"https://github.com/{REPO}/releases/download/"
 REDIRECT_HOSTS = ("github.com",)
 REDIRECT_SUFFIX = ".githubusercontent.com"
@@ -144,6 +150,66 @@ def _open(url: str, accept: str = "*/*"):
 def http_json(url: str):
     with _open(url, "application/vnd.github+json") as r:
         return json.loads(r.read().decode("utf-8"))
+
+
+def http_text(url: str) -> str:
+    """A small text asset of the official release (nightly-tag.txt): at most 1 KB is read."""
+    if not download_url_ok(url):
+        raise urllib.error.URLError(f"not an official llama.cpp release download: {url}")
+    with _open(url) as r:
+        return r.read(1024).decode("utf-8", "replace")
+
+
+def find_release(fetch_json, fetch_text, system, machine, gpu_kind, variant="auto", cuda_max="", say=None) -> dict:
+    """The release and archive(s) for this machine -> plan(), with "release" naming where it came from.
+    1. /releases/latest (has the build only if llama.cpp ever publishes binaries there);
+    2. the bNNNN release its nightly-tag.txt names (llama.cpp's current layout);
+    3. the newest of the last 20 releases, prereleases included, that has a build for this machine."""
+    say = say or (lambda _msg: None)
+
+    def try_release(rel, label):
+        p = plan(rel if isinstance(rel, dict) else {}, system, machine, gpu_kind, variant, cuda_max=cuda_max)
+        if "error" not in p:
+            p["release"] = label
+        return p
+
+    say(f"Looking up the latest release: {LATEST_RELEASE}")
+    latest = fetch_json(LATEST_RELEASE)
+    first = try_release(latest, str((latest or {}).get("tag_name") or "latest"))
+    if "error" not in first:
+        return first
+    latest = latest if isinstance(latest, dict) else {}
+    stable = str(latest.get("tag_name") or "")
+    tag_asset = None
+    for a in latest.get("assets") or []:
+        if isinstance(a, dict) and a.get("name") == NIGHTLY_TAG_FILE and download_url_ok(str(a.get("browser_download_url", ""))):
+            tag_asset = a
+    if tag_asset:
+        try:
+            nightly = fetch_text(tag_asset["browser_download_url"]).strip()
+        except (OSError, ValueError):
+            nightly = ""
+        if re.fullmatch(r"b\d+", nightly):
+            say(f"Release {stable} has no binaries itself; its {NIGHTLY_TAG_FILE} names {nightly}")
+            try:
+                found = try_release(fetch_json(RELEASE_BY_TAG.format(tag=nightly)), f"{nightly} (the binaries of {stable})")
+                if "error" not in found:
+                    return found
+            except (OSError, ValueError):
+                pass
+        else:
+            say(f"{NIGHTLY_TAG_FILE} of {stable} does not name a bNNNN release: ignored")
+    say(f"Looking through the latest releases: {RELEASES_LIST}")
+    try:
+        listing = fetch_json(RELEASES_LIST)
+    except (OSError, ValueError):
+        listing = []
+    for rel in listing if isinstance(listing, list) else []:
+        if isinstance(rel, dict) and not rel.get("draft"):
+            found = try_release(rel, str(rel.get("tag_name") or "?"))
+            if "error" not in found:
+                return found
+    return {"error": f"No recent llama.cpp release has a build for this computer. {first['error']}"}
 
 
 def fetch_file(url: str, dest: Path, on_progress=None) -> None:
@@ -283,7 +349,7 @@ class Installer:
     """One install at a time. status() is safe to call from any thread."""
 
     def __init__(self, bin_dir, system, machine, gpu_kind, find, which, fetch_json=http_json, fetch_file=fetch_file,
-                 version=server_version, run=_run_streaming, on_done=None, cuda_max=lambda: ""):
+                 version=server_version, run=_run_streaming, on_done=None, cuda_max=lambda: "", fetch_text=http_text):
         # bin_dir, system and machine may be values or functions returning them (the setup page passes functions,
         # so they follow the machine description it was given).
         self._bin, self._system, self._machine = bin_dir, system, machine
@@ -291,6 +357,7 @@ class Installer:
         self.cuda_max = cuda_max                # function: newest CUDA the NVIDIA driver runs ("12.4"), or ""
         self.find, self.which = find, which     # find(): the llama-server the serve scripts would use, or ""
         self.fetch_json, self.fetch_file, self.version, self.run = fetch_json, fetch_file, version, run
+        self.fetch_text = fetch_text
         self.on_done = on_done                  # called after a successful install, before "done" is reported
         self.lock = threading.Lock()
         self.job = {"state": "idle"}
@@ -386,16 +453,15 @@ class Installer:
             self._fail(f"The install stopped: {e}. Nothing was installed.")
 
     def _download_and_install(self, variant) -> None:
-        self._say(f"Looking up the latest release: {LATEST_RELEASE}")
         try:
-            release = self.fetch_json(LATEST_RELEASE)
+            p = find_release(self.fetch_json, self.fetch_text, self.system, self.machine, self.gpu_kind(), variant,
+                             cuda_max=self.cuda_max(), say=self._say)
         except (OSError, ValueError) as e:
             return self._fail(f"The page could not reach GitHub to find the latest llama.cpp release ({e}). "
                               "Check your connection and try again.")
-        p = plan(release if isinstance(release, dict) else {}, self.system, self.machine, self.gpu_kind(), variant,
-                 cuda_max=self.cuda_max())
         if "error" in p:
             return self._fail(p["error"])
+        self._say(f"Using release {p['release']}")
         total = sum(int(a.get("size") or 0) for a in p["assets"])
         self._set(state="downloading", kind=p["kind"], tag=p["tag"], why=p["why"], done=0, total=total,
                   files=[a["name"] for a in p["assets"]])

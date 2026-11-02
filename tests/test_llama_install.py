@@ -201,9 +201,20 @@ class InstallBase(unittest.TestCase):
     def make(self, **kw):
         args = dict(bin_dir=self.bin, system=self.system, machine=self.machine, gpu_kind=lambda: self.gpu,
                     find=self.find, which=lambda n: self.paths.get(n, ""), fetch_json=self.fetch_json,
-                    fetch_file=self.fetch_file, version=fake_version, run=self.run_brew)
+                    fetch_text=self.fetch_text, fetch_file=self.fetch_file, version=fake_version, run=self.run_brew)
         args.update(kw)
         return li.Installer(**args)
+
+    # The real shape (llama.cpp's make-release.yml / release-publish.yml): /releases/latest is the stable vX.Y release,
+    # whose only asset is nightly-tag.txt naming the bNNNN release that holds the binaries. bNNNN releases are
+    # prereleases, so /releases/latest never returns them.
+    STABLE = {"tag_name": "v0.8.0", "prerelease": False, "assets": [{
+        "name": "nightly-tag.txt", "size": 6, "digest": None, "content_type": "text/plain",
+        "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/v0.8.0/nightly-tag.txt"}]}
+
+    def stable_points_to(self, tag="b7777"):
+        self.api = {li.LATEST_RELEASE: self.STABLE, li.RELEASE_BY_TAG.format(tag="b7777"): self.release}
+        self.texts = {self.STABLE["assets"][0]["browser_download_url"]: tag + "\n"}
 
     def find(self):
         """As hardware.find_llama_server: a copy found earlier in the lookup order (LLAMA_SERVER, PATH) wins over bin/."""
@@ -212,9 +223,21 @@ class InstallBase(unittest.TestCase):
         exe = self.bin / ("llama-server.exe" if self.system == "Windows" else "llama-server")
         return str(exe) if exe.is_file() else ""
 
+    api = None                           # url -> JSON; None: /releases/latest is self.release (the old shape)
+    texts = {}
+
     def fetch_json(self, url):
-        self.assertEqual(url, li.LATEST_RELEASE)
-        return self.release
+        self.asked = getattr(self, "asked", []) + [url]
+        if self.api is None:
+            self.assertEqual(url, li.LATEST_RELEASE)
+            return self.release
+        if url not in self.api:
+            raise OSError(f"404 {url}")
+        return self.api[url]
+
+    def fetch_text(self, url):
+        self.asked = getattr(self, "asked", []) + [url]
+        return self.texts[url]
 
     def fetch_file(self, url, dest, on_progress=None):
         data = self.archives[url]
@@ -283,6 +306,44 @@ class TestInstall(InstallBase):
         self.assertEqual(sorted(p.name for p in self.bin.iterdir()),
                          ["cublas64_12.dll", "cudart64_12.dll", "ggml-cuda.dll", "llama-server.exe"])
         self.assertEqual(s["kind"], "cuda")
+
+    def test_the_stable_release_leads_to_its_binaries(self):
+        """Regression (review on #3): /releases/latest is the stable vX.Y release with only nightly-tag.txt; the
+        binaries are in the bNNNN prerelease it names. The installer must follow it, not report "no build"."""
+        self.stable_points_to("b7777")
+        self.serve("llama-b7777-bin-ubuntu-x64.tar.gz", tar_bytes("llama-b7777", {"llama-server": b"FAKE-OK"}))
+        self.inst.start()
+        s = self.wait("done", "failed")
+        self.assertEqual(s["state"], "done", s)
+        self.assertEqual(self.asked[:3], [li.LATEST_RELEASE, self.STABLE["assets"][0]["browser_download_url"],
+                                          li.RELEASE_BY_TAG.format(tag="b7777")])
+        self.assertIn("v0.8.0", "\n".join(s["log"]))
+
+    def test_without_a_usable_nightly_tag_the_newest_release_with_a_build_is_used(self):
+        for text in (None, "../../evil\n", ""):
+            with self.subTest(nightly=text):
+                stable = json.loads(json.dumps(self.STABLE))
+                if text is None:
+                    stable["assets"] = []
+                self.api = {li.LATEST_RELEASE: stable,
+                            li.RELEASES_LIST: [{"tag_name": "b9", "draft": True, "assets": self.release["assets"]},
+                                               {"tag_name": "v0.8.0", "assets": []}, self.release]}
+                self.texts = {self.STABLE["assets"][0]["browser_download_url"]: text or ""}
+                self.archives.clear()
+                self.serve("llama-b7777-bin-ubuntu-x64.tar.gz", tar_bytes("llama-b7777", {"llama-server": b"FAKE-OK"}))
+                self.inst = self.make()
+                self.inst.start()
+                s = self.wait("done", "failed")
+                self.assertEqual((s["state"], s["tag"]), ("done", "b7777"), s)
+                self.assertNotIn(li.RELEASE_BY_TAG.format(tag="../../evil"), self.asked)
+
+    def test_no_release_with_a_build_says_so(self):
+        self.api = {li.LATEST_RELEASE: self.STABLE, li.RELEASES_LIST: [self.STABLE]}
+        self.texts = {self.STABLE["assets"][0]["browser_download_url"]: "b404\n"}
+        self.inst.start()
+        s = self.wait("done", "failed")
+        self.assertEqual(s["state"], "failed")
+        self.assertIn("no build", s["error"])
 
     def test_it_writes_only_inside_bin(self):
         self.serve("llama-b7777-bin-ubuntu-x64.tar.gz", tar_bytes("llama-b7777", {"llama-server": b"FAKE-OK"}))
