@@ -225,18 +225,29 @@ class ChatServer:
 
     # --- start / stop ---
     def start(self, model: Path, title: str, port=None) -> tuple:
-        """-> (http status, body). 202 when llama-server was started (it is then "starting" until it answers)."""
+        """-> (http status, body). 202 when llama-server was started (it is then "starting" until it answers).
+        The slot is reserved under the lock first, so two Start requests at once cannot both launch a server."""
         with self.lock:
-            if self.job.get("state") in ("starting", "running"):
+            state = self.job.get("state")
+            if state in ("starting", "running", "reserved"):
                 return 409, {"error": "A chat server is already running. Stop it first.", **self.job}
+            if state == "stopping":
+                return 409, {"error": "The chat server is still stopping. Try again in a moment.", **self.job}
+            previous = dict(self.job)
+            self.job = {"state": "reserved"}
+
+        def release(code, body):
+            with self.lock:
+                self.job = previous
+            return code, body
         if not self.find_server():
-            return 409, {"error": NOT_FOUND, "missing": True}
+            return release(409, {"error": NOT_FOUND, "missing": True})
         argv, port = self.command(model, port)
         if port_in_use(port):
             busy = self.busy(port)
             who = busy["used_by"] or "another program (it could not be identified)"
             free = f" Port {busy['free_port']} is free." if busy["free_port"] else ""
-            return 409, {"error": f"Port {port} is already in use by {who}.{free}", "port_busy": busy}
+            return release(409, {"error": f"Port {port} is already in use by {who}.{free}", "port_busy": busy})
         env = dict(os.environ)
         libdir = str(Path(argv[0]).parent)           # release builds keep their libraries next to llama-server
         for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
@@ -245,7 +256,10 @@ class ChatServer:
             proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     env=env, text=True, encoding="utf-8", errors="replace")
         except OSError as e:
-            return 500, {"error": f"llama-server could not be started: {e}"}
+            error = f"llama-server could not be started: {e}"
+            with self.lock:
+                self.job = {"state": "failed", "error": error, "cmd": self.shown(argv), "port": port, "model": title}
+            return 500, {"error": error}
         with self.lock:
             self.proc = proc
             self.log.clear()

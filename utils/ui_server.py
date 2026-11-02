@@ -105,6 +105,8 @@ OFF_PATH = {
                 "Add its folder to your PATH.",
 }
 START_CMD = {"ollama": "ollama serve", "lmstudio": "lms server start"}      # llama.cpp: the project's serve script
+CHAT_BUSY = ("reserved", "starting", "running", "stopping")             # chat_server.ChatServer states
+INSTALL_BUSY = ("checking", "downloading", "verifying", "installing")    # llama_install.Installer states
 # What the page says when model_setup.download() fails, by the reason it gives (model_setup.last_download_error).
 DOWNLOAD_ERRORS = {
     "": "The download did not finish (disk space or connection). Press Try again to resume, or resume it from a terminal.",
@@ -171,6 +173,8 @@ class App:
         self.bin_dir = detect_tools.ROOT / "bin"
         self.llama_version = llama_install.server_version       # `llama-server --version`: does the copy found run?
         self.installer = self.make_installer()
+        # Starting a chat and installing llama.cpp exclude each other: an install replaces the files a chat runs.
+        self.run_lock = threading.Lock()
 
     def make_installer(self, **kw):
         args = dict(bin_dir=lambda: self.bin_dir, system=lambda: self.probe.system, machine=lambda: self.probe.machine,
@@ -205,11 +209,13 @@ class App:
         variant = body.get("variant", "auto")
         if variant not in ("auto", "cpu"):
             return 400, {"error": "bad request"}
-        if self.chat.status().get("state") in ("starting", "running"):
-            return 409, {"error": "Stop the chat first: llama-server cannot be replaced while it is running."}
-        if not self.llama_info()["need"]:
-            return 409, {"error": "A working llama-server that can use this computer is already installed."}
-        return self.installer.start(variant)
+        with self.run_lock:
+            if self.chat.status().get("state") in CHAT_BUSY:
+                return 409, {"error": "Stop the chat first, and wait until it has stopped: llama-server cannot be "
+                                      "replaced while it is running."}
+            if not self.llama_info()["need"]:
+                return 409, {"error": "A working llama-server that can use this computer is already installed."}
+            return self.installer.start(variant)
 
     def close(self) -> None:
         """The page server is stopping: stop the chat it started (and nothing else)."""
@@ -260,10 +266,13 @@ class App:
         port = body.get("port")
         if port is not None and (type(port) is not int or not 1024 <= port <= 65535):
             return 400, {"error": "The port must be a number from 1024 to 65535."}
-        found, refused = self._chat_model(body.get("id"))
-        if refused:
-            return refused
-        return self.chat.start(found[0], found[1], port)
+        with self.run_lock:
+            if self.installer.status().get("state") in INSTALL_BUSY:
+                return 409, {"error": "llama.cpp is being installed. Start the chat when the install has finished."}
+            found, refused = self._chat_model(body.get("id"))
+            if refused:
+                return refused
+            return self.chat.start(found[0], found[1], port)
 
     def tools(self, ids=None, verbose: bool = False) -> dict:
         """Which of Ollama / llama.cpp / LM Studio / Unsloth are installed: detect_tools.py, plus next-step hints."""

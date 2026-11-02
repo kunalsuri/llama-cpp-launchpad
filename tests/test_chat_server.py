@@ -204,6 +204,52 @@ class TestLifecycle(Base):
         self.wait("running")
 
 
+class TestStartIsAtomic(Base):
+    """Regression (review on #3): the idle check and Popen were not one step, so two Start clicks (two tabs) could
+    both start a server; the first was then out of reach of Stop and of the page's shutdown."""
+
+    def test_two_starts_at_once_start_one_server(self):
+        real = chat_server.port_in_use
+
+        def slow(port):
+            time.sleep(0.3)                     # both requests are past the state check before either starts
+            return real(port)
+        results = []
+        with unittest.mock.patch.object(chat_server, "port_in_use", slow), \
+                unittest.mock.patch.object(chat_server.subprocess, "Popen", wraps=subprocess.Popen) as popen:
+            ports = [free_port(), free_port()]      # different ports: the busy-port check cannot hide the race
+            threads = [threading.Thread(target=lambda p=p: results.append(self.cs.start(self.model, "M", p)[0])) for p in ports]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(30)
+        self.assertEqual(sorted(results), [202, 409])
+        self.assertEqual(popen.call_count, 1, "only one llama-server was started")
+
+    def test_no_start_while_stopping(self):
+        self.cs.job = {"state": "stopping"}
+        self.addCleanup(setattr, self.cs, "job", {"state": "idle"})
+        code, body = self.cs.start(self.model, "M")
+        self.assertEqual(code, 409)
+        self.assertIn("stopping", body["error"])
+
+    def test_a_start_that_cannot_launch_releases_its_reservation(self):
+        for failure in ("busy-port", "popen"):
+            with self.subTest(failure=failure):
+                if failure == "busy-port":
+                    with unittest.mock.patch.object(chat_server, "port_in_use", return_value=True), \
+                            unittest.mock.patch.object(self.cs, "busy", return_value={"used_by": "", "free_port": 0, "looked": []}):
+                        self.assertEqual(self.cs.start(self.model, "M")[0], 409)
+                else:
+                    with unittest.mock.patch.object(chat_server.subprocess, "Popen", side_effect=OSError("exec format error")):
+                        code, body = self.cs.start(self.model, "M")
+                    self.assertEqual(code, 500)
+                    self.assertEqual(self.cs.status()["state"], "failed")
+                self.assertEqual(self.cs.start(self.model, "M")[0], 202, "the next start is not blocked")
+                self.wait("running")
+                self.cs.stop()
+
+
 class TestOnlyItsOwnServer(Base):
     """Never copy serve.sh's KILL_EXISTING (it stops every llama-server on the machine)."""
 

@@ -866,6 +866,52 @@ class TestLlamaApi(UiBase):
         self.assertTrue(s["gpu_unused"])
         self.assertEqual(s["mode"], "cpu")
 
+    def test_chat_and_install_exclude_each_other(self):
+        """Regression (review on #3): a chat could start (from another tab) while an install replaced the files it
+        runs, and an install could start while a chat was still stopping. One lock covers both, every busy state counts."""
+        self.found_server = ""
+        for state in ("checking", "downloading", "verifying", "installing"):
+            with self.subTest(install=state):
+                self.app.installer.job = {"state": state}
+                code, body = self.app.chat_start({"id": "anything"})
+                self.assertEqual(code, 409)
+                self.assertIn("being installed", body["error"])
+        self.app.installer.job = {"state": "idle"}
+        for state in ("reserved", "starting", "running", "stopping"):
+            with self.subTest(chat=state):
+                self.app.chat.job = {"state": state}
+                self.assertEqual(self.post("/api/llama/install", {})[0], 409)
+        self.app.chat.job = {"state": "idle"}
+
+    def test_a_chat_start_and_an_install_at_the_same_moment_do_not_both_run(self):
+        gate, entered = threading.Event(), threading.Event()
+
+        def slow_start(model, title, port=None):
+            entered.set()
+            gate.wait(5)
+            self.app.chat.job = {"state": "starting"}
+            return 202, {}
+        self.app.chat.start = slow_start
+        self.addCleanup(setattr, self.app.chat, "job", {"state": "idle"})
+        offer = {"repo": "o/M-GGUF", "files": [("m.gguf", 4)], "size": 4, "title": "M"}
+        self.app.offered["o/M-GGUF|m.gguf"] = offer
+        unittest.mock.patch.object(self.app, "_chat_model", return_value=((Path("m.gguf"), "M"), None)).start()
+        self.addCleanup(unittest.mock.patch.stopall)
+        out = {}
+        t = threading.Thread(target=lambda: out.setdefault("chat", self.app.chat_start({"id": "o/M-GGUF|m.gguf"})))
+        t.start()
+        entered.wait(5)
+        u = threading.Thread(target=lambda: out.setdefault("install", self.app.llama_install({})))
+        u.start()
+        time.sleep(0.3)
+        self.assertTrue(u.is_alive(), "the install did not wait for the chat start to finish")
+        gate.set()
+        t.join(10)
+        u.join(10)
+        self.assertEqual(out["chat"][0], 202)
+        self.assertEqual(out["install"][0], 409)
+        self.assertEqual(self.app.installer.status()["state"], "idle")
+
     def test_the_installer_is_told_the_drivers_cuda_version(self):
         self.app.hw = ms.Hw(ram_mb=16384, cores=8, gpu_kind="nvidia", gpu_name="G", vram_mb=8192, gpu_usable=False)
         self.app.hw.cuda_version = "12.4"
