@@ -161,11 +161,73 @@ def who_uses(port: int, system: str, which, run) -> tuple:
     return ", ".join(d for d in (proc_desc, http_desc) if d), looked
 
 
+# --- Settings: plain-language presets that map to real llama-server flags --------------------------------
+# A preset is only offered when this llama-server lists every flag it needs in its --help (rule 3). Tokens are
+# about 3/4 of an English word, so 4096 tokens hold roughly 3,000 words.
+PRESETS = {
+    "auto": {"label": "Let llama.cpp decide", "ctx": 0,
+             "text": "llama.cpp picks the context length and how much goes on the graphics card."},
+    "short": {"label": "Short chats", "ctx": 4096,
+              "text": "Remembers about 3,000 words of the conversation. Uses the least memory."},
+    "long": {"label": "Long documents", "ctx": 32768, "type_k": "q8_0",
+             "text": "Remembers about 24,000 words, so you can paste long documents. Uses much more memory; "
+                     "part of it is stored at 8 bits to save space."},
+    "fast": {"label": "Fastest replies", "ctx": 2048, "gpu": True,
+             "text": "A short memory, and every layer of the model on the graphics card."},
+}
+PRESET_ORDER = ("short", "long", "fast", "auto")
+FLAG_FOR = {"-c": "--ctx-size", "-ctk": "--cache-type-k", "-ngl": "--n-gpu-layers"}
+CTX_MIN, CTX_MAX = 256, 1048576
+
+
+def server_flags(help_text: str) -> set:
+    """The long flags a llama-server --help lists. Only the flag column is read (the leading parts of a line, split
+    on wide gaps, that start with a dash: "-m,    --model FNAME      model path"), so a flag named in another
+    flag's description does not count."""
+    flags = set()
+    for line in (help_text or "").splitlines():
+        for part in re.split(r"\s{2,}", line.strip()):
+            if not part.startswith("-"):
+                break
+            flags.update(re.findall(r"(?<![\w-])--[a-z][a-z0-9-]*", part))
+    return flags
+
+
+def default_preset(flags: set) -> str:
+    """A build with --fit sizes the context to the memory it finds: let it. Without --fit, -c 0 means the model's
+    whole trained context (often 128k tokens), so ask for a short one instead, when -c can be set at all."""
+    return "short" if "--ctx-size" in flags and "--fit" not in flags else "auto"
+
+
+def settings_args(preset: str, flags: set, ctx=None, gpu: bool = False, train_ctx: int = 0) -> tuple:
+    """-> (arguments for llama-server, "") or ([], why this preset cannot run here). ctx: a context length the
+    user typed, replacing the preset's. train_ctx: the model's own limit (from its header); never asked to exceed it."""
+    p = PRESETS.get(preset)
+    if p is None:
+        return [], f"Unknown setting {preset!r}."
+    if ctx is not None and (type(ctx) is not int or not CTX_MIN <= ctx <= CTX_MAX):
+        return [], f"The context length must be a whole number from {CTX_MIN} to {CTX_MAX}."
+    if p.get("gpu") and not gpu:
+        return [], "This needs a graphics card that llama.cpp can use, and none was found."
+    args = []
+    want = ctx if ctx is not None else p["ctx"]
+    if want:
+        args += ["-c", str(min(want, train_ctx) if train_ctx else want)]
+    if p.get("type_k"):
+        args += ["-ctk", p["type_k"]]
+    if p.get("gpu"):
+        args += ["-ngl", "99"]
+    missing = [FLAG_FOR[a] for a in args if a in FLAG_FOR and FLAG_FOR[a] not in flags]
+    if missing:
+        return [], f"This llama-server does not list {', '.join(missing)} in its --help (it may be an old build)."
+    return args, ""
+
+
 # --- The server this page runs -----------------------------------------------------------------
 class ChatServer:
     """One llama-server started by the setup page. All state lives here; status() is safe to call any time."""
 
-    def __init__(self, find_server, environ=None, system=None, which=None, run=None):
+    def __init__(self, find_server, environ=None, system=None, which=None, run=None, help=None):
         import shutil
         from hardware import run_cmd
         self.find_server = find_server                     # -> argument list that starts llama-server, or []
@@ -173,6 +235,8 @@ class ChatServer:
         self._system = system                               # "Windows" | "Darwin" | "Linux", or a function giving it
         self.which = which or shutil.which
         self.run = run or run_cmd
+        self.help = help or (lambda argv: run_cmd(argv + ["--help"], 20))      # -> llama-server --help output
+        self._flags = {}                                    # llama-server argv -> its flags (asked once per program)
         self.lock = threading.Lock()
         self.proc = None
         self.job = {"state": "idle"}
@@ -190,17 +254,29 @@ class ChatServer:
         value = str(self.environ.get("PORT") or "").strip()
         return int(value) if value.isdigit() and 0 < int(value) < 65536 else DEFAULT_PORT
 
-    def command(self, model: Path, port=None) -> tuple:
+    def help_flags(self) -> set:
+        """The flags this llama-server lists in --help (asked once per program; none when it is not found)."""
+        argv = tuple(self.find_server())
+        if not argv:
+            return set()
+        if argv not in self._flags:
+            self._flags[argv] = server_flags(self.help(list(argv)))
+        return self._flags[argv]
+
+    def command(self, model: Path, port=None, settings=None) -> tuple:
+        """settings (from settings_args) go before EXTRA_ARGS: for a flag given twice the last wins, so flags the
+        user set in the environment keep winning, as in the serve scripts."""
         port = self.port(port)
         extra = str(self.environ.get("EXTRA_ARGS") or "").split()
-        return list(self.find_server()) + ["-m", str(model), "--port", str(port)] + extra, port
+        return (list(self.find_server()) + ["-m", str(model), "--port", str(port)] + list(settings or []) + extra,
+                port)
 
     def shown(self, argv: list) -> str:
         return subprocess.list2cmdline(argv) if self.system == "Windows" else shlex.join(argv)
 
-    def preview(self, model: Path, port=None, check_port: bool = True) -> dict:
+    def preview(self, model: Path, port=None, check_port: bool = True, settings=None) -> dict:
         """What Start chatting would run, and whether its port is free. Starts nothing."""
-        argv, port = self.command(model, port)
+        argv, port = self.command(model, port, settings)
         if not self.find_server():
             return {"missing": NOT_FOUND, "port": port}
         out = {"cmd": self.shown(argv), "port": port, "busy": None}
@@ -224,7 +300,7 @@ class ChatServer:
             self.job.update(kw)
 
     # --- start / stop ---
-    def start(self, model: Path, title: str, port=None) -> tuple:
+    def start(self, model: Path, title: str, port=None, settings=None) -> tuple:
         """-> (http status, body). 202 when llama-server was started (it is then "starting" until it answers).
         The slot is reserved under the lock first, so two Start requests at once cannot both launch a server."""
         with self.lock:
@@ -242,7 +318,7 @@ class ChatServer:
             return code, body
         if not self.find_server():
             return release(409, {"error": NOT_FOUND, "missing": True})
-        argv, port = self.command(model, port)
+        argv, port = self.command(model, port, settings)
         if port_in_use(port):
             busy = self.busy(port)
             who = busy["used_by"] or "another program (it could not be identified)"

@@ -91,7 +91,7 @@ class TestReadHeader(unittest.TestCase):
 
     def test_bad_files_say_what_is_wrong(self):
         data = (FIX / "llama-shape.gguf").read_bytes()
-        cases = {b"PK\x03\x04" + data[4:]: "not a GGUF file",
+        cases = {b"PK\x03\x04" + data[4:]: "not a GGUF file", b"x": "not a GGUF file", b"": "not a GGUF file",
                  data[:4] + struct.pack("<I", 99) + data[8:]: "version 99",
                  data[:200]: "ends inside its header"}
         for blob, want in cases.items():

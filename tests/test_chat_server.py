@@ -133,7 +133,81 @@ class TestCommand(Base):
         self.assertEqual(cs.status()["state"], "idle")
 
 
+HELP = (HERE / "fixtures" / "llama_server_help.txt").read_text(encoding="utf-8")
+OLD_HELP = "-m,    --model FNAME       model path\n--port PORT                 port to listen\n"
+
+
+class TestSettings(Base):
+    """Presets for the page: a plain-language choice that maps to real llama-server flags, offered only when this
+    llama-server lists those flags in its --help (rule 3: installed is not the same as can run)."""
+
+    def test_flags_are_read_from_the_flag_column_of_help(self):
+        flags = chat_server.server_flags(HELP)
+        for f in ("--ctx-size", "--cache-type-k", "--n-gpu-layers", "--fit", "--mmproj", "--models-preset", "--port"):
+            self.assertIn(f, flags)
+        self.assertNotIn("--option", flags, "words in the description column are not flags")
+        self.assertEqual(chat_server.server_flags(OLD_HELP), {"--model", "--port"})
+
+    def test_each_preset_maps_to_flags(self):
+        flags = chat_server.server_flags(HELP)
+        args = lambda p, **kw: chat_server.settings_args(p, flags, **kw)  # noqa: E731
+        self.assertEqual(args("short"), (["-c", "4096"], ""))
+        self.assertEqual(args("long"), (["-c", "32768", "-ctk", "q8_0"], ""))
+        self.assertEqual(args("fast", gpu=True), (["-c", "2048", "-ngl", "99"], ""))
+        self.assertEqual(args("auto"), ([], ""))
+
+    def test_context_never_exceeds_what_the_model_was_trained_on(self):
+        flags = chat_server.server_flags(HELP)
+        self.assertEqual(chat_server.settings_args("long", flags, train_ctx=8192)[0][:2], ["-c", "8192"])
+        self.assertEqual(chat_server.settings_args("short", flags, train_ctx=8192)[0], ["-c", "4096"])
+
+    def test_a_context_typed_by_the_user_replaces_the_presets(self):
+        flags = chat_server.server_flags(HELP)
+        self.assertEqual(chat_server.settings_args("long", flags, ctx=12000)[0], ["-c", "12000", "-ctk", "q8_0"])
+        for bad in (100, 10 ** 8, "4096", True):
+            with self.subTest(ctx=bad):
+                _, why = chat_server.settings_args("short", flags, ctx=bad)
+                self.assertIn("context length must be a whole number", why)
+
+    def test_a_preset_that_cannot_run_here_says_what_is_missing(self):
+        flags = chat_server.server_flags(OLD_HELP)
+        args, why = chat_server.settings_args("short", flags)
+        self.assertEqual(args, [])
+        self.assertIn("--ctx-size", why)
+        _, why = chat_server.settings_args("fast", chat_server.server_flags(HELP), gpu=False)
+        self.assertIn("graphics card", why)
+        _, why = chat_server.settings_args("nonsense", chat_server.server_flags(HELP))
+        self.assertIn("Unknown setting", why)
+
+    def test_default_lets_llama_cpp_fit_the_model_only_when_it_can(self):
+        """Builds with --fit pick a context that fits memory; older ones load the model's whole trained context
+        with -c 0, which can be 128k tokens and run out of memory. Those get the short preset."""
+        self.assertEqual(chat_server.default_preset(chat_server.server_flags(HELP)), "auto")
+        no_fit = chat_server.server_flags(HELP.replace("--fit [on|off]", "--nofit-here"))
+        self.assertEqual(chat_server.default_preset(no_fit), "short")
+        self.assertEqual(chat_server.default_preset(set()), "auto", "nothing can be set: nothing is passed")
+
+    def test_settings_go_before_extra_args_so_the_users_own_flags_win(self):
+        self.env.update(PORT="9123", EXTRA_ARGS="-c 1000")
+        argv, _ = self.cs.command(self.model, settings=["-c", "4096"])
+        self.assertEqual(argv[-4:], ["-c", "4096", "-c", "1000"])
+
+    def test_help_flags_come_from_the_real_program_and_are_remembered(self):
+        cs = chat_server.ChatServer(find_server=lambda: list(SERVER), environ=self.env, system=self.system,
+                                    which=lambda n: "")
+        self.assertIn("--ctx-size", cs.help_flags())
+        cs.find_server = lambda: []
+        self.assertEqual(cs.help_flags(), set(), "no llama-server: no flags")
+
+
 class TestLifecycle(Base):
+    def test_the_chosen_settings_reach_llama_server(self):
+        code, body = self.cs.start(self.model, "My Model", settings=["-c", "2048", "-ngl", "99"])
+        self.assertEqual(code, 202, body)
+        self.assertIn("-c 2048 -ngl 99", body["cmd"])
+        s = self.wait("running")
+        self.assertTrue(any('"-c", "2048", "-ngl", "99"' in line for line in s["log"]), s["log"])
+
     def test_starting_then_running_then_stopped(self):
         self.env["EXTRA_ARGS"] = "-c 4096"
         code, body = self.cs.start(self.model, "My Model")

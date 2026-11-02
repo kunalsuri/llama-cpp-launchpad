@@ -92,7 +92,11 @@ def read_header(stream, limit: int = MAX_HEADER_BYTES, stop_at_tokenizer: bool =
     read past and stored as None. stop_at_tokenizer: stop at the first "tokenizer." key once the model's shape is
     known (converters write the shape first), so a network read does not fetch a whole vocabulary."""
     r = _Reader(stream, limit)
-    if r.read(4) != MAGIC:
+    try:
+        magic = r.read(4)
+    except GGUFError:
+        magic = b""                                          # shorter than the magic itself
+    if magic != MAGIC:
         raise GGUFError("not a GGUF file")
     version = r.unpack("<I", 4)
     if version not in (2, 3):

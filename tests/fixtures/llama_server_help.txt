@@ -1,0 +1,263 @@
+# Flags of llama-server, from the option table in llama.cpp's tools/server/README.md (master, November 2026).
+# Printed by tests/fake_llama_server.py --help, one flag per line as llama-server --help prints them.
+-h, --help, --usage                           print usage and exit
+--version                                     show version and build info
+-cl, --cache-list                             show list of models in cache
+--completion-bash                             print source-able bash completion script for llama.cpp
+-t, --threads N                               number of CPU threads to use during generation (default: -1)
+-tb, --threads-batch N                        number of threads to use during batch and prompt processing (default: same as --threads)
+-C, --cpu-mask M                              CPU affinity mask: arbitrarily long hex. Complements cpu-range (default: "")
+-Cr, --cpu-range lo-hi                        range of CPUs for affinity. Complements --cpu-mask
+--cpu-strict <0|1>                            use strict CPU placement (default: 0)
+--prio N                                      set process/thread priority : low(-1), normal(0), medium(1), high(2), realtime(3) (default: 0)
+--poll <0...100>                              use polling level to wait for work (0 - no polling, default: 50)
+-Cb, --cpu-mask-batch M                       CPU affinity mask: arbitrarily long hex. Complements cpu-range-batch (default: same as --cpu-mask)
+-Crb, --cpu-range-batch lo-hi                 ranges of CPUs for affinity. Complements --cpu-mask-batch
+--cpu-strict-batch <0|1>                      use strict CPU placement (default: same as --cpu-strict)
+--prio-batch N                                set process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0)
+--poll-batch <0|1>                            use polling to wait for work (default: same as --poll)
+-c, --ctx-size N                              size of the prompt context (default: 0, 0 = loaded from model)
+-n, --predict, --n-predict N                  number of tokens to predict (default: -1, -1 = infinity)
+-b, --batch-size N                            logical maximum batch size (default: 2048)
+-ub, --ubatch-size N                          physical maximum batch size (default: 512)
+--keep N                                      number of tokens to keep from the initial prompt (default: 0, -1 = all)
+--swa-full                                    use full-size SWA cache (default: false)
+-fa, --flash-attn [on|off|auto]               set Flash Attention use ('on', 'off', or 'auto', default: 'auto')
+--perf, --no-perf                             whether to enable internal libllama performance timings (default: false)
+-e, --escape, --no-escape                     whether to process escapes sequences (\n, \r, \t, \', \", \\) (default: true)
+--rope-scaling {none,linear,yarn}             RoPE frequency scaling method, defaults to linear unless specified by the model
+--rope-scale N                                RoPE context scaling factor, expands context by a factor of N
+--rope-freq-base N                            RoPE base frequency, used by NTK-aware scaling (default: loaded from model)
+--rope-freq-scale N                           RoPE frequency scaling factor, expands context by a factor of 1/N
+--yarn-orig-ctx N                             YaRN: original context size of model (default: 0 = model training context size)
+--yarn-ext-factor N                           YaRN: extrapolation mix factor (default: -1.00, 0.0 = full interpolation)
+--yarn-attn-factor N                          YaRN: scale sqrt(t) or attention magnitude (default: -1.00)
+--yarn-beta-slow N                            YaRN: high correction dim or alpha (default: -1.00)
+--yarn-beta-fast N                            YaRN: low correction dim or beta (default: -1.00)
+-kvo, --kv-offload, -nkvo, --no-kv-offload    whether to enable KV cache offloading (default: enabled)
+--repack, -nr, --no-repack                    whether to enable weight repacking (default: enabled)
+--no-host                                     bypass host buffer allowing extra buffers to be used
+-ctk, --cache-type-k TYPE                     KV cache data type for K
+-ctv, --cache-type-v TYPE                     KV cache data type for V
+-dt, --defrag-thold N                         KV cache defragmentation threshold (DEPRECATED)
+--rpc SERVERS                                 comma-separated list of RPC servers (host:port)
+-lm, --load-mode MODE                         model loading mode (default: auto)
+-lzm, --lazy-mode MODE                        on-demand reading of certain tensors, for example per-layer embeddings (default: auto)
+--numa TYPE                                   attempt optimizations that help on some NUMA systems
+-dev, --device <dev1,dev2,..>                 comma-separated list of devices to use for offloading (none = don't offload)
+--list-devices                                print list of available devices and exit
+-ot, --override-tensor <tensor name pattern>=<buffer type>,... override tensor buffer type
+-cmoe, --cpu-moe                              keep all Mixture of Experts (MoE) weights in the CPU
+-ncmoe, --n-cpu-moe N                         keep the Mixture of Experts (MoE) weights of the first N layers in the CPU
+--moe-cache-mib N                             GPU cache size in MiB for the MoE experts kept in the CPU. with multiple GPUs, it is split among the
+-ncffn, --n-cpu-ffn N                         keep the dense FFN weights of the first N layers in the CPU
+-ngl, --gpu-layers, --n-gpu-layers N          max. number of layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)
+-sm, --split-mode {none,layer,row,tensor}     how to split the model across multiple GPUs, one of:
+-ts, --tensor-split N0,N1,N2,...              fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1
+-mg, --main-gpu INDEX                         the GPU to use for the model (with split-mode = none), or for intermediate results and KV (with spli
+-fit, --fit [on|off]                          whether to adjust unset arguments to fit in device memory ('on' or 'off', default: 'on')
+-fitt, --fit-target MiB0,MiB1,MiB2,...        target margin per device for --fit, comma-separated list of values, single value is broadcast across
+-fitc, --fit-ctx N                            minimum ctx size that can be set by --fit option, default: 4096
+--check-tensors                               check model tensor data for invalid values (default: false)
+--override-kv KEY=TYPE:VALUE,...              advanced option to override model metadata by key. to specify multiple overrides, either use comma-s
+--op-offload, --no-op-offload                 whether to offload host tensor operations to device (default: true)
+--lora FNAME                                  path to LoRA adapter (use comma-separated values to load multiple adapters)
+--lora-scaled FNAME:SCALE,...                 path to LoRA adapter with user defined scaling (format: FNAME:SCALE,...)
+--control-vector FNAME                        add a control vector
+--control-vector-scaled FNAME:SCALE,...       add a control vector with user defined scaling SCALE
+--control-vector-layer-range START END        layer range to apply the control vector(s) to, start and end inclusive
+-m, --model FNAME                             model path to load
+-mu, --model-url MODEL_URL                    model download url (default: unused)
+-dr, --docker-repo [<repo>/]<model>[:quant]   Docker Hub model repository. repo is optional, default to ai/. quant is optional, default to :latest
+-hf, -hfr, --hf-repo <user>/<model>[:quant]   Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back
+-hff, --hf-file FILE                          Hugging Face model file. If specified, it will override the quant in --hf-repo (default: unused)
+-hft, --hf-token TOKEN                        Hugging Face access token (default: value from HF_TOKEN environment variable)
+--log-disable                                 Log disable
+--log-file FNAME                              Log to file
+--log-jsonl, --no-log-jsonl                   Log as JSONL (one JSON object per line) to stdout, this also disables colored logging (default: disa
+--log-colors [on|off|auto]                    Set colored logging ('on', 'off', or 'auto', default: 'auto')
+-v, --verbose, --log-verbose                  Set verbosity level to infinity (i.e. log all messages, useful for debugging)
+--offline                                     Offline mode: forces use of cache, prevents network access
+-lv, --verbosity, --log-verbosity N           Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:
+--log-prefix, --no-log-prefix                 Enable prefix in log messages
+--log-timestamps, --no-log-timestamps         Enable timestamps in log messages
+--spec-draft-type-k, -ctkd, --cache-type-k-draft TYPE KV cache data type for K for the draft model
+--spec-draft-type-v, -ctvd, --cache-type-v-draft TYPE KV cache data type for V for the draft model
+--samplers SAMPLERS                           samplers that will be used for generation in the order, separated by ';'
+-s, --seed SEED                               RNG seed (default: -1, use random seed for -1)
+--sampler-seq, --sampling-seq SEQUENCE        simplified sequence for samplers that will be used (default: edskypmxt)
+--ignore-eos                                  ignore end of stream token and continue generating (implies --logit-bias EOS-inf)
+--temp, --temperature N                       temperature (default: 0.80)
+--top-k N                                     top-k sampling (default: 40, 0 = disabled)
+--top-p N                                     top-p sampling (default: 0.95, 1.0 = disabled)
+--min-p N                                     min-p sampling (default: 0.05, 0.0 = disabled)
+--top-nsigma, --top-n-sigma N                 top-n-sigma sampling (default: -1.00, -1.0 = disabled)
+--xtc-probability N                           xtc probability (default: 0.00, 0.0 = disabled)
+--xtc-threshold N                             xtc threshold (default: 0.10, 1.0 = disabled)
+--typical, --typical-p N                      locally typical sampling, parameter p (default: 1.00, 1.0 = disabled)
+--repeat-last-n N                             last n tokens to consider for penalize (default: 64, 0 = disabled)
+--repeat-penalty N                            penalize repeat sequence of tokens (default: 1.00, 1.0 = disabled)
+--presence-penalty N                          repeat alpha presence penalty (default: 0.00, 0.0 = disabled)
+--frequency-penalty N                         repeat alpha frequency penalty (default: 0.00, 0.0 = disabled)
+--dry-multiplier N                            set DRY sampling multiplier (default: 0.00, 0.0 = disabled)
+--dry-base N                                  set DRY sampling base value (default: 1.75)
+--dry-allowed-length N                        set allowed length for DRY sampling (default: 2)
+--dry-penalty-last-n N                        set DRY penalty for the last n tokens (default: 64, 0 = disable)
+--dry-sequence-breaker STRING                 add sequence breaker for DRY sampling, clearing out default breakers ('\n', ':', '"', '*') in the pr
+--adaptive-target N                           adaptive-p: select tokens near this probability (valid range 0.0 to 1.0; negative = disabled) (defau
+--adaptive-decay N                            adaptive-p: decay rate for target adaptation over time. lower values are more reactive, higher value
+--dynatemp-range N                            dynamic temperature range (default: 0.00, 0.0 = disabled)
+--dynatemp-exp N                              dynamic temperature exponent (default: 1.00)
+--mirostat N                                  use Mirostat sampling.
+--mirostat-lr N                               Mirostat learning rate, parameter eta (default: 0.10)
+--mirostat-ent N                              Mirostat target entropy, parameter tau (default: 5.00)
+-l, --logit-bias TOKEN_ID(+/-)BIAS            modifies the likelihood of token appearing in the completion,
+--grammar GRAMMAR                             BNF-like grammar to constrain generations (see samples in grammars/ dir)
+--grammar-file FNAME                          file to read grammar from
+-j, --json-schema SCHEMA                      JSON schema to constrain generations (https://json-schema.org/), e.g. `{"type": "object"}` for any J
+-jf, --json-schema-file FILE                  File containing a JSON schema to constrain generations (https://json-schema.org/), e.g. `{"type": "o
+-bs, --backend-sampling                       enable backend sampling (experimental) (default: disabled)
+-lcs, --lookup-cache-static FNAME             path to static lookup cache to use for lookup decoding (not updated by generation)
+-lcd, --lookup-cache-dynamic FNAME            path to dynamic lookup cache to use for lookup decoding (updated by generation)
+--kv-unified-per-slot N                       context limit per parallel slot (default: unset, behavior unchanged).
+-ctxcp, --ctx-checkpoints, --swa-checkpoints N max number of context checkpoints to create per slot (default: 32)[(more info)](https://github.com/g
+-cms, --checkpoint-min-step N                 minimum spacing between context checkpoints in tokens (default: 8192, 0 = no minimum)
+-cram, --cache-ram N                          set the maximum cache size in MiB (default: 8192, 0 for decision models, -1 - no limit, 0 - disable)
+-kvu, --kv-unified, -no-kvu, --no-kv-unified  use single unified KV buffer shared across all sequences (default: enabled if number of slots is aut
+--cache-idle-slots, --no-cache-idle-slots     save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enab
+--context-shift, --no-context-shift           whether to use context shift on infinite text generation (default: disabled)
+-r, --reverse-prompt PROMPT                   halt generation at PROMPT, return control in interactive mode
+-sp, --special                                special tokens output enabled (default: false)
+--warmup, --no-warmup                         whether to perform warmup with an empty run (default: enabled)
+--spm-infill                                  use Suffix/Prefix/Middle pattern for infill (instead of Prefix/Suffix/Middle) as some models prefer 
+--pooling {none,mean,cls,last,rank}           pooling type for embeddings, use model default if unspecified
+-np, --parallel N                             number of server slots (default: -1, -1 = auto)
+-cb, --cont-batching, -nocb, --no-cont-batching whether to enable continuous batching (a.k.a dynamic batching) (default: enabled)
+-mm, --mmproj FILE                            path to a multimodal projector file. see tools/mtmd/README.md
+-mmu, --mmproj-url URL                        URL to a multimodal projector file. see tools/mtmd/README.md
+--mmproj-auto, --no-mmproj, --no-mmproj-auto  whether to use multimodal projector file (if available), useful when using -hf (default: enabled)
+--mmproj-offload, --no-mmproj-offload         whether to enable GPU offloading for multimodal projector (default: enabled)
+-mmdev, --mmproj-device DEVICE                device to use for multimodal projector (none = don't offload, default: follows --device)
+--image-min-tokens N                          minimum number of tokens each image can take, only used by vision models with dynamic resolution (de
+--image-max-tokens N                          maximum number of tokens each image can take, only used by vision models with dynamic resolution (de
+--mtmd-batch-max-tokens N                     maximum number of image tokens per batch when encoding images (default: 1024)
+--video-fps N                                 target video frame rate (default: 4.0)
+--video-timestamp-interval N                  interval in milliseconds between text timestamps (default: 5000)
+--video-ffmpeg-dir DIR                        path to the directory containing ffmpeg and ffprobe (default: search in PATH)
+-a, --alias STRING                            set model name aliases, comma-separated (to be used by API)
+--tags STRING                                 set model tags, comma-separated (informational, not used for routing)
+--embd-normalize N                            normalisation for embeddings (default: 2) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2
+--host HOST                                   IP addresses to listen on, comma-separated, or UNIX socket paths ending in .sock; with multiple TCP 
+--port PORT                                   port to listen (default: 9931)
+--reuse-port                                  allow multiple sockets to bind to the same port (default: disabled)
+--path PATH                                   path to serve static files from (default: )
+--cors-origins ORIGINS                        comma-separated list of allowed origins for CORS (default: *)
+--cors-methods METHODS                        comma-separated list of allowed methods for CORS (default: GET, POST, DELETE, OPTIONS)
+--cors-headers HEADERS                        comma-separated list of allowed headers for CORS (default: *)
+--cors-credentials, --no-cors-credentials     whether to allow credentials for CORS (default: enabled)
+--api-prefix PREFIX                           prefix path the server serves from, without the trailing slash (default: )
+--ui-config, --webui-config JSON              JSON that provides default UI settings (overrides UI defaults)
+--ui-config-file, --webui-config-file PATH    JSON file that provides default UI settings (overrides UI defaults)
+--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: d
+--tools TOOL1,TOOL2,...                       experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environmen
+--tools-runtime OPTION                        experimental: run tools in a separate runtime environment (default: none, use host environment)
+--mcp-servers-config PATH                     experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enab
+--mcp-servers-json JSON                       experimental: inline JSON with MCP server definitions (Cursor-compatible format) - do not enable in 
+-ag, --agent, -no-ag, --no-agent              whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (defau
+--ui, --webui, --no-ui, --no-webui            whether to enable the Web UI (default: enabled)
+--connect                                     (experimental) open a peer-to-peer tunnel for server using llama-connect (default: disabled)
+--connect-code CODE                           manually specify a 40-character code for --connect (default: generate a new one for each run)
+--embedding, --embeddings                     restrict to only support embedding use case; use only with dedicated embedding models (default: disa
+--rerank, --reranking                         enable reranking endpoint on server (default: disabled)
+--api-key KEY                                 API key to use for authentication, multiple keys can be provided as a comma-separated list (default:
+--api-key-file FNAME                          path to file containing API keys, one per line; lines starting with a hash are treated as comments (
+--ssl-key-file FNAME                          path to file a PEM-encoded SSL private key
+--ssl-cert-file FNAME                         path to file a PEM-encoded SSL certificate
+--chat-template-kwargs STRING                 sets additional params for the json template parser, must be a valid json object string, e.g. '{"key
+-to, --timeout N                              server read/write timeout in seconds (default: 3600)
+--sse-ping-interval N                         server SSE ping interval in seconds (-1 = disabled, default: 30)
+--threads-http N                              number of threads used to process HTTP requests (default: -1)
+--cache-prompt, --no-cache-prompt             whether to enable prompt caching (default: enabled)
+--cache-reuse N                               min chunk size to attempt reusing from the cache via KV shifting, requires prompt caching to be enab
+--metrics                                     enable prometheus compatible metrics endpoint (default: disabled)
+--props                                       enable changing global properties via POST /props (default: disabled)
+--slots, --no-slots                           expose slots monitoring endpoint (default: enabled)
+--slot-save-path PATH                         path to save slot kv cache (default: disabled)
+--media-path PATH                             directory for loading local media files; files can be accessed via file:// URLs using relative paths
+--models-dir PATH                             directory containing models for the router server (default: disabled)
+--models-preset PATH                          path to INI file containing model presets for the router server (default: disabled)
+--models-max N                                for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)
+--models-memory-margin N                      for router server, MiB of device memory to keep free per device, unload LRU models until a new one f
+--models-autoload, --no-models-autoload       for router server, whether to automatically load models (default: enabled)
+--jinja, --no-jinja                           whether to use jinja template engine for chat (default: enabled)
+--reasoning-format FORMAT                     controls whether thought tags are allowed and/or extracted from the response, and in which format th
+-rea, --reasoning [on|off|auto]               Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))
+--reasoning-effort LEVEL                      reasoning effort level given to the chat template: 'default' to keep the template default,
+--reasoning-budget N                          token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: 
+--reasoning-budget-message MESSAGE            message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)
+--reasoning-preserve, --no-reasoning-preserve preserve reasoning trace in the full history, not just the last assistant message (default: template
+--chat-template JINJA_TEMPLATE                set custom jinja chat template (default: template taken from model's metadata)
+--chat-template-file JINJA_TEMPLATE_FILE      set custom jinja chat template file (default: template taken from model's metadata)
+--skip-chat-parsing, --no-skip-chat-parsing   force a pure content parser, even if a Jinja template is specified; model will output everything in 
+--prefill-assistant, --no-prefill-assistant   whether to prefill the assistant's response if the last message is an assistant message (default: pr
+-sps, --slot-prompt-similarity SIMILARITY     how much the prompt of a request must match the prompt of a slot in order to use that slot (default:
+--lora-init-without-apply                     load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled)
+--sleep-idle-seconds SECONDS                  number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled)
+--log-prompts-dir PATH                        Log prompts to directory (auto-created if not present; only used for debugging, default: disabled)
+--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant] Same as --hf-repo, but for the draft model (default: unused)
+--spec-draft-threads, -td, --threads-draft N  number of threads to use during generation (default: same as --threads)
+--spec-draft-threads-batch, -tbd, --threads-batch-draft N number of threads to use during batch and prompt processing (default: same as --threads-draft)
+--spec-draft-cpu-mask, -Cd, --cpu-mask-draft M Draft model CPU affinity mask. Complements cpu-range-draft (default: same as --cpu-mask)
+--spec-draft-cpu-range, -Crd, --cpu-range-draft lo-hi Ranges of CPUs for affinity. Complements --cpu-mask-draft
+--spec-draft-cpu-strict, --cpu-strict-draft <0|1> Use strict CPU placement for draft model (default: same as --cpu-strict)
+--spec-draft-prio, --prio-draft N             set draft process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0)
+--spec-draft-poll, --poll-draft <0|1>         Use polling to wait for draft model work (default: same as --poll)
+--spec-draft-cpu-mask-batch, -Cbd, --cpu-mask-batch-draft M Draft model CPU affinity mask. Complements cpu-range-draft (default: same as --cpu-mask)
+--spec-draft-cpu-strict-batch, --cpu-strict-batch-draft <0|1> Use strict CPU placement for draft model (default: --cpu-strict-draft)
+--spec-draft-prio-batch, --prio-batch-draft N set draft process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0)
+--spec-draft-poll-batch, --poll-batch-draft <0|1> Use polling to wait for draft model work (default: --poll-draft)
+--spec-draft-override-tensor, -otd, --override-tensor-draft <tensor name pattern>=<buffer type>,... override tensor buffer type for draft model
+--spec-draft-cpu-moe, -cmoed, --cpu-moe-draft keep all Mixture of Experts (MoE) weights in the CPU for the draft model
+--spec-draft-n-cpu-moe, --spec-draft-ncmoe, -ncmoed, --n-cpu-moe-draft N keep the Mixture of Experts (MoE) weights of the first N layers in the CPU for the draft model
+--spec-draft-n-max N                          number of tokens to draft for speculative decoding (default: 3)
+--spec-draft-n-min N                          minimum number of draft tokens to use for speculative decoding (default: 0)
+--spec-draft-n-ubatch N                       physical maximum batch size of the draft context, use a smaller value to spare VRAM (default: 0 - sa
+--spec-synth-len L                            target mean synthetic acceptance length, including the target token (benchmarking only)
+--spec-synth-rates P0,P1,...                  comma-separated unconditional per-position synthetic acceptance probabilities (benchmarking only)
+--spec-draft-p-split, --draft-p-split P       speculative decoding split probability (default: 0.10)
+--spec-draft-p-min, --draft-p-min P           minimum speculative decoding probability (greedy) (default: 0.00)
+--spec-draft-backend-sampling, --no-spec-draft-backend-sampling offload draft sampling to the backend (default: enabled)
+--spec-draft-sampling {greedy,probabilistic}  how the draft is sampled: greedy takes its argmax, probabilistic samples it and has the target verif
+--spec-draft-device, -devd, --device-draft <dev1,dev2,..> comma-separated list of devices to use for offloading the draft model (none = don't offload, default
+--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (defaul
+--spec-draft-model, -md, --model-draft FNAME  draft model for speculative decoding (default: unused)
+--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache comma-separated list of types of speculative decoding to use (default: none)
+--spec-ngram-mod-n-min N                      minimum number of ngram tokens to use for ngram-based speculative decoding (default: 48)
+--spec-ngram-mod-n-max N                      maximum number of ngram tokens to use for ngram-based speculative decoding (default: 64)
+--spec-ngram-mod-n-match N                    ngram-mod lookup length (default: 24)
+--spec-ngram-simple-size-n N                  ngram size N for ngram-simple speculative decoding, length of lookup n-gram (default: 12)
+--spec-ngram-simple-size-m N                  ngram size M for ngram-simple speculative decoding, length of draft m-gram (default: 48)
+--spec-ngram-simple-min-hits N                minimum hits for ngram-simple speculative decoding (default: 1)
+--spec-ngram-map-k-size-n N                   ngram size N for ngram-map-k speculative decoding, length of lookup n-gram (default: 12)
+--spec-ngram-map-k-size-m N                   ngram size M for ngram-map-k speculative decoding, length of draft m-gram (default: 48)
+--spec-ngram-map-k-min-hits N                 minimum hits for ngram-map-k speculative decoding (default: 1)
+--spec-ngram-map-k4v-size-n N                 ngram size N for ngram-map-k4v speculative decoding, length of lookup n-gram (default: 12)
+--spec-ngram-map-k4v-size-m N                 ngram size M for ngram-map-k4v speculative decoding, length of draft m-gram (default: 48)
+--spec-ngram-map-k4v-min-hits N               minimum hits for ngram-map-k4v speculative decoding (default: 1)
+--draft, --draft-n, --draft-max N             the argument has been removed. use --spec-draft-n-max or --spec-ngram-mod-n-max
+--draft-min, --draft-n-min N                  the argument has been removed. use --spec-draft-n-min or --spec-ngram-mod-n-min
+--spec-ngram-size-n N                         the argument has been removed. use the respective --spec-ngram-*-size-n or --spec-ngram-mod-n-match
+--spec-ngram-size-m N                         the argument has been removed. use the respective --spec-ngram-*-size-m
+--spec-ngram-min-hits N                       the argument has been removed. use the respective --spec-ngram-*-min-hits
+--embd-gemma-default                          use default EmbeddingGemma model (note: can download weights from the internet)
+--fim-qwen-1.5b-default                       use default Qwen 2.5 Coder 1.5B (note: can download weights from the internet)
+--fim-qwen-3b-default                         use default Qwen 2.5 Coder 3B (note: can download weights from the internet)
+--fim-qwen-7b-default                         use default Qwen 2.5 Coder 7B (note: can download weights from the internet)
+--fim-qwen-7b-spec                            use Qwen 2.5 Coder 7B + 0.5B draft for speculative decoding (note: can download weights from the int
+--fim-qwen-14b-spec                           use Qwen 2.5 Coder 14B + 0.5B draft for speculative decoding (note: can download weights from the in
+--fim-qwen-30b-default                        use default Qwen 3 Coder 30B A3B Instruct (note: can download weights from the internet)
+--gpt-oss-20b-default                         use gpt-oss-20b (note: can download weights from the internet)
+--gpt-oss-120b-default                        use gpt-oss-120b (note: can download weights from the internet)
+--vision-gemma-4b-default                     use Gemma 3 4B QAT (note: can download weights from the internet)
+--vision-gemma-12b-default                    use Gemma 3 12B QAT (note: can download weights from the internet)
+--spec-default                                enable default speculative decoding config

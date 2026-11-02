@@ -183,6 +183,25 @@
   .tile b { font-size: 16px; }
   .tile span { font-size: 14px; color: var(--text-2); }
 
+  /* --- Settings presets (done screen) --- */
+  .settings { margin: 0 0 18px; }
+  .presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .preset { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 14px; min-width: 0;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); font: inherit; color: var(--text); }
+  button.preset { cursor: pointer; }
+  button.preset:hover { border-color: var(--accent); }
+  .preset[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: var(--ring); }
+  .preset b { font-size: 15px; }
+  .preset span { font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
+  .preset .mem { font-weight: 600; }
+  .preset .mem.gpu, .preset .mem.cpu { color: var(--good); }
+  .preset .mem.partial, .preset .mem.tight { color: var(--warn); }
+  .preset .mem.no, .preset .why { color: var(--bad); }
+  .preset.off { opacity: .75; background: var(--surface-2); }
+  .settings input[type=number] { width: 9em; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+    background: var(--surface); color: var(--text); font: inherit; }
+  @media (max-width: 560px) { .presets { grid-template-columns: 1fr; } }
+
   /* --- Wait --- */
   .spin { width: 34px; height: 34px; margin: 40px auto 18px; border-radius: 50%; border: 3px solid var(--surface-3); border-top-color: var(--accent); animation: rot .8s linear infinite; }
   @keyframes rot { to { transform: rotate(360deg); } }
@@ -892,7 +911,7 @@ async function done(j) {
   $("#d-text").textContent = text;
   const next = $("#done-next");
   $("#chat-box").replaceChildren();
-  chatKey = ""; chatPre = null;
+  chatKey = ""; chatPre = null; chatPreset = ""; chatCtx = null;
   chatModel = j.id || lastId;
   lastDone = j;
   if (!S.llama_server) {
@@ -930,15 +949,63 @@ function lookedDetails(b) {
     h("ul", { class: "looked" }, b.looked.map((l) => h("li", {}, l))));
 }
 
+// --- Settings presets: the server says which ones this llama-server can run, their exact command and memory -----
+let chatPreset = "", chatCtx = null, chatPv = null;
+const WHERE_FITS = { gpu: "fits your graphics card", partial: "split between graphics card and main memory",
+  cpu: "runs from main memory", tight: "a tight fit: it may not load", no: "too big for this computer" };
+function memText(m) {
+  if (!m) return "";
+  return "Needs " + (m.bound === "at_most" ? "at most " : "about ") + (m.need_mb / 1024).toFixed(1) + " GB · " +
+    (WHERE_FITS[m.where] || "") + " · " + m.ctx.toLocaleString("en-US") + " tokens of context";
+}
+function presetPicked(pv) {
+  const list = (pv && pv.presets) || [];
+  return list.find((x) => x.id === chatPreset && x.available) || list.find((x) => x.id === pv.preset) || null;
+}
+function settingsPanel(pv) {
+  if (!pv.presets || !pv.presets.length) return null;
+  const picked = presetPicked(pv);
+  const rows = pv.presets.map((x) => {
+    const on = picked && picked.id === x.id;
+    const body = [h("b", {}, x.label), h("span", {}, x.text),
+      x.memory ? h("span", { class: "mem " + x.memory.where }, memText(x.memory)) : null,
+      x.memory && x.memory.note ? h("span", { class: "muted" }, x.memory.note) : null,
+      x.available ? null : h("span", { class: "why" }, x.why)];
+    return x.available
+      ? h("button", { class: "preset", "aria-pressed": on ? "true" : "false", onclick: () => { chatPreset = x.id; renderChatStart($("#done-next"), pv); } }, ...body)
+      : h("div", { class: "preset off", "aria-disabled": "true" }, ...body);
+  });
+  const first = pv.presets.find((x) => x.memory_error);
+  const ctxIn = h("input", { type: "number", min: "256", max: "1048576", step: "256", inputmode: "numeric", "aria-label": "Context length in tokens", value: chatCtx || "" });
+  return h("div", { class: "settings" },
+    h("p", { class: "rows-title" }, "How will you use it?"),
+    h("div", { class: "presets", role: "group", "aria-label": "Settings" }, ...rows),
+    first && !pv.presets.some((x) => x.memory) ? h("p", { class: "muted" }, "Memory needed: could not read the model file (" + first.memory_error + ").") : null,
+    h("details", { class: "terminal" }, h("summary", {}, icon("info"), "Set the context length yourself"),
+      h("div", { class: "terminal-body" },
+        h("p", { class: "muted", style: "margin:0 0 8px" }, "The context is how much of the conversation the model can see at once, in tokens (a token is about 3/4 of a word). More context needs more memory."),
+        h("div", { class: "actions" }, ctxIn, h("button", { class: "btn small ghost", onclick: () => applyCtx(ctxIn.value) }, "Use this length")))));
+}
+async function applyCtx(value) {
+  const n = parseInt(value, 10);
+  chatCtx = n >= 256 && n <= 1048576 ? n : null;
+  let d = null;
+  try { d = await api("/api/chat?id=" + encodeURIComponent(chatModel) + (chatPreset ? "&preset=" + chatPreset : "") + (chatCtx ? "&ctx=" + chatCtx : "")); } catch (e) {}
+  if (d && d.preview) renderChatStart($("#done-next"), d.preview);
+}
+
 // The first view of the chat controls: what it will run, or why it cannot run yet. The server decides both (rule 3).
 function renderChatStart(next, pv) {
   const kids = [];
+  chatPv = pv;
   if (!pv) {                                         // not a model this page offered (e.g. a terminal download)
     kids.push(h("p", {}, "To start chatting, run this from the project folder:"), cmdRow(S.serve_cmd),
       SERVE_TIP[S.os] ? h("p", { class: "muted", style: "margin-top:10px" }, SERVE_TIP[S.os]) : null);
   } else if (pv.missing) {
     kids.push(h("p", { class: "note" }, pv.missing));
   } else {
+    kids.push(settingsPanel(pv));
+    const picked = presetPicked(pv);
     if (pv.busy) {
       kids.push(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" },
         h("b", {}, busyText(pv.busy)), pv.busy.free_port ? " Port " + pv.busy.free_port + " is free." : " No free port was found near it.")),
@@ -947,7 +1014,7 @@ function renderChatStart(next, pv) {
         lookedDetails(pv.busy));
     } else {
       kids.push(h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => startChat() }, icon("chat"), "Start chatting")),
-        h("p", { class: "cmd-label" }, "It runs:"), cmdRow(pv.cmd),
+        h("p", { class: "cmd-label" }, "It runs:"), cmdRow((picked && picked.cmd) || pv.cmd),
         h("p", { class: "muted", style: "margin-top:10px" }, "It runs while this setup page is open. You can stop it here."));
     }
     kids.push(serveFromTerminal());
@@ -958,6 +1025,9 @@ function renderChatStart(next, pv) {
 async function startChat(port) {
   const body = { id: chatModel };
   if (port) body.port = port;
+  const picked = presetPicked(chatPv);
+  if (picked) body.preset = picked.id;
+  if (chatCtx) body.ctx = chatCtx;
   $("#done-next").replaceChildren(serveFromTerminal() || "");
   let r;
   try { r = await api("/api/chat/start", body); } catch (e) { r = { error: UNREACHABLE }; }

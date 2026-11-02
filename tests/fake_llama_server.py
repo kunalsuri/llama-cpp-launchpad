@@ -3,6 +3,7 @@
 It behaves like the real program where the launchpad depends on it:
   --version           prints a version banner and exits 0
   --list-devices      prints FAKE_LLAMA_DEVICES (default: no GPU) and exits 0
+  --help              prints tests/fixtures/llama_server_help.txt (or the file in FAKE_LLAMA_HELP) and exits 0
   -m FILE --port N    listens on 127.0.0.1:N; /health answers 503 "Loading model" for FAKE_LLAMA_LOAD_S seconds
                       (default 0.3), then 200 {"status": "ok"}; /props names the model. Prints its arguments first,
                       so tests can see exactly what it was started with. A busy port: prints an error, exits 1.
@@ -27,6 +28,13 @@ def main():
             print("error while loading shared libraries: libggml.so: cannot open shared object file", flush=True)
             return 127
         print("version: 4242 (abc1234)\nbuilt with fake-cc for test", flush=True)
+        return 0
+    if "--help" in sys.argv:
+        # FAKE_LLAMA_HELP: a file to print instead (an older build with fewer flags); default: today's flag list
+        help_file = os.environ.get("FAKE_LLAMA_HELP") or os.path.join(os.path.dirname(__file__), "fixtures",
+                                                                       "llama_server_help.txt")
+        with open(help_file, encoding="utf-8") as f:
+            print(f.read(), flush=True)
         return 0
     if "--list-devices" in sys.argv:
         print(os.environ.get("FAKE_LLAMA_DEVICES", "Available devices:"), flush=True)

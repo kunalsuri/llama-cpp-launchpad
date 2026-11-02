@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, urlparse
 
 import chat_server
 import detect_tools
+import gguf
 import hf_discover
 import llama_install
 
@@ -254,25 +255,93 @@ class App:
             return None, (409, {"error": f"{offer['title']} is not downloaded yet. Get it first."})
         return (paths[0][0], offer["title"]), None
 
-    def chat_status(self, mid=None) -> dict:
+    # --- settings presets (chat_server.PRESETS) and the memory each needs (gguf.py) -----------------------------
+    def _gpu(self) -> bool:
+        hw = self.hw
+        return (hw.gpu_kind in ("nvidia", "gpu") and hw.gpu_usable) or hw.gpu_kind == "apple"
+
+    def _describe(self, path: Path) -> dict:
+        """The model's header (gguf.describe), remembered while the file is unchanged."""
+        try:
+            st = Path(path).stat()
+            key = (str(path), st.st_mtime_ns, st.st_size)
+        except OSError:
+            return gguf.describe(path)
+        cache = self.__dict__.setdefault("_described", {})
+        if key not in cache:
+            cache[key] = gguf.describe(path)
+        return cache[key]
+
+    def _memory(self, d: dict, preset: str, ctx, flags: set) -> dict:
+        s, p = d["shape"], chat_server.PRESETS[preset]
+        want = ctx if ctx is not None else p["ctx"]
+        want = min(want, s["train_ctx"]) if want and s["train_ctx"] else want
+        e = gguf.estimate(s, d["weights_bytes"], want, p.get("type_k", "f16"), "f16")
+        where, share = hf_discover.place(e["need_mb"], self.hw)
+        notes = [gguf.NOTE_TEXT[n] for n in e["notes"]]
+        if not want:
+            notes.insert(0, "This is at the model's whole trained context. "
+                            + ("This llama-server has --fit, so it shrinks the context until the model fits your memory."
+                               if "--fit" in flags else
+                               "This llama-server has no --fit: it really asks for all of it, which may not load."))
+        return dict(e, where=where, gpu_share=round(share, 2), note=" ".join(notes))
+
+    def chat_settings(self, path: Path, ctx=None) -> list:
+        """Every preset for this model: its flags (or why it cannot run here), exact command and memory."""
+        flags, d = self.chat.help_flags(), self._describe(path)
+        train = d["shape"]["train_ctx"] if "shape" in d else 0
+        out = []
+        for pid in chat_server.PRESET_ORDER:
+            p = chat_server.PRESETS[pid]
+            args, why = chat_server.settings_args(pid, flags, ctx, self._gpu(), train)
+            row = {"id": pid, "label": p["label"], "text": p["text"], "available": not why, "why": why,
+                   "args": args, "memory": None, "memory_error": d.get("error", "")}
+            if not why:
+                row["cmd"] = self.chat.shown(self.chat.command(path, settings=args)[0])
+            if "shape" in d:
+                row["memory"] = self._memory(d, pid, ctx, flags)
+            out.append(row)
+        return out
+
+    def _settings_for(self, path: Path, preset, ctx) -> tuple:
+        """-> (preset id, llama-server arguments, "") or (preset id, [], why not)."""
+        flags = self.chat.help_flags()
+        preset = preset or chat_server.default_preset(flags)
+        d = self._describe(path)
+        args, why = chat_server.settings_args(preset, flags, ctx, self._gpu(),
+                                              d["shape"]["train_ctx"] if "shape" in d else 0)
+        return preset, args, why
+
+    def chat_status(self, mid=None, preset=None, ctx=None) -> dict:
         out = {"chat": self.chat.status()}
         if mid:
             found, _ = self._chat_model(mid)
             if found:
-                out["preview"] = self.chat.preview(found[0])
+                preset = preset if preset in chat_server.PRESETS else None
+                preset, args, why = self._settings_for(found[0], preset, ctx)
+                out["preview"] = self.chat.preview(found[0], settings=args)
+                out["preview"].update(preset=preset, presets=self.chat_settings(found[0], ctx), why=why)
         return out
 
     def chat_start(self, body: dict):
-        port = body.get("port")
+        port, preset, ctx = body.get("port"), body.get("preset"), body.get("ctx")
         if port is not None and (type(port) is not int or not 1024 <= port <= 65535):
             return 400, {"error": "The port must be a number from 1024 to 65535."}
+        if preset is not None and preset not in chat_server.PRESETS:
+            return 400, {"error": "Unknown setting. Reload the page."}
+        if ctx is not None and (type(ctx) is not int or not chat_server.CTX_MIN <= ctx <= chat_server.CTX_MAX):
+            return 400, {"error": f"The context length must be a whole number from {chat_server.CTX_MIN} to "
+                                  f"{chat_server.CTX_MAX}."}
         with self.run_lock:
             if self.installer.status().get("state") in INSTALL_BUSY:
                 return 409, {"error": "llama.cpp is being installed. Start the chat when the install has finished."}
             found, refused = self._chat_model(body.get("id"))
             if refused:
                 return refused
-            return self.chat.start(found[0], found[1], port)
+            _, args, why = self._settings_for(found[0], preset, ctx)
+            if why:
+                return 409, {"error": why}
+            return self.chat.start(found[0], found[1], port, args)
 
     def tools(self, ids=None, verbose: bool = False) -> dict:
         """Which of Ollama / llama.cpp / LM Studio / Unsloth are installed: detect_tools.py, plus next-step hints."""
@@ -581,7 +650,9 @@ def make_handler(app: App):
             if url.path == "/api/progress":
                 return self.reply(200, app.snapshot())
             if url.path == "/api/chat":
-                return self.reply(200, app.chat_status((q.get("id") or [None])[0]))
+                ctx = (q.get("ctx") or [""])[0]
+                return self.reply(200, app.chat_status((q.get("id") or [None])[0], (q.get("preset") or [None])[0],
+                                                       int(ctx) if ctx.isdigit() and len(ctx) < 9 else None))
             if url.path == "/api/llama":
                 return self.reply(200, app.llama_info())
             if url.path == "/api/tools":

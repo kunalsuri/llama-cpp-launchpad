@@ -762,6 +762,82 @@ class TestChatApi(UiBase):
         self.app.close()
         self.assertEqual(self.app.chat.status()["state"], "stopped")
 
+    # --- settings presets and the memory each one needs ---
+    def preview(self, query=""):
+        return self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]) + query)["preview"]
+
+    def model_path(self):
+        offer = self.app.offered[self.top["id"]]
+        return ms.local_path(offer["repo"], *offer["files"][0])[0]
+
+    def test_preview_offers_each_preset_with_its_exact_command(self):
+        self.download()
+        p = self.preview()
+        self.assertEqual([x["id"] for x in p["presets"]], ["short", "long", "fast", "auto"])
+        self.assertEqual(p["preset"], "auto", "this llama-server has --fit: let it size the context")
+        by = {x["id"]: x for x in p["presets"]}
+        self.assertTrue(by["long"]["cmd"].endswith(f"--port {self.chat_port} -c 32768 -ctk q8_0 -c 4096"),
+                        by["long"]["cmd"])
+        self.assertTrue(all(x["label"] and x["text"] for x in p["presets"]))
+        self.assertTrue(by["fast"]["available"], "the test machine has a usable NVIDIA card")
+        p = self.preview("&preset=long")
+        self.assertEqual(p["preset"], "long")
+        self.assertIn("-c 32768 -ctk q8_0", p["cmd"])
+
+    def test_each_preset_says_how_much_memory_it_needs_and_where_it_fits(self):
+        self.download()
+        path = self.model_path()
+        path.write_bytes((HERE / "fixtures" / "llama-shape.gguf").read_bytes())    # an 8B-shaped header
+        by = {x["id"]: x for x in self.preview()["presets"]}
+        self.assertEqual(by["short"]["memory"]["kv_mb"], 512)
+        self.assertEqual(by["short"]["memory"]["need_mb"], path.stat().st_size // 1048576 + 512 + 600)
+        self.assertEqual(by["short"]["memory"]["where"], "gpu")
+        import gguf
+        s = gguf.shape(gguf.read_file(path))
+        self.assertEqual(by["long"]["memory"]["kv_mb"], gguf.kv_cache_bytes(s, 32768, "q8_0", "f16") // 1048576)
+        self.assertEqual(by["auto"]["memory"]["ctx"], 131072, "llama.cpp may use the whole trained context")
+        self.assertEqual(by["auto"]["memory"]["where"], "no", "16 GB of cache at 128k tokens does not fit 16 GB")
+        self.assertIn("--fit", by["auto"]["memory"]["note"])
+
+    def test_a_model_whose_header_cannot_be_read_says_so(self):
+        self.download()                                       # the fake download is one byte, not a GGUF file
+        by = {x["id"]: x for x in self.preview()["presets"]}
+        self.assertIsNone(by["short"]["memory"])
+        self.assertIn("not a GGUF file", by["short"]["memory_error"])
+
+    def test_start_with_a_preset_and_a_typed_context(self):
+        self.download()
+        status, body = self.post("/api/chat/start", {"id": self.top["id"], "preset": "short", "ctx": 6000})
+        self.assertEqual(status, 202, body)
+        self.assertIn("-c 6000", body["cmd"])
+        s = self.wait_chat("running")
+        self.assertTrue(any('"-c", "6000"' in line for line in s["log"]), s["log"])
+
+    def test_bad_settings_are_refused_before_anything_starts(self):
+        self.download()
+        for body, code in (({"preset": "rm -rf"}, 400), ({"preset": 3}, 400), ({"ctx": "8192"}, 400),
+                           ({"ctx": 10 ** 9}, 400), ({"preset": "short", "args": ["--evil"]}, 202)):
+            with self.subTest(body=body):
+                status, out = self.post("/api/chat/start", dict(body, id=self.top["id"]))
+                self.assertEqual(status, code, out)
+                if code == 202:
+                    self.assertNotIn("--evil", out["cmd"], "the page can only pick presets, never send flags")
+                    self.post("/api/chat/stop", {})
+                    self.wait_chat("stopped")
+        self.assertNotEqual(self.app.chat.status()["state"], "running")
+
+    def test_a_preset_this_llama_server_cannot_run_is_refused_with_the_reason(self):
+        self.download()
+        self.app.chat.help = lambda argv: "-m,    --model FNAME      model path\n"
+        self.app.chat._flags.clear()
+        by = {x["id"]: x for x in self.preview()["presets"]}
+        self.assertFalse(by["long"]["available"])
+        self.assertIn("--ctx-size", by["long"]["why"])
+        self.assertTrue(by["auto"]["available"])
+        status, body = self.post("/api/chat/start", {"id": self.top["id"], "preset": "long"})
+        self.assertEqual(status, 409)
+        self.assertIn("--ctx-size", body["error"])
+
     def test_who_uses_the_port_is_asked_of_the_pinned_machine_not_the_host(self):
         """Rule 2: the lookup programs come from the (fake) probe, and the OS rules from its system."""
         self.download()
@@ -896,7 +972,7 @@ class TestLlamaApi(UiBase):
     def test_a_chat_start_and_an_install_at_the_same_moment_do_not_both_run(self):
         gate, entered = threading.Event(), threading.Event()
 
-        def slow_start(model, title, port=None):
+        def slow_start(model, title, port=None, settings=None):
             entered.set()
             gate.wait(5)
             self.app.chat.job = {"state": "starting"}

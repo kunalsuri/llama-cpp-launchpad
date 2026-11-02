@@ -173,6 +173,12 @@ function routes(job) {
 // Start chatting: a finished download of model "o/M-GGUF|m.gguf", and the chat's states as the server reports them.
 const PREVIEW = { cmd: "llama-server -m /p/models/m.gguf --port 8080", port: 8080, busy: null };
 const IDLE_CHAT = { state: "idle", log: [] };
+const mem = (need, where, extra) => Object.assign({ need_mb: need, kv_mb: 512, ctx: 4096, bound: "exact", where, note: "" }, extra);
+const PRESET_PREVIEW = { ...PREVIEW, cmd: "CMD-AUTO", preset: "auto", presets: [
+  { id: "short", label: "Short chats", text: "About 3,000 words.", available: true, why: "", cmd: "CMD-SHORT", memory: mem(5734, "gpu") },
+  { id: "long", label: "Long documents", text: "About 24,000 words.", available: true, why: "", cmd: "CMD-LONG", memory: mem(9000, "cpu") },
+  { id: "fast", label: "Fastest replies", text: "All on the card.", available: false, why: "This needs a graphics card that llama.cpp can use, and none was found.", memory: mem(5000, "gpu") },
+  { id: "auto", label: "Let llama.cpp decide", text: "llama.cpp picks.", available: true, why: "", cmd: "CMD-AUTO", memory: mem(40000, "no", { note: "whole trained context" }) }] };
 const STARTING = { state: "starting", cmd: PREVIEW.cmd, port: 8080, url: "http://127.0.0.1:8080/", model: "M", log: ["loading"] };
 const RUNNING = { ...STARTING, state: "running" };
 const STOPPED = { ...STARTING, state: "stopped" };
@@ -676,6 +682,51 @@ const scenarios = {
     gpu.click(); await p.settle();
     const sel = tabs.filter((t) => t.getAttribute("aria-selected") === "true").map((t) => t.getAttribute("data-tab"));
     if (sel.join() !== "gpu") return "aria-selected on: " + sel.join();
+  },
+
+  // --- Settings presets on the done screen ----------------------------------------------------------------------
+  async "the done screen offers presets with their memory, and Start sends the one picked"() {
+    const posts = [];
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW, posts }) });
+    await p.start();
+    await p.advance(1000);
+    const t = p.text("done-next");
+    for (const want of ["Short chats", "Long documents", "Needs about 5.6 GB", "fits your graphics card", "too big for this computer"])
+      if (!t.includes(want)) return `missing "${want}": ` + t;
+    if (!t.includes("CMD-AUTO")) return "the default preset's command is not shown: " + t;
+    const long = p.button("done-next", "Long documents");
+    if (!long) return "no button for Long documents";
+    long.click(); await p.settle();
+    if (!p.text("done-next").includes("CMD-LONG")) return "picking a preset did not show its command: " + p.text("done-next");
+    if (long.getAttribute("aria-pressed") !== "true" && !findEl(p.el("done-next"), (e) => e.attrs && e.attrs["aria-pressed"] === "true" && e.text().includes("Long documents")))
+      return "the picked preset is not marked as pressed";
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    const start = posts.find((x) => x.path === "/api/chat/start");
+    if (!start || start.body.preset !== "long") return "Start did not send the picked preset: " + JSON.stringify(posts);
+  },
+
+  async "a preset this llama-server cannot run shows why and cannot be picked"() {
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW }) });
+    await p.start();
+    await p.advance(1000);
+    const t = p.text("done-next");
+    if (!t.includes("needs a graphics card")) return "the reason is not shown: " + t;
+    if (p.button("done-next", "Fastest replies")) return "an unavailable preset can still be clicked";
+  },
+
+  async "typing a context length asks the server for that command"() {
+    const calls = [];
+    const routes = chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW });
+    const p = makePage({ routes: (path, opts, full) => { if (path === "/api/chat") calls.push(full); return routes(path, opts, full); } });
+    await p.start();
+    await p.advance(1000);
+    const input = findEl(p.el("done-next"), (e) => e.attrs && e.attrs.type === "number");
+    if (!input) return "no context length field";
+    input.value = "12000";
+    const apply = p.button("done-next", "Use this length");
+    if (!apply) return "no button to apply the length";
+    apply.click(); await p.settle();
+    if (!calls.some((c) => /[?&]ctx=12000\b/.test(c))) return "the server was not asked: " + calls.join(" ");
   },
 
   // --- Start chatting ------------------------------------------------------------------------------------------
