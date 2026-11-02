@@ -105,6 +105,15 @@ OFF_PATH = {
                 "Add its folder to your PATH.",
 }
 START_CMD = {"ollama": "ollama serve", "lmstudio": "lms server start"}      # llama.cpp: the project's serve script
+# What the page says when model_setup.download() fails, by the reason it gives (model_setup.last_download_error).
+DOWNLOAD_ERRORS = {
+    "": "The download did not finish (disk space or connection). Press Try again to resume, or resume it from a terminal.",
+    "disk": "There is not enough free disk space for this model. Free some space, then press Try again.",
+    "network": "The connection to Hugging Face failed. Press Try again to resume, or resume it from a terminal.",
+    "size": "The download stopped before the whole file arrived. Press Try again to resume, or resume it from a terminal.",
+    "checksum": "The downloaded file does not match the SHA-256 checksum Hugging Face publishes, so it was not kept. "
+                "Press Try again to download it from the start.",
+}
 CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
        "img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
@@ -469,8 +478,7 @@ class App:
                     ms.state_update({"dl_active": "0", "dl_state": "error"})
                     self._set(
                         state="error",
-                        error="The download did not finish (disk space or connection). Press Try again to resume, "
-                              "or resume it from a terminal.",
+                        error=DOWNLOAD_ERRORS.get(getattr(ms, "last_download_error", ""), DOWNLOAD_ERRORS[""]),
                         file=f,
                         repo=offer["repo"],
                     )

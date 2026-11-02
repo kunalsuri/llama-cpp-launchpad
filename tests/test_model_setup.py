@@ -5,6 +5,7 @@ with fixtures (tests/fixtures). One test starts a throw-away local HTTP server t
 """
 import contextlib
 import datetime as dt
+import hashlib
 import http.server
 import io
 import json
@@ -62,6 +63,9 @@ class Base(unittest.TestCase):
         drm.start()
         self.addCleanup(drm.stop)
         ms.Ctx.assume_yes = False
+        p = mock.patch.object(ms, "last_download_error", "")       # module state: no test sees another's reason
+        p.start()
+        self.addCleanup(p.stop)
         ms.init_style(io.StringIO())          # no colours
 
     def fake_http_get(self, url, timeout=25):
@@ -500,6 +504,76 @@ class TestDownload(Base):
             path = ms.download("o/r", "../../evil.gguf", 10)
         self.assertEqual(path.parent, self.tmp / "models")
         self.assertFalse((self.tmp / "evil.gguf").exists())
+
+
+class TestChecksum(Base):
+    """Downloads are checked against the SHA-256 Hugging Face publishes (GET /api/models/REPO?blobs=true ->
+    siblings[].lfs.sha256, the key huggingface_hub's own client reads), not only by size."""
+
+    DATA = b"x" * 1000
+
+    def blobs(self, sha="match", fail=False):
+        good = hashlib.sha256(self.DATA).hexdigest()
+        lfs = {"sha256": good if sha == "match" else sha, "size": len(self.DATA), "pointerSize": 134}
+        sibling = {"rfilename": "m-Q4_K_M.gguf", "size": len(self.DATA)}
+        if sha is not None:
+            sibling["lfs"] = lfs
+        doc = {"id": "org/repo-GGUF", "siblings": [{"rfilename": "README.md", "size": 10}, sibling]}
+        seen = []
+
+        def http_get(url, timeout=25):
+            seen.append(url)
+            if fail:
+                raise urllib.error.URLError("offline")
+            return json.dumps(doc)
+        p = mock.patch.object(ms, "http_get", http_get)
+        p.start()
+        self.addCleanup(p.stop)
+        return seen
+
+    def download(self, data=DATA):
+        def fake(url, part, size, *rest):
+            part.parent.mkdir(parents=True, exist_ok=True)
+            part.write_bytes(data)
+        err = io.StringIO()
+        with mock.patch.object(ms, "fetch_file", fake), contextlib.redirect_stderr(err):
+            path = ms.download("org/repo-GGUF", "m-Q4_K_M.gguf", len(self.DATA))
+        return path, err.getvalue()
+
+    def test_a_matching_checksum_is_said_and_the_file_is_kept(self):
+        seen = self.blobs()
+        path, err = self.download()
+        self.assertEqual(path, self.tmp / "models" / "m-Q4_K_M.gguf")
+        self.assertIn("SHA-256 matches", err)
+        self.assertIn("https://huggingface.co/api/models/org/repo-GGUF?blobs=true", seen)
+
+    def test_a_wrong_checksum_keeps_nothing_and_the_next_try_starts_over(self):
+        self.blobs()
+        path, err = self.download(b"y" * 1000)                 # right size, wrong bytes
+        self.assertIsNone(path)
+        self.assertIn("SHA-256", err)
+        self.assertIn("does not match", err)
+        self.assertEqual(ms.last_download_error, "checksum")
+        self.assertFalse((self.tmp / "models" / "m-Q4_K_M.gguf").exists())
+        part = self.tmp / "models" / "m-Q4_K_M.gguf.part"
+        self.assertEqual(part.stat().st_size if part.exists() else 0, 0, "a bad file is not resumed")
+
+    def test_no_published_checksum_or_no_connection_checks_the_size_only_and_says_so(self):
+        for kwargs in ({"sha": None}, {"fail": True}):
+            with self.subTest(**kwargs):
+                self.blobs(**kwargs)
+                shutil.rmtree(self.tmp / "models", ignore_errors=True)       # a fresh models folder each time
+                path, err = self.download()
+                self.assertIsNotNone(path, err)
+                self.assertIn("size only", err)
+
+    def test_other_failures_are_named_too(self):
+        def fake(url, part, size, *rest):
+            part.parent.mkdir(parents=True, exist_ok=True)
+            part.write_bytes(b"x" * 10)
+        with mock.patch.object(ms, "fetch_file", fake), contextlib.redirect_stderr(io.StringIO()):
+            self.assertIsNone(ms.download("o/r", "m.gguf", 1000))
+        self.assertEqual(ms.last_download_error, "size")
 
 
 class TestSameNameFromTwoRepos(Base):

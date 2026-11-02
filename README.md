@@ -108,7 +108,9 @@ Run `ui` (e.g. `scripts\win\ui.bat` or `./scripts/unix/ui.sh`) to open the local
 its address (normally `http://127.0.0.1:8765/`) and opens your browser.
 
 - **Get a model:** answers *"What will you use it for?"*, picks the model that fits your CPU/GPU/RAM, downloads it
-  (resumable) and runs a speed test.
+  (resumable) and runs a speed test. Every download (page, `model-setup`, `radar --download`) is checked against the
+  SHA-256 Hugging Face publishes for the file; a file that does not match is not kept. When Hugging Face gives no
+  checksum, only the size is checked, and it says so.
 - **Start chatting:** the done screen starts `llama-server` with that model and shows the exact command first
   (`llama-server -m MODEL --port PORT`, plus `EXTRA_ARGS`, as the serve scripts do; `PORT` and `EXTRA_ARGS` come
   from the environment the page was started in). It shows *starting*, *running* (with an **Open the chat** link),
@@ -116,9 +118,15 @@ its address (normally `http://127.0.0.1:8765/`) and opens your browser.
   the page's window stops it too. If port 8080 is taken, the page says which program holds it and offers the next free
   port.
 - **Get llama.cpp** (`/#llama`): offered when no working `llama-server` is found (looked for in `LLAMA_SERVER`, your
-  PATH, `bin/`, `~/llama.cpp/build/bin`), or when the one found cannot use your NVIDIA GPU.
-  - *Windows, Linux:* downloads the official build for this machine (CUDA for NVIDIA, with its CUDA runtime archive;
-    Vulkan for another GPU you declared with `LP_VRAM_MB`; otherwise CPU) from
+  PATH, `bin/`, `~/llama.cpp/build/bin`), or when the one found cannot use your graphics card.
+  - *Windows, Linux:* downloads the official build for this machine:
+    - CUDA for NVIDIA, with its CUDA runtime archive, and never newer than the CUDA your driver runs (`nvidia-smi`
+      shows it); if the driver is too old for every CUDA build, Vulkan, with a note that a driver update gets CUDA;
+    - Vulkan for AMD graphics (Windows and Linux), Intel Arc (Windows, found by name) or a GPU you declared with
+      `LP_VRAM_MB`. Integrated Intel graphics keep the CPU build: they rarely run models faster than the processor;
+    - otherwise CPU;
+
+    from
     [github.com/ggml-org/llama.cpp/releases](https://github.com/ggml-org/llama.cpp/releases) over HTTPS into `bin/`.
     No admin rights; nothing outside `bin/` changes. It checks the size, the SHA-256 when GitHub publishes one
     (and says so when it does not), and that `llama-server --version` runs before anything is moved into `bin/`.

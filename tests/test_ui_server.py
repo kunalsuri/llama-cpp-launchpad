@@ -27,6 +27,8 @@ import test_model_setup as tms  # noqa: E402
 import ui_server  # noqa: E402
 from fakes import FakeProbe  # noqa: E402
 
+REAL_DOWNLOAD = ms.download          # UiBase replaces it with a fake; the checksum test needs the real one
+
 
 class UiBase(tms.Base):
     def setUp(self):
@@ -483,6 +485,21 @@ class TestInstall(UiBase):
         self.post("/api/install", {"id": card["id"]})
         self.wait_for("done")
         self.assertEqual(parts, ["Big-Q4_K_M-00001-of-00002.gguf", "Big-Q4_K_M-00002-of-00002.gguf"])
+
+    def test_a_checksum_mismatch_is_named_on_the_page_not_blamed_on_the_connection(self):
+        def fetch(url, part, size, *rest):
+            part.parent.mkdir(parents=True, exist_ok=True)
+            part.write_bytes(b"y" * size)
+        wrong = {"siblings": [{"rfilename": "m.gguf", "size": 4, "lfs": {"sha256": "0" * 64, "size": 4}}]}
+        for target, value in (("download", REAL_DOWNLOAD), ("fetch_file", fetch),
+                              ("http_get", lambda url, timeout=25: json.dumps(wrong))):
+            unittest.mock.patch.object(ms, target, value).start()
+        self.addCleanup(unittest.mock.patch.stopall)
+        card = self.app.card({"repo": "o/M-GGUF", "name": "M-Q4", "size": 4, "tps": 20, "mode": "gpu", "files": [("m.gguf", 4)]})
+        self.post("/api/install", {"id": card["id"]})
+        j = self.wait_for("error")
+        self.assertIn("checksum", j["error"])
+        self.assertNotIn("connection", j["error"])
 
     def test_missing_llama_bench_is_not_an_error(self):
         unittest.mock.patch.object(ms, "check_model_speed", lambda *a: 2).start()
