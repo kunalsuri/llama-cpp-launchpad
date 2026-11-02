@@ -101,12 +101,14 @@ class TestCommand(Base):
         self.assertEqual((port, argv[argv.index("--port") + 1]), (9200, "9200"))
 
     def test_shown_command_is_quoted_for_this_os(self):
-        for system, expect in (("Linux", "'/models/My Model-Q4_K_M.gguf'"), ("Darwin", "'/models/My Model-Q4_K_M.gguf'"),
-                               ("Windows", '"/models/My Model-Q4_K_M.gguf"')):
+        """Quoting follows the pinned OS. The model path is a plain string: a host Path would turn /models into
+        \\models on a Windows runner (rule 2; failed on windows-latest)."""
+        model = "/models/My Model-Q4_K_M.gguf"
+        for system, expect in (("Linux", f"'{model}'"), ("Darwin", f"'{model}'"), ("Windows", f'"{model}"')):
             with self.subTest(system=system):
                 cs = chat_server.ChatServer(find_server=lambda: ["llama-server"], environ={"PORT": "8080"}, system=system,
                                             which=lambda n: "", run=lambda a, timeout=20: "")
-                shown = cs.preview(self.model, check_port=False)["cmd"]
+                shown = cs.preview(model, check_port=False)["cmd"]
                 self.assertTrue(shown.startswith("llama-server -m "), shown)
                 self.assertIn(expect, shown)
                 self.assertTrue(shown.endswith("--port 8080"), shown)
