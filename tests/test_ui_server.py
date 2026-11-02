@@ -861,6 +861,17 @@ class TestRadarOffline(UiBase):
         self.assertEqual(d["updated_at"], "2026-10-30T00:00:00Z")
 
 
+class TestServerBind(unittest.TestCase):
+    def test_the_page_server_binds_without_a_host_name_lookup(self):
+        """HTTPServer.server_bind calls socket.getfqdn(), which can take seconds on macOS (seen on the macOS CI
+        runner), and serve() may try 20 ports. The page server only needs to bind."""
+        import socket
+        with unittest.mock.patch.object(socket, "getfqdn", side_effect=AssertionError("getfqdn called")):
+            s = ui_server.Server(("127.0.0.1", 0), ui_server.BaseHTTPRequestHandler)
+        self.addCleanup(s.server_close)
+        self.assertEqual(s.server_address[0], "127.0.0.1")
+
+
 class TestServe(unittest.TestCase):
     """serve() takes the first free port from `port` upward.
 

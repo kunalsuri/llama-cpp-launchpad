@@ -40,6 +40,11 @@ class _BindProbe(HTTPServer):
     # Elsewhere set it as llama-server's HTTP library does, so a port in TIME_WAIT is not reported as busy.
     allow_reuse_address = platform.system() != "Windows"
 
+    def server_bind(self):
+        # HTTPServer.server_bind also looks up the host name (socket.getfqdn), which can take seconds on macOS and
+        # is done for every port tried. Binding is all this probe needs: call socketserver.TCPServer.server_bind.
+        super(HTTPServer, self).server_bind()
+
 
 def port_in_use(port: int) -> bool:
     """Is something listening on 127.0.0.1:port, or would llama-server fail to bind it?"""

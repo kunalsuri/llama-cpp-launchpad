@@ -13,7 +13,7 @@ import threading
 import time
 import unittest
 import unittest.mock
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -24,8 +24,16 @@ FAKE = str(HERE / "fake_llama_server.py")
 SERVER = [sys.executable, FAKE]
 
 
+class QuickServer(ThreadingHTTPServer):
+    """A test web server that binds without HTTPServer's host-name lookup (getfqdn), which is slow on macOS."""
+
+    def server_bind(self):
+        super(HTTPServer, self).server_bind()           # socketserver.TCPServer.server_bind: bind only
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
+
+
 def free_port():
-    s = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+    s = QuickServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
     port = s.server_address[1]
     s.server_close()
     return port
@@ -47,7 +55,7 @@ class Occupied:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.server = QuickServer(("127.0.0.1", 0), H)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         test.addCleanup(self.server.server_close)
@@ -269,6 +277,21 @@ class TestBusyPort(Base):
 
     def test_a_free_port_is_not_busy(self):
         self.assertIsNone(self.cs.preview(self.model)["busy"])
+
+
+class TestPortChecksDoNoNameLookups(unittest.TestCase):
+    """Regression (macOS CI): http.server's HTTPServer.server_bind() calls socket.getfqdn(), a host-name lookup that
+    can take seconds on macOS. The port check binds up to 100 ports to find a free one, so it must not look names up."""
+
+    def test_port_checks_never_resolve_host_names(self):
+        import socket
+        with unittest.mock.patch.object(socket, "getfqdn", side_effect=AssertionError("getfqdn called")), \
+                unittest.mock.patch.object(socket, "gethostbyaddr", side_effect=AssertionError("gethostbyaddr called")):
+            port = free_port()
+            self.assertFalse(chat_server.port_in_use(port))
+            occ = Occupied(self)
+            self.assertTrue(chat_server.port_in_use(occ.port))
+            self.assertGreater(chat_server.next_free_port(occ.port), occ.port)
 
 
 class TestWhoUsesThePort(unittest.TestCase):

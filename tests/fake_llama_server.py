@@ -13,7 +13,7 @@ import json
 import os
 import sys
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 
 def arg(name, default=""):
@@ -64,6 +64,12 @@ def main():
 
     class Server(ThreadingHTTPServer):
         allow_reuse_address = sys.platform != "win32"      # as cpp-httplib: never share a port on Windows
+
+        def server_bind(self):
+            # Bind only. HTTPServer.server_bind also runs socket.getfqdn(), which took tens of seconds on the macOS
+            # CI runner: the "server" then listened long after the real llama-server would have.
+            super(HTTPServer, self).server_bind()
+            self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
 
     try:
         server = Server(("127.0.0.1", port), Handler)

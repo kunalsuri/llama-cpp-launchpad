@@ -20,7 +20,7 @@ import secrets
 import sys
 import threading
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -608,6 +608,11 @@ def make_handler(app: App):
 
 class Server(ThreadingHTTPServer):
     allow_reuse_address = False         # on Windows reuse would let another program share (and read) our port
+
+    def server_bind(self):
+        # Bind only: HTTPServer.server_bind also runs socket.getfqdn(), which can take seconds on macOS, per port tried.
+        super(HTTPServer, self).server_bind()
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
 
 
 def serve(ms, port: int = 8765, open_browser: bool = True, initial_hash: str = "") -> int:
