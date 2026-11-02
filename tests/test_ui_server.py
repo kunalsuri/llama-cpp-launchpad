@@ -565,6 +565,18 @@ class TestOsAwareHelp(UiBase):
         kinds = {c["kind"]: c["cmd"] for c in card["commands"]}
         self.assertEqual(kinds, {"resume": './scripts/unix/radar.sh --download "o/Big-GGUF"'})
 
+    def test_a_split_download_started_in_a_terminal_is_resumed_whole(self):
+        """Review finding: the state file only names the first shard (with the whole model's size). Rebuilding a
+        one-file offer from it gave `--file <first shard>` and a shard-only curl command, which checked that shard
+        against the whole size and never fetched the other parts."""
+        self.use("Linux", {"curl": "/usr/bin/curl"})
+        values = {"dl_active": "1", "dl_state": "downloading", "dl_repo": "o/Big-GGUF",
+                  "dl_file": "Big-Q4_K_M-00001-of-00003.gguf", "dl_done": "1", "dl_total": "30"}
+        with unittest.mock.patch.object(ms, "state_get", side_effect=lambda k: values.get(k, "")):
+            snap = self.app.snapshot()
+        self.assertEqual([(c["kind"], c["cmd"]) for c in snap["commands"]],
+                         [("resume", './scripts/unix/radar.sh --download "o/Big-GGUF"')])
+
     def test_a_failed_download_offers_the_resume_that_really_resumes(self):
         self.use("Windows", WIN_CURL)
         unittest.mock.patch.object(ms, "download", lambda *a, **k: None).start()
@@ -599,7 +611,7 @@ class TestOsAwareHelp(UiBase):
 class TestRadarOffline(UiBase):
     def test_a_sync_that_cannot_reach_the_hub_says_so_and_keeps_the_saved_scan(self):
         saved = {"updated_at": "2026-10-30T00:00:00Z", "models": [{"repo": "t/saved-GGUF", "fit_mode": "gpu"}]}
-        with unittest.mock.patch("hf_radar.fetch_hf_repos", return_value=[]), \
+        with unittest.mock.patch("hf_radar.http_json", return_value=None), \
                 unittest.mock.patch("hf_radar.load_latest", return_value=saved):
             d = self.get_json("/api/radar?sync=1")
         self.assertTrue(d["offline"])

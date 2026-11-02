@@ -535,6 +535,31 @@ const scenarios = {
     if (p.visible() !== "v-radar") return "browser Back should return to the radar, got " + p.visible();
   },
 
+  async "the done screen has no stray text on any OS when llama.cpp is installed"() {
+    // Review finding: on Linux the optional double-click tip is undefined and replaceChildren(..., null) printed "null".
+    const done = { state: "done", title: "Qwen", bench: "ok", tps: 20 };
+    for (const os of ["linux", "mac", "windows"]) {
+      const p = makePage({ routes: finishing({ ...STATE, os }, done) });
+      await p.start();
+      await p.advance(600);
+      const t = p.text("done-next");
+      if (/\b(null|undefined)\b/.test(t)) return `${os}: stray text on the done screen: ${t}`;
+      if (os !== "linux" && !/double-click/.test(t)) return `${os}: the double-click tip is missing: ${t}`;
+    }
+  },
+
+  async "Details opens on the cards of the What changed view too"() {
+    // Review finding: the toggle re-rendered only the (hidden) radar list, so history cards never opened.
+    const hist = { summary: { new_count: 1 }, new_models: [radarModel({ repo: "new/x-GGUF", file: "x.gguf" })], top_movers: [], removed_models: [], snapshots: [] };
+    const p = makePage({ hash: "#history", routes: idle((path) => (path.startsWith("/api/radar/history") ? hist : {})) });
+    await p.start();
+    const btn = p.button("history-content", "Details");
+    if (!btn) return "no Details button: " + p.text("history-content");
+    btn.click(); await p.settle();
+    const t = p.text("history-content");
+    if (!t.includes("Repository") || !t.includes("x.gguf")) return "details did not open in the history view: " + t;
+  },
+
   // --- Navigation: views live in the URL, so browser Back/Forward and bookmarks work ---
   async "browser Back and Forward move between views"() {
     const p = makePage({ routes: idle((path) => (path === "/api/tools" ? TOOLS : path.startsWith("/api/radar") ? { models: [radarModel()] } : {})) });

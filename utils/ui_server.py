@@ -32,6 +32,7 @@ USES = ("chat", "coding", "translation", "fast")
 SEARCH_FOR_USE = {"coding": "coder"}            # extra Hub search text per use
 MAX_BODY = 4096
 LLAMA_RELEASES = "github.com/ggml-org/llama.cpp/releases"
+SHARD = re.compile(r"-\d{5}-of-\d{5}\.gguf$", re.I)      # one part of a split model (as in hf_discover)
 
 
 def _llama_cpp_install(probe) -> dict:
@@ -216,7 +217,9 @@ class App:
                   app's .part file), so it is labelled as such. Only when curl is on PATH; Windows needs curl.exe,
                   because `curl` in Windows PowerShell 5 is an alias of Invoke-WebRequest and rejects -L / -o."""
         system, repo, files = self.probe.system, offer["repo"], offer["files"]
-        single = len(files) == 1
+        # A split model is resumed whole. A download started in a terminal is only known by its first shard (and
+        # the whole size), so a shard name alone also means "split": never --file one shard, never curl one shard.
+        single = len(files) == 1 and not SHARD.search(files[0][0])
         resume = f'{launcher(system, "radar")} --download "{repo}"' + (f' --file "{files[0][0]}"' if single else "")
         out = [{"kind": "resume", "label": "Download or resume it from a terminal", "cmd": resume}]
         if single and self.probe.which("curl"):
