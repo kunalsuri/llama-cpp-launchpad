@@ -155,12 +155,12 @@
   .copy-btn:hover { color: var(--text); border-color: var(--border-strong); }
   .copy-btn.ok { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); }
   .copy-btn.no { color: var(--warn); }
-  details.terminal { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
-  details.terminal > summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--text-2); list-style: none; display: inline-flex; align-items: center; gap: 8px; }
-  details.terminal > summary::-webkit-details-marker { display: none; }
-  details.terminal > summary::after { content: "+"; font-weight: 700; color: var(--text-3); }
-  details.terminal[open] > summary::after { content: "\2212"; }
-  details.terminal .terminal-body { margin-top: 12px; }
+  details.terminal, details.explain { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+  details.terminal > summary, details.explain > summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--text-2); list-style: none; display: inline-flex; align-items: center; gap: 8px; }
+  details.terminal > summary::-webkit-details-marker, details.explain > summary::-webkit-details-marker { display: none; }
+  details.terminal > summary::after, details.explain > summary::after { content: "+"; font-weight: 700; color: var(--text-3); }
+  details.terminal[open] > summary::after, details.explain[open] > summary::after { content: "\2212"; }
+  details.terminal .terminal-body, details.explain .terminal-body { margin-top: 12px; }
 
   /* --- Steps (choose / download / run) --- */
   .steps { display: flex; justify-content: center; gap: 6px; margin: 0 0 28px; padding: 0; list-style: none; font-size: 13px; color: var(--text-3); }
@@ -804,6 +804,7 @@ async function pick(u) {
         h("li", { class: "fact" }, icon("download"), m.size_h),
         m.tps ? h("li", { class: "fact" }, icon("fast"), "~" + m.tps + " tokens/s est.") : null),
       m.note ? h("p", { class: "note" }, m.note) : null,
+      explainCard(m),
       h("div", { class: "actions" },
         h("button", { class: "btn", onclick: () => install(m) }, icon(m.have ? "check" : "download"), m.have ? "Use this model" : "Get this model"),
         m.have ? h("span", { class: "muted" }, "Already downloaded") : h("span", { class: "muted" }, "Downloads into the models folder")),
@@ -815,6 +816,35 @@ async function pick(u) {
   }
   show("v-pick");
   if (!ms.length) more(false);
+}
+
+// --- Plain words for the numbers on a card, next to the choice they affect -------------------------------------
+function quantText(q) {
+  q = (q || "").toUpperCase();
+  const bits = /^(F32|F16|BF16)$/.test(q) ? 16 : parseInt((/^(?:IQ|TQ|Q)(\d)/.exec(q) || [])[1] || "0", 10);
+  if (!q) return "The file name does not say how the model was compressed.";
+  if (bits >= 16) return q + " is full precision: the original weights, nothing lost, but the largest file.";
+  if (bits === 8) return q + " is 8-bit: practically as good as the original at about half its size, and twice the size of a 4-bit file.";
+  if (bits >= 5) return q + " is " + bits + "-bit: very close to the original, a little larger than 4-bit.";
+  if (bits === 4) return q + " is 4-bit: about a quarter of the original size, with a small loss in quality. It is the usual balance of size and quality.";
+  if (bits === 3) return q + " is 3-bit: smaller again, with a loss in quality you may notice.";
+  return q + " is " + (bits || "under 3") + "-bit: answers are noticeably worse. Use it only when nothing larger fits.";
+}
+function speedText(tps) {
+  if (!tps) return "";
+  const w = tps * 0.75, words = w < 10 ? Math.max(1, Math.round(w)) : Math.round(w / 5) * 5;   // a token is about 3/4 of a word
+  return "~" + tps + " tokens a second is about " + words + " words a second. People read about 4 words a second, so this is " +
+    (w >= 4 ? "faster than most people read." : "slower than you read: you will wait for each answer.");
+}
+function explainCard(m) {
+  const rows = [quantText(m.quant),
+    "Quantization is how much the model's numbers were rounded to make the file smaller. Fewer bits: a smaller, faster model that answers a little worse.",
+    m.need_mb ? "It downloads " + m.size_h + " once and needs " + (m.memory_bound === "at_most" ? "at most " : "about ") +
+      (m.need_mb / 1024).toFixed(1) + " GB of memory to run (" + (m.memory_from === "header" ? "worked out from the model file itself" : "an estimate") + ")."
+      : m.size_h ? "It downloads " + m.size_h + " once, and needs a bit more than that in memory while it runs." : "",
+    speedText(m.tps), m.tps ? "Speeds are estimates until the model is downloaded and tested on this computer." : ""].filter(Boolean);
+  return h("details", { class: "explain" }, h("summary", {}, icon("info"), "What do these mean?"),
+    h("ul", { class: "reasons" }, rows.map((r) => h("li", {}, r))));
 }
 
 function list(title, ms) {
@@ -998,7 +1028,7 @@ function settingsPanel(pv) {
     h("p", { class: "rows-title" }, "How will you use it?"),
     h("div", { class: "presets", role: "group", "aria-label": "Settings" }, ...rows),
     first && !pv.presets.some((x) => x.memory) ? h("p", { class: "muted" }, "Memory needed: could not read the model file (" + first.memory_error + ").") : null,
-    h("details", { class: "terminal" }, h("summary", {}, icon("info"), "Set the context length yourself"),
+    h("details", { class: "explain" }, h("summary", {}, icon("info"), "Set the context length yourself"),
       h("div", { class: "terminal-body" },
         h("p", { class: "muted", style: "margin:0 0 8px" }, "The context is how much of the conversation the model can see at once, in tokens (a token is about 3/4 of a word). More context needs more memory."),
         h("div", { class: "actions" }, ctxIn, h("button", { class: "btn small ghost", onclick: () => applyCtx(ctxIn.value) }, "Use this length")))));

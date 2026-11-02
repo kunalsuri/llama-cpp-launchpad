@@ -684,6 +684,33 @@ const scenarios = {
     if (sel.join() !== "gpu") return "aria-selected on: " + sel.join();
   },
 
+  // --- Plain-language explanations next to the choice they affect ----------------------------------------------
+  async "the recommended model explains its quantization, size and speed in plain words"() {
+    const rec = (quant, tps) => ({ models: [{ id: "a|m.gguf", title: "Qwen3-4B", repo: "a/Qwen3-4B-GGUF", quant, verdict: "smooth",
+      where: "gpu", size: 2.4e9, size_h: "2.4 GB", tps, have: false, note: "", commands: [] }] });
+    const texts = {};
+    for (const [quant, tps] of [["Q4_K_M", 40], ["Q8_0", 20], ["IQ2_XS", 60], ["", 3]]) {
+      const p = makePage({ routes: idle((path) => (path === "/api/recommend" ? rec(quant, tps) : {})) });
+      await p.start();
+      p.button("tiles", "General chat").click(); await p.settle();
+      if (p.visible() !== "v-pick") return "the pick view did not open: " + p.visible();
+      texts[quant] = p.text("top");
+      if (!texts[quant].includes("What do these mean?")) return quant + ": no explanation on the card: " + texts[quant];
+    }
+    if (!/4-bit/.test(texts.Q4_K_M) || !/balance/.test(texts.Q4_K_M)) return "Q4_K_M is not explained: " + texts.Q4_K_M;
+    if (!/8-bit/.test(texts.Q8_0) || !/twice/.test(texts.Q8_0)) return "Q8_0 is not explained: " + texts.Q8_0;
+    if (!/noticeably worse/.test(texts.IQ2_XS)) return "a 2-bit model does not warn about quality: " + texts.IQ2_XS;
+    if (!/about 30 words a second/.test(texts.Q4_K_M)) return "40 tokens/s is not put in words: " + texts.Q4_K_M;
+    if (!/slower than you read/.test(texts[""])) return "3 tokens/s is not compared with reading: " + texts[""];
+    if (!/faster than most people read/.test(texts.Q8_0)) return "20 tokens/s is not compared with reading: " + texts.Q8_0;
+    if (/\b(null|undefined)\b/.test(texts[""])) return "a model without a quantization shows stray text: " + texts[""];
+    const exact = makePage({ routes: idle((path) => (path === "/api/recommend"
+      ? { models: [{ ...rec("Q4_K_M", 40).models[0], need_mb: 3584, memory_from: "header" }] } : {})) });
+    await exact.start();
+    exact.button("tiles", "General chat").click(); await exact.settle();
+    if (!/about 3\.5 GB of memory to run \(worked out from the model file itself\)/.test(exact.text("top"))) return "exact memory not explained: " + exact.text("top");
+  },
+
   // --- A slow speed test explains itself ----------------------------------------------------------------------
   async "a slow speed test shows why it was slow and what to do"() {
     const done = { state: "done", id: "o/M-GGUF|m.gguf", title: "M", bench: "ok", tps: 3,
