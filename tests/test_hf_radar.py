@@ -1,6 +1,7 @@
 """Tests for utils/hf_radar.py (offline, mocked)."""
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import sys
@@ -308,28 +309,57 @@ class TestRadarMain(unittest.TestCase):
 
 
 class TestAppRadarApi(unittest.TestCase):
+    """Regression (rule 2): this used to read the real radar folder, the real hardware and, with no saved scan,
+    the real Hugging Face, so it passed only on a machine that had synced before. Now everything is pinned."""
+
+    def setUp(self):
+        import model_setup
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        env = mock.patch.dict("os.environ", {"LP_RADAR_DIR": str(self.tmp / "radar"),
+                                             "STATE_FILE": str(self.tmp / "state"), "MODELS_DIR": str(self.tmp / "m")})
+        env.start()
+        self.addCleanup(env.stop)
+        hw = hardware.Hw(ram_mb=16384, cores=8, gpu_kind="nvidia", gpu_name="Test GPU", vram_mb=8192, gpu_usable=True)
+        for target, value in ((model_setup, "detect_hw"), (hf_radar, "http_json")):
+            fake = (lambda: hw) if value == "detect_hw" else self.no_network
+            p = mock.patch.object(target, value, fake)
+            p.start()
+            self.addCleanup(p.stop)
+        old = [{"repo": "a/old-coder-GGUF", "name": "old-coder-Q4_K_M", "size_bytes": 2 << 30, "downloads": 10,
+                "fit_mode": "gpu", "tps": 40, "clusters": ["coding"]}]
+        new = old + [{"repo": "b/new-chat-GGUF", "name": "new-chat-Q4_K_M", "size_bytes": 3 << 30, "downloads": 5,
+                      "fit_mode": "cpu", "tps": 9, "clusters": ["chat"]}]
+        snaps = self.tmp / "radar" / "snapshots"
+        snaps.mkdir(parents=True)
+        for day, models in (("2026-10-31", old), ("2026-11-01", new)):
+            (snaps / f"{day}.json").write_text(json.dumps({"updated_at": day + "T08:00:00Z", "models": models}))
+        (self.tmp / "radar" / "latest.json").write_text(json.dumps({"updated_at": "2026-11-01T08:00:00Z", "models": new}))
+
+    def no_network(self, url, timeout=25):
+        raise AssertionError("tried to reach the network: " + url)
+
     def test_app_radar_clusters_and_history(self):
         import model_setup
         import ui_server
 
         app = ui_server.App(model_setup)
         data = app.radar()
-        self.assertIn("models", data)
-        self.assertIn("updated_at", data)
-        if data["models"]:
-            self.assertIn("clusters", data["models"][0])
-            self.assertIn("file", data["models"][0])
-            self.assertIn("download_url", data["models"][0])
+        self.assertEqual(data["updated_at"], "2026-11-01T08:00:00Z")
+        self.assertEqual(len(data["models"]), 2)
+        for m in data["models"]:
+            self.assertIn("clusters", m)
+            self.assertIn("file", m)
+            self.assertIn("download_url", m)
 
         coding_data = app.radar(cluster="coding")
-        for m in coding_data["models"]:
-            self.assertIn("coding", m["clusters"])
+        self.assertEqual([m["repo"] for m in coding_data["models"]], ["a/old-coder-GGUF"])
 
         hist = app.radar_history()
         self.assertIn("summary", hist)
-        self.assertIn("new_models", hist)
+        self.assertEqual([m["repo"] for m in hist["new_models"]], ["b/new-chat-GGUF"])
         self.assertIn("snapshots", hist)
-        self.assertGreater(len(app.offered), 0)
+        self.assertEqual(len(app.offered), 2)
 
         # Verify offered entries have exact file and download_url
         for mid, offer in app.offered.items():
@@ -342,7 +372,7 @@ class TestAppRadarApi(unittest.TestCase):
         import model_setup
         import ui_server
 
-        app = ui_server.App(model_setup)
+        app = ui_server.App(model_setup)        # setUp pins the hardware and the state file
         # Mock active terminal download in model_setup state
         state_vals = {
             "dl_active": "1",
@@ -363,7 +393,109 @@ class TestAppRadarApi(unittest.TestCase):
             self.assertEqual(snap["file"], "qwen2.5-coder-7b-instruct-q8_0.gguf")
 
 
+class TestSyncOffline(unittest.TestCase):
+    """A sync that reaches nothing must say so; the page used to show "No matching models" instead."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.hw = hardware.Hw(ram_mb=16384, cores=8, gpu_kind="none", gpu_name="", vram_mb=0, gpu_usable=False)
+
+    def test_no_listing_means_offline_and_nothing_is_recorded(self):
+        with mock.patch.object(hf_radar, "http_json", return_value=None):          # every request failed
+            out = hf_radar.sync_radar(self.hw, hdir=self.tmp)
+        self.assertTrue(out["offline"])
+        self.assertEqual(out["models"], [])
+        self.assertFalse((self.tmp / "latest.json").exists())
+
+    def test_a_search_that_matches_nothing_is_not_offline(self):
+        """Review finding: an answered request with no matches used to be reported as "could not reach the Hub"."""
+        with mock.patch.object(hf_radar, "http_json", return_value=[]):            # answered: zero results
+            out = hf_radar.sync_radar(self.hw, hdir=self.tmp, search="no-such-model-xyz")
+        self.assertFalse(out["offline"])
+        self.assertEqual(out["models"], [])
+
+    def test_fetch_tells_a_failed_request_from_an_empty_answer(self):
+        with mock.patch.object(hf_radar, "http_json", return_value=None):
+            self.assertIsNone(hf_radar.fetch_hf_repos())
+        with mock.patch.object(hf_radar, "http_json", return_value=[]):
+            self.assertEqual(hf_radar.fetch_hf_repos(), [])
+
+    def test_a_listing_that_came_back_is_not_offline(self):
+        with mock.patch.object(hf_radar, "fetch_hf_repos", return_value=[{"id": "a/b-GGUF", "siblings": []}]):
+            out = hf_radar.sync_radar(self.hw, hdir=self.tmp)
+        self.assertFalse(out["offline"])
+
+
 class TestRadarDownloadCli(unittest.TestCase):
+    @mock.patch("hf_radar.load_latest")
+    @mock.patch("model_setup.download", return_value=None)
+    @mock.patch("model_setup.local_path", return_value=(Path("m.gguf"), False))
+    @mock.patch("model_setup.state_update")
+    def test_a_failed_download_names_the_command_that_really_resumes(self, _state, _path, _dl, load):
+        load.return_value = {"models": [{"repo": "t/m", "file": "m.gguf", "size_bytes": 5}]}
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out), mock.patch.object(hf_radar.sys, "platform", "win32"):
+            self.assertEqual(hf_radar.download_model_cli("t/m"), 1)
+        text = out.getvalue()
+        self.assertIn('scripts\\win\\radar.bat --download "t/m"', text)
+        self.assertNotIn("python3", text)
+        self.assertNotIn("-C -", text, "curl cannot continue the app's .part file")
+
+
+class TestDownloadCliResolvesTheRequestedFile(unittest.TestCase):
+    """Review findings on the resume command the setup page shows (`radar --download REPO --file FILE`)."""
+
+    DETAIL = {"id": "o/M-GGUF", "siblings": [
+        {"rfilename": "M-Q4_K_M.gguf", "size": 400},
+        {"rfilename": "M-Q8_0.gguf", "lfs": {"size": 800}},
+    ]}
+
+    def setUp(self):
+        self.urls, self.calls = [], []
+        hw = hardware.Hw(ram_mb=16384, cores=8, gpu_kind="none", gpu_name="", vram_mb=0, gpu_usable=False)
+        for target, attr, value in (
+                (hardware, "detect_hw", lambda: hw),
+                (hf_radar, "http_json", self.fake_http),
+                (hf_radar, "evaluate_repo", lambda meta, sibs, hw_: {"repo": meta["id"], "name": "M-Q8_0",
+                                                                     "file": "M-Q8_0.gguf", "size_bytes": 800}),
+                (hf_radar.model_setup, "download", self.fake_download),
+                (hf_radar.model_setup, "local_path", lambda repo, f, size: (Path(f), False)),
+                (hf_radar.model_setup, "state_update", lambda *a, **k: None),
+                (hf_radar.model_setup, "record_installed", lambda *a, **k: None),
+                (hf_radar.model_setup, "check_model_speed", lambda *a, **k: 2)):
+            p = mock.patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def fake_http(self, url, timeout=25):
+        self.urls.append(url)
+        return dict(self.DETAIL) if url.startswith("https://huggingface.co/api/models/o/M-GGUF") else None
+
+    def fake_download(self, repo, f, size, on_progress=None):
+        self.calls.append((f, size))
+        return Path(f)
+
+    def run_cli(self, *args, cached=None, **kw):
+        with mock.patch.object(hf_radar, "load_latest", return_value=cached), mock.patch("sys.stdout", io.StringIO()):
+            return hf_radar.download_model_cli(*args, **kw)
+
+    def test_with_no_radar_cache_the_metadata_url_is_right(self):
+        """It requested .../api/models/models/REPO (HF_API already ends in /api/models), so a fresh checkout failed."""
+        self.assertEqual(self.run_cli("o/M-GGUF", custom_file="M-Q4_K_M.gguf"), 0)
+        self.assertTrue(self.urls)
+        self.assertNotIn("/models/models/", " ".join(self.urls))
+
+    def test_a_named_file_is_checked_against_its_own_size(self):
+        """The radar picked Q8 (800 bytes); resuming the Q4 file (400 bytes) checked it against 800 and failed."""
+        cached = {"models": [{"repo": "o/M-GGUF", "name": "M-Q8_0", "file": "M-Q8_0.gguf", "size_bytes": 800}]}
+        self.assertEqual(self.run_cli("o/M-GGUF", custom_file="M-Q4_K_M.gguf", cached=cached), 0)
+        self.assertEqual(self.calls, [("M-Q4_K_M.gguf", 400)])
+
+    def test_without_a_named_file_the_chosen_one_keeps_its_size(self):
+        self.assertEqual(self.run_cli("o/M-GGUF"), 0)
+        self.assertEqual(self.calls, [("M-Q8_0.gguf", 800)])
+
     def test_normalize_model_entry(self):
         m = {"repo": "author/model-name", "size_bytes": 1024}
         hf_radar._normalize_model_entry(m)

@@ -135,18 +135,44 @@ def apply_persona(name: str):
     return undo
 
 
+# Files the app writes for the user. A test that forgets to pin one must not overwrite the developer's own setup.
+ISOLATED_VARS = ("STATE_FILE", "MODELS_DIR", "LP_RADAR_DIR")
+
+
+def isolate_user_state():
+    """Point the app's state file, models folder and radar folder at a fresh temp dir. Returns an undo function.
+    Tests still pin their own paths; this is the safety net under them (also used by conftest.py for pytest)."""
+    import shutil
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="launchpad-tests-"))
+    before = {v: os.environ.get(v) for v in ISOLATED_VARS}
+    os.environ.update({"STATE_FILE": str(tmp / "state"), "MODELS_DIR": str(tmp / "models"),
+                       "LP_RADAR_DIR": str(tmp / "radar")})
+
+    def undo() -> None:
+        for var, value in before.items():
+            if value is None:
+                os.environ.pop(var, None)
+            else:
+                os.environ[var] = value
+        shutil.rmtree(tmp, ignore_errors=True)
+    return undo
+
+
 def main(argv: list | None = None) -> int:
     args = parse_args(argv)
     if args.cov:
         return run_with_coverage(child_args(args), args.min)
-    if not args.persona:
-        return run_selected(args)
-    print(f"pretending to be {PERSONAS[args.persona][0]} {PERSONAS[args.persona][1]}")
-    undo = apply_persona(args.persona)
+    undo_state = isolate_user_state()
+    undo_persona = lambda: None  # noqa: E731
+    if args.persona:
+        print(f"pretending to be {PERSONAS[args.persona][0]} {PERSONAS[args.persona][1]}")
+        undo_persona = apply_persona(args.persona)
     try:
         return run_selected(args)
     finally:
-        undo()
+        undo_persona()
+        undo_state()
 
 
 def run_selected(args: argparse.Namespace) -> int:

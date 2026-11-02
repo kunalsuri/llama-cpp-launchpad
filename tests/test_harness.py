@@ -14,6 +14,7 @@ import io
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import unittest
@@ -61,7 +62,7 @@ class TestEveryModuleHasTests(unittest.TestCase):
                     ok = isinstance(reason, ast.Constant) and isinstance(reason.value, str) and len(reason.value) >= 8
                     self.assertTrue(ok, f"{path.name}:{node.lineno} a skip needs a written reason")
                     skips.append((path.name, node.lineno))
-        self.assertLessEqual(len(skips), 2, skips)       # node missing, POSIX permission bits
+        self.assertLessEqual(len(skips), 4, skips)       # node missing, POSIX bits, no git checkout, no playwright
 
 
 class TestLaunchers(unittest.TestCase):
@@ -81,6 +82,20 @@ class TestLaunchers(unittest.TestCase):
         self.assertIn("status=$?", text, "save the tool's exit status before prompting")
         self.assertRegex(text, r"(?m)^exit \"?\$status\"?\s*$", "and return it at the end")
         self.assertLess(text.index("status=$?"), text.index("read "), "save it before the prompt, not after")
+
+    @unittest.skipUnless((ROOT / ".git").exists() and shutil.which("git"), "not a git checkout: modes live in the index")
+    def test_unix_and_mac_launchers_are_executable_in_git(self):
+        """Regression: ui.sh and ui.command were committed as 100644, so `./scripts/unix/ui.sh` said
+        "Permission denied" and double-clicking ui.command on macOS refused to run. The mode is read from git's
+        index, not the file system, so this holds on Windows checkouts too (core.fileMode=false)."""
+        listing = subprocess.run(["git", "ls-files", "-s", "--", "scripts"], cwd=str(ROOT),
+                                 capture_output=True, text=True, timeout=30)
+        self.assertEqual(listing.returncode, 0, listing.stderr)
+        modes = {line.split("\t", 1)[1]: line.split()[0] for line in listing.stdout.splitlines()}
+        launchers = [p for p in modes if p.endswith((".sh", ".command"))]
+        self.assertTrue(launchers)
+        for path in launchers:
+            self.assertEqual(modes[path], "100755", f"{path} is not executable: git update-index --chmod=+x {path}")
 
     def test_launchers_only_start_python_utils(self):
         for sh in (ROOT / "scripts" / "unix").glob("*.sh"):
@@ -265,6 +280,26 @@ class TestSourcesCompileCleanly(unittest.TestCase):
         for path in UTILS + TESTS:
             bad = [c for c in source(path) if ord(c) < 32 and c not in "\n\r\t"]
             self.assertFalse(bad, f"{path.name} contains control characters {bad!r}")
+
+
+class TestSuiteLeavesTheProjectAlone(unittest.TestCase):
+    """Regression: constructing ui_server.App saves the detected hardware, and the radar writes snapshots. A test
+    that forgot to pin STATE_FILE / LP_RADAR_DIR wrote .launchpad-state and data/hf_history into the checkout,
+    overwriting the developer's own setup. The runner (and conftest.py for pytest) points them at a temp dir."""
+
+    def test_state_models_and_radar_dirs_point_outside_the_project(self):
+        for var in ("STATE_FILE", "MODELS_DIR", "LP_RADAR_DIR"):
+            value = os.environ.get(var)
+            self.assertTrue(value, f"{var} is not set: run the tests with tests/run.py or pytest")
+            self.assertNotIn(ROOT.resolve(), Path(value).resolve().parents, f"{var}={value} is inside the project")
+
+    def test_runner_isolation_is_undone_afterwards(self):
+        import run
+        before = {v: os.environ.get(v) for v in run.ISOLATED_VARS}
+        undo = run.isolate_user_state()
+        self.assertTrue(all(os.environ.get(v) for v in run.ISOLATED_VARS))
+        undo()
+        self.assertEqual({v: os.environ.get(v) for v in run.ISOLATED_VARS}, before)
 
 
 class TestRunnerAndWorkflow(unittest.TestCase):

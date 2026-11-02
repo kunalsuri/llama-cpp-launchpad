@@ -4,1620 +4,519 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>llama-cpp-launchpad · model setup</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 2 3 14h9l-1 8 10-12h-9l1-8z'/%3E%3C/svg%3E">
+<title>llama-cpp-launchpad · setup</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 2 3 14h9l-1 8 10-12h-9l1-8z'/%3E%3C/svg%3E">
 <style>
+  /* ---------------------------------------------------------------------------------------------------------
+     Design tokens. Light is the default; dark follows the system unless the theme button pins one.
+     Fonts are each OS's own UI font (Segoe UI, SF Pro, Cantarell/Ubuntu...), so the page feels native everywhere
+     and nothing is downloaded. Symbols are inline SVG, never emoji: emoji fonts are missing on many Linux setups.
+     --------------------------------------------------------------------------------------------------------- */
   :root {
-    --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    --radius: 14px;
-    --radius-sm: 8px;
-    --radius-full: 9999px;
+    color-scheme: light;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+    --r-lg: 16px; --r: 12px; --r-sm: 8px; --r-full: 999px;
 
-    /* Light mode tokens */
-    --bg: oklch(99% 0.005 240);
-    --bg-subtle: oklch(96.5% 0.01 240);
-    --surface: oklch(100% 0 0);
-    --surface-hover: oklch(97.5% 0.01 240);
-    --surface-active: oklch(95% 0.015 240);
-    --border: oklch(89% 0.01 240);
-    --border-hover: oklch(78% 0.02 240);
-    --text-main: oklch(16% 0.02 240);
-    --text-muted: oklch(48% 0.02 240);
-    --text-faint: oklch(65% 0.015 240);
+    --bg: #f7f8fb;
+    --surface: #ffffff;
+    --surface-2: #f1f3f8;
+    --surface-3: #e8ebf3;
+    --border: #dfe3ec;
+    --border-strong: #c3c9d6;
+    --text: #12151c;
+    --text-2: #4a5263;
+    --text-3: #6b7385;
 
-    --primary: oklch(20% 0.03 240);
-    --primary-hover: oklch(12% 0.03 240);
-    --primary-fg: oklch(99% 0 0);
+    --accent: #4f46e5;
+    --accent-hover: #4338ca;
+    --accent-soft: #eef0ff;
+    --accent-text: #3730a3;
+    --on-accent: #ffffff;
 
-    --accent: oklch(56% 0.22 265);
-    --accent-subtle: oklch(95% 0.05 265);
-    --accent-fg: oklch(35% 0.18 265);
+    --good: #15803d; --good-soft: #e9f8ef;
+    --warn: #a16207; --warn-soft: #fdf6e3;
+    --bad: #b91c1c;  --bad-soft: #fdeeee;
 
-    --good: oklch(58% 0.17 150);
-    --warn: oklch(65% 0.16 75);
-    --bad: oklch(58% 0.22 25);
-
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.06), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-    --shadow-hover: 0 10px 24px -4px rgba(0, 0, 0, 0.09), 0 4px 8px -2px rgba(0, 0, 0, 0.04);
-
-    /* Backward compatibility */
-    --background: var(--bg);
-    --foreground: var(--text-main);
-    --muted: var(--bg-subtle);
-    --muted-foreground: var(--text-muted);
-    --secondary: var(--surface-hover);
-    --primary-foreground: var(--primary-fg);
+    --shadow-1: 0 1px 2px rgb(16 24 40 / .06);
+    --shadow-2: 0 1px 3px rgb(16 24 40 / .08), 0 6px 16px -6px rgb(16 24 40 / .12);
+    --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
   }
-
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: oklch(13.5% 0.015 250);
-      --bg-subtle: oklch(18% 0.02 250);
-      --surface: oklch(19.5% 0.02 250);
-      --surface-hover: oklch(24% 0.025 250);
-      --surface-active: oklch(28% 0.03 250);
-      --border: oklch(29% 0.02 250);
-      --border-hover: oklch(40% 0.03 250);
-      --text-main: oklch(98% 0.005 240);
-      --text-muted: oklch(72% 0.02 240);
-      --text-faint: oklch(50% 0.02 240);
-
-      --primary: oklch(96% 0.01 240);
-      --primary-hover: oklch(100% 0 0);
-      --primary-fg: oklch(16% 0.02 250);
-
-      --accent: oklch(70% 0.2 265);
-      --accent-subtle: oklch(25% 0.06 265);
-      --accent-fg: oklch(90% 0.1 265);
-
-      --good: oklch(75% 0.17 150);
-      --warn: oklch(78% 0.16 75);
-      --bad: oklch(72% 0.2 25);
-
-      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-      --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.5), 0 2px 6px -1px rgba(0, 0, 0, 0.3);
-      --shadow-hover: 0 12px 30px -4px rgba(0, 0, 0, 0.65), 0 4px 10px -2px rgba(0, 0, 0, 0.4);
+      color-scheme: dark;
+      --bg: #0d1017; --surface: #151922; --surface-2: #1b202b; --surface-3: #242a37;
+      --border: #2a3140; --border-strong: #3b4456;
+      --text: #eef1f6; --text-2: #b5bdcc; --text-3: #8b94a7;
+      --accent: #818cf8; --accent-hover: #a5b4fc; --accent-soft: #1f2340; --accent-text: #c7d2fe; --on-accent: #0d1017;
+      --good: #4ade80; --good-soft: #10261a; --warn: #fbbf24; --warn-soft: #2a2110; --bad: #f87171; --bad-soft: #2c1414;
+      --shadow-1: 0 1px 2px rgb(0 0 0 / .4); --shadow-2: 0 1px 3px rgb(0 0 0 / .5), 0 8px 20px -8px rgb(0 0 0 / .6);
     }
   }
-
-  :root[data-theme="dark"], :root:has(> head > meta[name="color-scheme"][content="dark"]) {
+  :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg: oklch(13.5% 0.015 250);
-    --bg-subtle: oklch(18% 0.02 250);
-    --surface: oklch(19.5% 0.02 250);
-    --surface-hover: oklch(24% 0.025 250);
-    --surface-active: oklch(28% 0.03 250);
-    --border: oklch(29% 0.02 250);
-    --border-hover: oklch(40% 0.03 250);
-    --text-main: oklch(98% 0.005 240);
-    --text-muted: oklch(72% 0.02 240);
-    --text-faint: oklch(50% 0.02 240);
-
-    --primary: oklch(96% 0.01 240);
-    --primary-hover: oklch(100% 0 0);
-    --primary-fg: oklch(16% 0.02 250);
-
-    --accent: oklch(70% 0.2 265);
-    --accent-subtle: oklch(25% 0.06 265);
-    --accent-fg: oklch(90% 0.1 265);
-
-    --good: oklch(75% 0.17 150);
-    --warn: oklch(78% 0.16 75);
-    --bad: oklch(72% 0.2 25);
-
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.5), 0 2px 6px -1px rgba(0, 0, 0, 0.3);
-    --shadow-hover: 0 12px 30px -4px rgba(0, 0, 0, 0.65), 0 4px 10px -2px rgba(0, 0, 0, 0.4);
+    --bg: #0d1017; --surface: #151922; --surface-2: #1b202b; --surface-3: #242a37;
+    --border: #2a3140; --border-strong: #3b4456;
+    --text: #eef1f6; --text-2: #b5bdcc; --text-3: #8b94a7;
+    --accent: #818cf8; --accent-hover: #a5b4fc; --accent-soft: #1f2340; --accent-text: #c7d2fe; --on-accent: #0d1017;
+    --good: #4ade80; --good-soft: #10261a; --warn: #fbbf24; --warn-soft: #2a2110; --bad: #f87171; --bad-soft: #2c1414;
+    --shadow-1: 0 1px 2px rgb(0 0 0 / .4); --shadow-2: 0 1px 3px rgb(0 0 0 / .5), 0 8px 20px -8px rgb(0 0 0 / .6);
   }
 
-  :root[data-theme="light"], :root:has(> head > meta[name="color-scheme"][content="light"]) {
-    color-scheme: light;
-    --bg: oklch(99% 0.005 240);
-    --bg-subtle: oklch(96.5% 0.01 240);
-    --surface: oklch(100% 0 0);
-    --surface-hover: oklch(97.5% 0.01 240);
-    --surface-active: oklch(95% 0.015 240);
-    --border: oklch(89% 0.01 240);
-    --border-hover: oklch(78% 0.02 240);
-    --text-main: oklch(16% 0.02 240);
-    --text-muted: oklch(48% 0.02 240);
-    --text-faint: oklch(65% 0.015 240);
-
-    --primary: oklch(20% 0.03 240);
-    --primary-hover: oklch(12% 0.03 240);
-    --primary-fg: oklch(99% 0 0);
-
-    --accent: oklch(56% 0.22 265);
-    --accent-subtle: oklch(95% 0.05 265);
-    --accent-fg: oklch(35% 0.18 265);
-
-    --good: oklch(58% 0.17 150);
-    --warn: oklch(65% 0.16 75);
-    --bad: oklch(58% 0.22 25);
-
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.06), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-    --shadow-hover: 0 10px 24px -4px rgba(0, 0, 0, 0.09), 0 4px 8px -2px rgba(0, 0, 0, 0.04);
-  }
-
+  /* --- Base --- */
   * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text-main);
-    font: 16px/1.5 var(--font);
-    -webkit-font-smoothing: antialiased;
-    transition: background-color .2s ease, color .2s ease;
-  }
-  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
-  svg {
-    width: 1.15em;
-    height: 1.15em;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    flex: none;
-  }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+  html { scrollbar-gutter: stable; -webkit-text-size-adjust: 100%; }   /* no layout jump when Windows scrollbars appear */
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 var(--font); -webkit-font-smoothing: antialiased; }
+  button, input, select { font: inherit; color: inherit; }
+  button { background: none; border: 0; padding: 0; cursor: pointer; }
+  button:disabled { cursor: default; opacity: .6; }
+  h1, h2, h3 { margin: 0; line-height: 1.25; letter-spacing: -.015em; }
+  h1:focus { outline: none; }
+  :focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--r-sm); }
+  svg { width: 1.1em; height: 1.1em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  code, kbd { font-family: var(--mono); font-size: .92em; }
+  kbd { border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; font-size: 11px; color: var(--text-3); background: var(--surface); }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .view[hidden], [hidden] { display: none !important; }
+  .view { animation: enter .2s ease-out; }
+  @keyframes enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
+  /* --- Header: brand, nav, theme. Wraps to two rows on phones; the nav scrolls sideways instead of overflowing. --- */
   header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 16px;
-    padding: 16px 28px;
-    font-size: 14px;
-    color: var(--text-muted);
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 12px 20px; flex-wrap: wrap;
+    padding: 10px max(16px, calc((100vw - 1120px) / 2));
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px);
     border-bottom: 1px solid var(--border);
-    background: var(--surface);
-    position: sticky;
-    top: 0;
-    z-index: 50;
-    backdrop-filter: blur(14px);
   }
-  .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; }
-  .brand-badge {
-    width: 30px;
-    height: 30px;
-    border-radius: var(--radius-sm);
-    background: var(--accent-subtle);
-    color: var(--accent);
-    display: grid;
-    place-items: center;
-  }
-  .brand b { color: var(--text-main); font-weight: 700; font-size: 15px; }
-  .tag { font-size: 11px; font-weight: 600; text-transform: uppercase; background: var(--bg-subtle); padding: 2px 7px; border-radius: 6px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; white-space: nowrap; margin-right: auto; }
+  .brand-mark { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: var(--on-accent);
+    background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #22d3ee)); }
+  .brand-mark svg { width: 17px; height: 17px; }
+  nav { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+  nav::-webkit-scrollbar { display: none; }
+  .nav { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border-radius: var(--r-full);
+    color: var(--text-2); font-size: 14px; font-weight: 550; white-space: nowrap; transition: background .12s, color .12s; }
+  .nav:hover { background: var(--surface-2); color: var(--text); }
+  .nav[aria-current="page"] { background: var(--accent-soft); color: var(--accent-text); }
+  .nav svg { width: 16px; height: 16px; }
+  .header-end { display: flex; align-items: center; gap: 8px; }
+  .theme-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; min-width: 36px; padding: 0 12px; border-radius: var(--r-full);
+    border: 1px solid var(--border); color: var(--text-2); font-size: 13px; }
+  .theme-btn:hover { background: var(--surface-2); color: var(--text); }
 
-  .nav-group { display: flex; align-items: center; gap: 8px; }
-  .nav {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    border-radius: var(--radius-full);
-    color: var(--text-muted);
-    font-size: 13px;
-    font-weight: 500;
-    transition: background .12s, color .12s;
-  }
-  .nav:hover { background: var(--bg-subtle); color: var(--text-main); }
-  .nav.active { background: var(--bg-subtle); color: var(--accent); font-weight: 600; }
-  .nav-svg { width: 15px; height: 15px; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 96px; }
+  main.wide { max-width: 1040px; }
 
-  .theme-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    border-radius: var(--radius-full);
-    border: 1px solid var(--border);
-    font-size: 13px;
-    color: var(--text-muted);
-    transition: background .12s, border-color .12s, color .12s;
-  }
-  .theme-btn:hover { background: var(--bg-subtle); color: var(--text-main); border-color: var(--border-hover); }
+  /* --- Shared bits --- */
+  .eyebrow { margin: 0 0 8px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+  .page-head { text-align: center; margin-bottom: 28px; }
+  .page-head h1 { font-size: clamp(26px, 5vw, 34px); font-weight: 800; }
+  .sub { margin: 10px auto 0; max-width: 560px; color: var(--text-2); font-size: 16px; }
+  .muted { color: var(--text-3); font-size: 14px; }
+  .center { text-align: center; }
+  .back { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 20px; color: var(--text-2); font-size: 14px; font-weight: 550; padding: 6px 2px; }
+  .back:hover { color: var(--text); }
+  .link { color: var(--accent-text); font-size: 14px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+  .link:hover { color: var(--accent); }
 
-  .chip {
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-full);
-    padding: 5px 14px;
-    font-size: 13px;
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 0 20px;
+    border-radius: var(--r-full); background: var(--accent); color: var(--on-accent); font-weight: 650; font-size: 15px;
+    box-shadow: var(--shadow-1); transition: background .12s, transform .08s; white-space: nowrap; }
+  .btn:hover { background: var(--accent-hover); }
+  .btn:active { transform: translateY(1px); }
+  .btn.ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  .btn.ghost:hover { background: var(--surface-2); border-color: var(--border-strong); }
+  .btn.small { min-height: 34px; padding: 0 14px; font-size: 13px; }
+  .btn.done { background: var(--good-soft); color: var(--good); box-shadow: none; }
 
-  main { max-width: 680px; margin: 0 auto; padding: 44px 20px 80px; }
-  h1 { margin: 0; font-size: 34px; line-height: 1.2; font-weight: 800; letter-spacing: -.02em; text-align: center; }
-  .sub { margin: 10px 0 32px; text-align: center; font-size: 17px; color: var(--text-muted); }
-  .view[hidden] { display: none !important; }
-  .view { animation: fadeIn .18s cubic-bezier(.16, 1, .3, 1); }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 24px; box-shadow: var(--shadow-2); }
 
-  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  .tile {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-    padding: 24px 20px;
-    text-align: left;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    box-shadow: var(--shadow-sm);
-    transition: transform .16s, box-shadow .16s, border-color .16s, background .16s;
-  }
-  .tile:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow);
-    border-color: var(--border-hover);
-    background: var(--surface-hover);
-  }
-  .tile:active { transform: scale(.985); }
-  .tile svg { font-size: 26px; color: var(--accent); margin-bottom: 2px; }
-  .tile b { font-size: 18px; font-weight: 700; color: var(--text-main); }
-  .tile span { font-size: 14px; color: var(--text-muted); line-height: 1.4; }
+  .notice { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; margin: 0 0 20px; border-radius: var(--r);
+    border: 1px solid var(--border); background: var(--surface); font-size: 14px; color: var(--text-2); }
+  .notice > svg { margin-top: 2px; width: 18px; height: 18px; }
+  .notice.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+  .notice.warn > svg { color: var(--warn); }
+  .notice.info > svg { color: var(--accent); }
+  .notice b { color: var(--text); }
+  .notice .cmd { margin-top: 8px; }
+  .notice-body { min-width: 0; flex: 1; }
 
-  .card {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-    padding: 28px;
-    box-shadow: var(--shadow);
-  }
-  .card h2 { margin: 0; font-size: 24px; line-height: 1.3; overflow-wrap: anywhere; font-weight: 700; }
-  .meta { margin: 8px 0 0; color: var(--text-muted); font-size: 15px; }
-  .verdict { font-weight: 600; }
-  .smooth { color: var(--good); } .usable { color: var(--warn); } .tight, .slow { color: var(--bad); }
-  .note { margin: 16px 0 0; font-size: 14px; line-height: 1.5; color: var(--text-muted); }
-  .card .btn { margin-top: 24px; }
+  /* A command the user can run: monospace, selectable in one click, with a Copy button. */
+  .cmd { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 14px; border-radius: var(--r-sm);
+    background: var(--surface-2); border: 1px solid var(--border); }
+  .cmd code { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: all; -webkit-user-select: all; font-size: 13px; color: var(--text); }
+  .cmd + .cmd, .cmd-label + .cmd { margin-top: 6px; }
+  .cmd-label { margin: 14px 0 0; font-size: 13px; color: var(--text-2); }
+  .cmd-label:first-child { margin-top: 0; }
+  .copy-btn { display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 32px; padding: 0 12px; border-radius: var(--r-sm);
+    background: var(--surface); border: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--text-2); }
+  .copy-btn:hover { color: var(--text); border-color: var(--border-strong); }
+  .copy-btn.ok { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); }
+  .copy-btn.no { color: var(--warn); }
+  details.terminal { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+  details.terminal > summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--text-2); list-style: none; display: inline-flex; align-items: center; gap: 8px; }
+  details.terminal > summary::-webkit-details-marker { display: none; }
+  details.terminal > summary::after { content: "+"; font-weight: 700; color: var(--text-3); }
+  details.terminal[open] > summary::after { content: "\2212"; }
+  details.terminal .terminal-body { margin-top: 12px; }
 
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    background: var(--primary);
-    color: var(--primary-fg);
-    border-radius: var(--radius-full);
-    padding: 12px 28px;
-    font-weight: 600;
-    font-size: 15px;
-    box-shadow: var(--shadow-sm);
-    transition: transform .12s, opacity .12s, background .12s;
-  }
-  .btn:hover { opacity: .92; transform: translateY(-1px); }
-  .btn:active { transform: scale(.98); }
-  .btn.small { padding: 6px 16px; font-size: 13px; font-weight: 600; }
-  .btn.ghost { background: var(--bg-subtle); color: var(--text-main); border: 1px solid var(--border); }
-  .btn.ghost:hover { background: var(--surface-hover); border-color: var(--border-hover); }
-  .link { color: var(--text-muted); text-decoration: underline; text-underline-offset: 3px; font-size: 14px; cursor: pointer; }
-  .link:hover { color: var(--text-main); }
-  .center { text-align: center; margin-top: 24px; }
+  /* --- Steps (choose / download / run) --- */
+  .steps { display: flex; justify-content: center; gap: 6px; margin: 0 0 28px; padding: 0; list-style: none; font-size: 13px; color: var(--text-3); }
+  .steps li { display: flex; align-items: center; gap: 6px; }
+  .steps li + li::before { content: ""; width: 22px; height: 1px; background: var(--border-strong); margin-right: 4px; }
+  .steps .n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700;
+    border: 1px solid var(--border-strong); background: var(--surface); }
+  .steps li[aria-current="step"] { color: var(--text); font-weight: 650; }
+  .steps li[aria-current="step"] .n { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .steps li.past .n { background: var(--good-soft); border-color: transparent; color: var(--good); }
 
-  .rows { margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm); }
-  .row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 20px; transition: background .12s; }
-  .row:hover { background: var(--surface-hover); }
-  .row + .row { border-top: 1px solid var(--border); }
-  .row .t { min-width: 0; } .row .t b { display: block; overflow-wrap: anywhere; font-weight: 600; font-size: 16px; }
-  .row .t span { font-size: 14px; color: var(--text-muted); }
-  .rows-title { margin: 28px 0 8px; font-size: 14px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .03em; }
+  /* --- Choose a use --- */
+  .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .tile { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; align-items: center; text-align: left; padding: 18px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-1);
+    transition: border-color .12s, box-shadow .12s, transform .12s; }
+  .tile:hover { border-color: var(--accent); box-shadow: var(--shadow-2); transform: translateY(-1px); }
+  .tile-icon { grid-row: span 2; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .tile-icon svg { width: 22px; height: 22px; }
+  .tile b { font-size: 16px; }
+  .tile span { font-size: 14px; color: var(--text-2); }
 
-  .bar { height: 12px; border-radius: var(--radius-full); background: var(--bg-subtle); overflow: hidden; margin: 24px 0 12px; border: 1px solid var(--border); }
-  .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--good)); border-radius: var(--radius-full); transition: width .3s cubic-bezier(.16, 1, .3, 1); }
-  .bar.busy i { width: 35%; animation: slide 1.1s ease-in-out infinite alternate; }
-  @keyframes slide { from { margin-left: 0; } to { margin-left: 65%; } }
-  .spin { width: 32px; height: 32px; border: 3px solid var(--bg-subtle); border-top-color: var(--accent); border-radius: 50%; margin: 40px auto 16px; animation: rot .7s linear infinite; }
+  /* --- Wait --- */
+  .spin { width: 34px; height: 34px; margin: 40px auto 18px; border-radius: 50%; border: 3px solid var(--surface-3); border-top-color: var(--accent); animation: rot .8s linear infinite; }
   @keyframes rot { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .spin, .bar.busy i { animation: none; } }
 
-  .tick {
-    width: 64px;
-    height: 64px;
-    border-radius: 50%;
-    background: var(--good);
-    color: var(--surface);
-    display: grid;
-    place-items: center;
-    font-size: 32px;
-    margin: 0 auto 20px;
-    box-shadow: 0 0 24px oklch(62% 0.18 152 / 0.35);
-  }
-  .code {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 14px 16px;
-    margin-top: 14px;
-    font-family: var(--mono);
-    font-size: 14px;
-    overflow-wrap: anywhere;
-  }
-  .warn { margin: 0 0 20px; padding: 12px 16px; border-radius: var(--radius-sm); background: var(--bg-subtle); border: 1px solid var(--border); color: var(--text-muted); font-size: 14px; }
-  .back { margin-bottom: 16px; display: inline-flex; align-items: center; gap: 6px; }
+  /* --- Pick --- */
+  .pick h2 { font-size: 24px; overflow-wrap: anywhere; }
+  .repo { margin: 4px 0 0; font-size: 13px; color: var(--text-3); overflow-wrap: anywhere; }
+  .facts { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; padding: 0; list-style: none; }
+  .fact { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: var(--r-full); background: var(--surface-2); font-size: 13px; color: var(--text-2); }
+  .fact svg { width: 14px; height: 14px; }
+  .fact.smooth { background: var(--good-soft); color: var(--good); font-weight: 650; }
+  .fact.usable { background: var(--warn-soft); color: var(--warn); font-weight: 650; }
+  .fact.slow, .fact.tight { background: var(--bad-soft); color: var(--bad); font-weight: 650; }
+  .note { margin: 14px 0 0; font-size: 14px; color: var(--text-2); }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 22px; }
+  .rows-title { margin: 32px 0 10px; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
+  .rows { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+  .row { display: flex; align-items: center; gap: 14px; padding: 14px 18px; }
+  .row + .row { border-top: 1px solid var(--border); }
+  .row .t { flex: 1; min-width: 0; }
+  .row .t b { display: block; overflow-wrap: anywhere; }
+  .row .t span { font-size: 13px; color: var(--text-2); }
+  .verdict { font-weight: 650; }
+  .verdict.smooth { color: var(--good); } .verdict.usable { color: var(--warn); } .verdict.slow, .verdict.tight { color: var(--bad); }
 
-  /* Tools list */
-  .tool { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 18px 20px; margin-top: 14px; box-shadow: var(--shadow-sm); }
+  /* --- Install / done / error --- */
+  .progress { margin: 26px 0 10px; height: 10px; border-radius: var(--r-full); background: var(--surface-3); overflow: hidden; }
+  .progress i { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 40%, #22d3ee)); transition: width .4s ease-out; }
+  .progress.busy i { width: 35%; animation: slide 1.2s ease-in-out infinite alternate; }
+  @keyframes slide { from { margin-left: 0; } to { margin-left: 65%; } }
+  .progress-meta { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 14px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+  .badge-ok { width: 60px; height: 60px; margin: 0 auto 18px; border-radius: 50%; display: grid; place-items: center; background: var(--good-soft); color: var(--good); }
+  .badge-ok svg { width: 30px; height: 30px; stroke-width: 2.5; }
+  .badge-bad { width: 60px; height: 60px; margin: 0 auto 18px; border-radius: 50%; display: grid; place-items: center; background: var(--bad-soft); color: var(--bad); }
+  .badge-bad svg { width: 28px; height: 28px; }
+  .next { margin-top: 24px; }
+  .next > p { margin: 0 0 8px; font-size: 14px; color: var(--text-2); }
+  .next > p + .cmd + p { margin-top: 16px; }
+
+  /* --- Installed tools --- */
+  .tool { margin-top: 12px; }
   .tool-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-  .tool-head b { font-size: 17px; font-weight: 700; }
-  .status { font-size: 12px; font-weight: 700; border-radius: var(--radius-full); padding: 3px 12px; text-transform: uppercase; letter-spacing: .02em; }
-  .status.installed { background: oklch(62% 0.18 152 / .15); color: var(--good); border: 1px solid oklch(62% 0.18 152 / .3); }
-  .status.data-only { background: oklch(68% 0.16 75 / .15); color: var(--warn); border: 1px solid oklch(68% 0.16 75 / .3); }
-  .status.not-found { background: var(--bg-subtle); color: var(--text-muted); border: 1px solid var(--border); }
-  .tool p { margin: 8px 0 0; font-size: 14px; color: var(--text-muted); overflow-wrap: anywhere; }
-  .tool details { margin-top: 10px; font-size: 13px; color: var(--text-muted); }
+  .tool-head b { font-size: 17px; }
+  .tool p { margin: 8px 0 0; font-size: 14px; color: var(--text-2); overflow-wrap: anywhere; }
+  .tool .cmd { margin-top: 10px; }
+  .status { padding: 3px 10px; border-radius: var(--r-full); font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .status.installed { background: var(--good-soft); color: var(--good); }
+  .status.data-only { background: var(--warn-soft); color: var(--warn); }
+  .status.not-found { background: var(--surface-2); color: var(--text-3); }
+  .tool details { margin-top: 12px; font-size: 13px; color: var(--text-3); }
   .tool summary { cursor: pointer; }
-  .tool ul { margin: 8px 0 0; padding-left: 20px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
-  .tool .hit { color: var(--good); font-weight: 600; }
+  .tool ul { margin: 8px 0 0; padding-left: 18px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+  .tool .hit { color: var(--good); }
 
-  /* Model Radar - Steve Jobs Edition */
-  main:has(#v-radar:not([hidden])) {
-    max-width: 960px;
-    transition: max-width .22s cubic-bezier(.16, 1, .3, 1);
-  }
+  /* --- Radar --- */
+  .strip { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 24px; padding: 16px 20px; margin-bottom: 20px; }
+  .strip-machine { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 260px; }
+  .strip-icon { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); flex: none; }
+  .strip-machine b { display: block; overflow-wrap: anywhere; }
+  .stats { display: flex; gap: 22px; }
+  .stat { display: flex; flex-direction: column; }
+  .stat b { font-size: 20px; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 12px; color: var(--text-3); }
+  .strip-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .syncing svg { animation: rot 1s linear infinite; }
 
-  .radar-header {
-    text-align: center;
-    margin-bottom: 24px;
-  }
-  .radar-eyebrow {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-    color: var(--accent);
-    background: var(--accent-subtle);
-    padding: 4px 12px;
-    border-radius: var(--radius-full);
-    margin-bottom: 10px;
-  }
-  .pulse-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--good);
-    box-shadow: 0 0 8px var(--good);
-    animation: radarPulse 1.8s ease-in-out infinite;
-  }
-  @keyframes radarPulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: .4; transform: scale(.85); }
-  }
+  .spotlight { margin-bottom: 22px; border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+    background: linear-gradient(160deg, color-mix(in srgb, var(--accent-soft) 70%, var(--surface)), var(--surface) 60%); }
+  .spotlight h2 { font-size: 22px; overflow-wrap: anywhere; margin-top: 4px; }
 
-  /* Hardware Horizon Telemetry Banner */
-  .radar-horizon {
-    display: grid;
-    grid-template-columns: 1.4fr 1.6fr auto;
-    align-items: center;
-    gap: 16px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 18px 22px;
-    margin-bottom: 22px;
-    box-shadow: var(--shadow);
-    backdrop-filter: blur(20px);
-  }
-  .horizon-device {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-width: 0;
-  }
-  .horizon-chip-icon {
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    display: grid;
-    place-items: center;
-    color: var(--accent);
-    flex-shrink: 0;
-  }
-  .horizon-chip-icon svg { width: 22px; height: 22px; }
-  .horizon-device-name {
-    font-size: 15px;
-    font-weight: 800;
-    color: var(--text-main);
-    line-height: 1.2;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .horizon-device-sub {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-top: 3px;
-  }
-  .horizon-stats {
-    display: flex;
-    align-items: center;
-    justify-content: space-around;
-    gap: 12px;
-    border-left: 1px solid var(--border);
-    border-right: 1px solid var(--border);
-    padding: 0 16px;
-  }
-  .horizon-stat {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-  }
-  .horizon-stat-val {
-    font-size: 19px;
-    font-weight: 800;
-    color: var(--text-main);
-    letter-spacing: -.02em;
-    line-height: 1.1;
-  }
-  .horizon-stat.stat-gpu .horizon-stat-val {
-    color: var(--good);
-  }
-  .horizon-stat-lbl {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    color: var(--text-muted);
-    margin-top: 2px;
-  }
-  .horizon-actions {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 5px;
-    flex-shrink: 0;
-  }
-  .radar-sync-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--text-main);
-    padding: 7px 14px;
-    border-radius: var(--radius-full);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    box-shadow: var(--shadow-sm);
-    transition: all .15s;
-  }
-  .radar-sync-btn:hover {
-    background: var(--surface-hover);
-    border-color: var(--border-hover);
-    transform: translateY(-1px);
-  }
-  .radar-sync-btn.syncing svg {
-    animation: spinRadar .8s linear infinite;
-  }
-  @keyframes spinRadar { to { transform: rotate(360deg); } }
-  .radar-updated { font-size: 12px; color: var(--text-muted); }
+  .filters { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
+  .tabs { display: flex; gap: 4px; padding: 4px; border-radius: var(--r-full); background: var(--surface-2); border: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: var(--r-full); font-size: 13px; font-weight: 600; color: var(--text-2); white-space: nowrap; }
+  .tab svg { width: 14px; height: 14px; }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-1); }
+  .count { font-size: 11px; padding: 0 7px; border-radius: var(--r-full); background: var(--surface-3); color: var(--text-2); font-variant-numeric: tabular-nums; }
+  .tab[aria-selected="true"] .count { background: var(--accent-soft); color: var(--accent-text); }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .search { position: relative; flex: 1 1 260px; display: flex; align-items: center; }
+  .search > svg { position: absolute; left: 13px; width: 16px; height: 16px; color: var(--text-3); pointer-events: none; }
+  .search input { width: 100%; min-height: 42px; padding: 0 64px 0 38px; border-radius: var(--r-full); border: 1px solid var(--border); background: var(--surface); outline: none; font-size: 14px; }
+  .search input:focus { border-color: var(--accent); box-shadow: var(--ring); }
+  .search .end { position: absolute; right: 10px; display: flex; align-items: center; gap: 6px; }
+  .search-clear { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; color: var(--text-3); }
+  .search-clear:hover { background: var(--surface-2); color: var(--text); }
+  .sort { display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: var(--r-full); border: 1px solid var(--border); background: var(--surface); overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+  .sort > span { padding: 0 8px; font-size: 12px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+  .sort button { padding: 6px 11px; border-radius: var(--r-full); font-size: 13px; font-weight: 600; color: var(--text-2); white-space: nowrap; }
+  .sort button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); }
+  .pills { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .pills > span { font-size: 12px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; margin-right: 4px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: var(--r-full); border: 1px solid var(--border); background: var(--surface); font-size: 13px; font-weight: 550; color: var(--text-2); }
+  .pill svg { width: 13px; height: 13px; }
+  .pill:hover { border-color: var(--border-strong); color: var(--text); }
+  .pill[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--bg); }
 
-  /* Keynote Spotlight Hero Card */
-  .radar-spotlight-wrap { margin-bottom: 24px; }
-  .spotlight-card {
-    background: linear-gradient(135deg, color-mix(in oklch, var(--surface) 94%, var(--accent) 6%), var(--surface));
-    border: 1px solid color-mix(in oklch, var(--border) 70%, var(--accent) 30%);
-    border-radius: var(--radius);
-    padding: 24px 28px;
-    box-shadow: 0 8px 30px -6px rgba(0, 0, 0, 0.08), 0 0 0 1px color-mix(in oklch, var(--accent) 15%, transparent);
-    position: relative;
-    overflow: hidden;
-    transition: box-shadow .2s, transform .2s;
-  }
-  .spotlight-card:hover {
-    box-shadow: 0 12px 36px -6px rgba(0, 0, 0, 0.12), 0 0 0 1px color-mix(in oklch, var(--accent) 30%, transparent);
-  }
-  .spotlight-card::before {
-    content: "";
-    position: absolute;
-    top: -60px;
-    right: -60px;
-    width: 200px;
-    height: 200px;
-    border-radius: 50%;
-    background: radial-gradient(circle, color-mix(in oklch, var(--accent) 25%, transparent), transparent 70%);
-    pointer-events: none;
-  }
-  .spotlight-badge-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 12px;
-  }
-  .spotlight-crown-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: .06em;
-    text-transform: uppercase;
-    color: var(--accent);
-    background: var(--accent-subtle);
-    padding: 4px 12px;
-    border-radius: var(--radius-full);
-  }
-  .spotlight-body {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 24px;
-  }
-  .spotlight-info { flex: 1; min-width: 0; }
-  .spotlight-author {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: .05em;
-  }
-  .spotlight-title {
-    font-size: 24px;
-    font-weight: 800;
-    margin: 4px 0 6px;
-    color: var(--text-main);
-    letter-spacing: -.02em;
-    line-height: 1.25;
-    overflow-wrap: anywhere;
-  }
-  .spotlight-desc {
-    font-size: 14px;
-    color: var(--text-muted);
-    margin: 0 0 14px;
-    line-height: 1.45;
-  }
-  .spotlight-meter-wrap {
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 10px 14px;
-    margin-bottom: 14px;
-  }
-  .spotlight-meter-labels {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 12px;
-    margin-bottom: 6px;
-  }
-  .spotlight-meter-labels .speed {
-    color: var(--good);
-    font-weight: 700;
-  }
-  .spotlight-cta { flex-shrink: 0; }
-  .spotlight-install-btn {
-    padding: 12px 26px;
-    font-size: 15px;
-    font-weight: 700;
-    border-radius: var(--radius-full);
-  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 14px; }
+  .m-card { display: flex; flex-direction: column; gap: 14px; padding: 18px; }
+  .m-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+  .avatar { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: #fff; font-weight: 800; flex: none; }
+  .m-title { flex: 1 1 180px; min-width: 0; }
+  .m-title b { display: block; font-size: 16px; overflow-wrap: anywhere; line-height: 1.3; }
+  .m-title span { display: block; font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
+  .fit { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: var(--r-full); font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .fit::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .fit.gpu { background: var(--good-soft); color: var(--good); }
+  .fit.cpu { background: var(--accent-soft); color: var(--accent-text); }
+  .fit.tight { background: var(--warn-soft); color: var(--warn); }
+  .meter-label { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
+  .meter-label b { color: var(--text); font-weight: 650; }
+  .meter { height: 6px; border-radius: var(--r-full); background: var(--surface-3); overflow: hidden; }
+  .meter i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+  .meter i.gpu { background: var(--good); } .meter i.tight, .meter i.over { background: var(--warn); }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tag { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 6px; background: var(--surface-2); font-size: 12px; color: var(--text-2); }
+  .tag svg { width: 12px; height: 12px; }
+  button.tag:hover { background: var(--surface-3); color: var(--text); }
+  .tag.strong { background: var(--accent-soft); color: var(--accent-text); font-weight: 650; }
+  .m-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); margin-top: auto; }
+  .m-foot .left { display: flex; flex-wrap: wrap; gap: 4px; }
+  .icon-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: var(--r-sm); font-size: 13px; font-weight: 550; color: var(--text-2); }
+  .icon-btn:hover { background: var(--surface-2); color: var(--text); }
+  .icon-btn svg { width: 15px; height: 15px; }
+  .drawer { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; padding: 14px; border-radius: var(--r); background: var(--surface-2); font-size: 13px; }
+  .drawer dt { color: var(--text-3); }
+  .drawer dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .drawer .cmds { grid-column: 1 / -1; }
+  .drawer .cmd { background: var(--surface); }
+  .empty { text-align: center; padding: 48px 20px; border: 1px dashed var(--border-strong); border-radius: var(--r-lg); color: var(--text-2); }
+  .empty svg { width: 40px; height: 40px; color: var(--text-3); margin-bottom: 8px; }
+  .empty h3 { font-size: 18px; margin-bottom: 6px; color: var(--text); }
+  .empty p { margin: 0 0 16px; font-size: 14px; }
+  .delta { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: var(--r-full); }
+  .delta.new { background: var(--accent-soft); color: var(--accent-text); }
+  .delta.up { background: var(--good-soft); color: var(--good); }
+  .delta.gone { background: var(--surface-2); color: var(--text-3); }
 
-  /* Segmented Nav & Filter Deck */
-  .radar-nav-deck {
-    margin-bottom: 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .segmented-control {
-    display: flex;
-    align-items: center;
-    gap: 3px;
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-full);
-    padding: 3px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .segmented-control::-webkit-scrollbar { display: none; }
-  .seg-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 7px 15px;
-    border-radius: var(--radius-full);
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-muted);
-    white-space: nowrap;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    transition: all .14s cubic-bezier(.16, 1, .3, 1);
-  }
-  .seg-btn:hover { color: var(--text-main); }
-  .seg-btn.active {
-    background: var(--surface);
-    color: var(--text-main);
-    font-weight: 700;
-    box-shadow: var(--shadow-sm);
-  }
-  .seg-count {
-    font-size: 11px;
-    font-weight: 700;
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    padding: 1px 7px;
-    border-radius: var(--radius-full);
-    color: var(--text-muted);
-  }
-  .seg-btn.active .seg-count {
-    background: var(--accent-subtle);
-    color: var(--accent);
-    border-color: transparent;
-  }
+  /* --- History --- */
+  .compare { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; padding: 18px 20px; margin-bottom: 16px; }
+  .compare .box { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .compare .box span:first-child { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
+  .compare .arrow { color: var(--text-3); }
+  .compare select { min-height: 40px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface); max-width: 100%; }
+  .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .kpi { padding: 14px 16px; }
+  .kpi b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+  .kpi span { font-size: 13px; color: var(--text-2); }
+  .snap-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 14px 18px; }
+  .stack { display: flex; flex-direction: column; gap: 10px; }
 
-  .radar-search-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .search-box {
-    flex: 1 1 260px;
-    position: relative;
-    display: flex;
-    align-items: center;
-  }
-  .search-box input {
-    width: 100%;
-    padding: 10px 42px 10px 38px;
-    border-radius: var(--radius-full);
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--text-main);
-    font: inherit;
-    font-size: 14px;
-    outline: none;
-    box-shadow: var(--shadow-sm);
-    transition: border-color .15s, box-shadow .15s;
-  }
-  .search-box input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-subtle); }
-  .search-icon { position: absolute; left: 13px; color: var(--text-faint); pointer-events: none; width: 16px; height: 16px; }
-  .search-kbd-hint {
-    position: absolute;
-    right: 12px;
-    display: flex;
-    align-items: center;
-    pointer-events: none;
-  }
-  .search-kbd-hint kbd {
-    font-family: var(--font);
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-faint);
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    padding: 1px 6px;
-    border-radius: 4px;
-  }
-  .search-clear-btn {
-    position: absolute;
-    right: 36px;
-    background: none;
-    border: none;
-    font-size: 16px;
-    color: var(--text-faint);
-    cursor: pointer;
-    padding: 2px 6px;
-  }
-  .search-clear-btn:hover { color: var(--text-main); }
-
-  .arch-pills-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    overflow-x: auto;
-    padding-bottom: 2px;
-    scrollbar-width: none;
-  }
-  .arch-pills-row::-webkit-scrollbar { display: none; }
-  .arch-pill-lbl {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    margin-right: 2px;
-  }
-  .arch-pill {
-    padding: 4px 12px;
-    border-radius: var(--radius-full);
-    font-size: 12px;
-    font-weight: 500;
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: all .12s;
-  }
-  .arch-pill:hover {
-    background: var(--surface-hover);
-    color: var(--text-main);
-  }
-  .arch-pill.active {
-    background: var(--primary);
-    color: var(--primary-fg);
-    font-weight: 700;
-    border-color: transparent;
-  }
-
-  .cluster-pills-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    overflow-x: auto;
-    padding-bottom: 2px;
-    scrollbar-width: none;
-  }
-  .cluster-pills-row::-webkit-scrollbar { display: none; }
-  .cluster-pill-lbl {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    margin-right: 2px;
-  }
-  .cluster-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 12px;
-    border-radius: var(--radius-full);
-    font-size: 12px;
-    font-weight: 500;
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: all .12s;
-  }
-  .cluster-pill:hover {
-    background: var(--surface-hover);
-    color: var(--text-main);
-  }
-  .cluster-pill.active {
-    background: var(--primary);
-    color: var(--primary-fg);
-    font-weight: 700;
-    border-color: transparent;
-  }
-  .cluster-emoji { font-size: 13px; line-height: 1; }
-
-  .radar-cluster-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: var(--radius-full);
-    border: 1px solid var(--border);
-    background: var(--bg-subtle);
-    color: var(--text-muted);
-    letter-spacing: .02em;
-    cursor: pointer;
-    transition: transform .1s, background .1s;
-  }
-  .radar-cluster-badge:hover { transform: scale(1.05); }
-  .radar-cluster-badge.cluster-coding {
-    background: color-mix(in oklch, #3b82f6 14%, var(--surface));
-    color: #2563eb;
-    border-color: color-mix(in oklch, #3b82f6 30%, transparent);
-  }
-  .radar-cluster-badge.cluster-agentic {
-    background: color-mix(in oklch, #8b5cf6 14%, var(--surface));
-    color: #7c3aed;
-    border-color: color-mix(in oklch, #8b5cf6 30%, transparent);
-  }
-  .radar-cluster-badge.cluster-chat {
-    background: color-mix(in oklch, #10b981 14%, var(--surface));
-    color: #059669;
-    border-color: color-mix(in oklch, #10b981 30%, transparent);
-  }
-  .radar-cluster-badge.cluster-reasoning {
-    background: color-mix(in oklch, #f59e0b 14%, var(--surface));
-    color: #d97706;
-    border-color: color-mix(in oklch, #f59e0b 30%, transparent);
-  }
-  .radar-cluster-badge.cluster-creative {
-    background: color-mix(in oklch, #ec4899 14%, var(--surface));
-    color: #db2777;
-    border-color: color-mix(in oklch, #ec4899 30%, transparent);
-  }
-
-  /* History View */
-  main:has(#v-history:not([hidden])) {
-    max-width: 960px;
-    transition: max-width .22s cubic-bezier(.16, 1, .3, 1);
-  }
-  .history-header {
-    text-align: center;
-    margin-bottom: 24px;
-  }
-  .history-horizon {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    gap: 16px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 18px 22px;
-    margin-bottom: 20px;
-    box-shadow: var(--shadow);
-  }
-  .history-sync-box {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .history-sync-label {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: .05em;
-    color: var(--text-muted);
-  }
-  .history-sync-val {
-    font-size: 15px;
-    font-weight: 800;
-    color: var(--text-main);
-  }
-  .history-sync-sub {
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-  .history-sync-arrow {
-    font-size: 20px;
-    color: var(--text-faint);
-    text-align: center;
-  }
-  .history-select-snap {
-    padding: 6px 12px;
-    border-radius: var(--radius-full);
-    border: 1px solid var(--border);
-    background: var(--bg-subtle);
-    color: var(--text-main);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    outline: none;
-    max-width: 260px;
-  }
-  .history-kpi-deck {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-    margin-bottom: 22px;
-  }
-  @media (max-width: 640px) {
-    .history-kpi-deck { grid-template-columns: repeat(2, 1fr); }
-    .history-horizon { grid-template-columns: 1fr; gap: 12px; }
-    .history-sync-arrow { display: none; }
-  }
-  .history-kpi-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px;
-    text-align: center;
-    box-shadow: var(--shadow-sm);
-  }
-  .history-kpi-val {
-    font-size: 24px;
-    font-weight: 800;
-    letter-spacing: -.03em;
-    line-height: 1.1;
-    color: var(--text-main);
-  }
-  .history-kpi-card.kpi-new .history-kpi-val { color: var(--accent); }
-  .history-kpi-card.kpi-surge .history-kpi-val { color: var(--good); }
-  .history-kpi-card.kpi-gpu .history-kpi-val { color: var(--good); }
-  .history-kpi-card.kpi-depart .history-kpi-val { color: var(--text-muted); }
-  .history-kpi-lbl {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    color: var(--text-muted);
-    margin-top: 4px;
-  }
-
-  .delta-surge-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 3px 10px;
-    border-radius: var(--radius-full);
-    background: color-mix(in oklch, var(--good) 15%, var(--surface));
-    color: var(--good);
-    border: 1px solid color-mix(in oklch, var(--good) 35%, transparent);
-  }
-  .delta-new-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 800;
-    padding: 3px 10px;
-    border-radius: var(--radius-full);
-    background: color-mix(in oklch, var(--accent) 15%, var(--surface));
-    color: var(--accent);
-    border: 1px solid color-mix(in oklch, var(--accent) 35%, transparent);
-    text-transform: uppercase;
-    letter-spacing: .05em;
-  }
-  .history-snapshot-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .history-snapshot-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 14px 18px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    gap: 12px;
-  }
-  .history-snap-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .history-snap-date {
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--text-main);
-  }
-  .history-snap-sub {
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-  .history-empty {
-    text-align: center;
-    padding: 48px 24px;
-    background: var(--surface);
-    border: 1px dashed var(--border);
-    border-radius: var(--radius);
-  }
-
-  .sort-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    padding: 6px 12px;
-    border-radius: var(--radius-full);
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    font-size: 13px;
-  }
-  .sort-label { font-weight: 600; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
-  .sort-group { display: flex; align-items: center; gap: 4px; }
-  .sort-btn {
-    padding: 4px 10px;
-    border-radius: var(--radius-full);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-muted);
-    transition: background .12s, color .12s;
-  }
-  .sort-btn:hover { background: var(--surface-hover); color: var(--text-main); }
-  .sort-btn.active { background: var(--surface); color: var(--accent); font-weight: 700; box-shadow: var(--shadow-sm); }
-  .sort-dir-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 10px;
-    border-radius: var(--radius-full);
-    border: 1px solid var(--border);
-    background: var(--surface);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-main);
-  }
-  .sort-dir-btn:hover { background: var(--surface-hover); }
-
-  /* Model Card - Steve Jobs Craftsmanship */
-  .radar-card {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-    padding: 22px 24px;
-    margin-top: 14px;
-    box-shadow: var(--shadow-sm);
-    transition: transform .18s cubic-bezier(.16, 1, .3, 1), box-shadow .18s, border-color .18s;
-    container-type: inline-size;
-  }
-  .radar-card:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow);
-    border-color: var(--border-hover);
-  }
-  .radar-card.is-installed {
-    border-color: color-mix(in oklch, var(--good) 40%, var(--border));
-  }
-  .radar-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-  .radar-avatar {
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
-    display: grid;
-    place-items: center;
-    font-weight: 800;
-    font-size: 16px;
-    flex-shrink: 0;
-    color: #fff;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  }
-  .radar-title-group { flex: 1; min-width: 0; }
-  .radar-repo {
-    font-size: 17px;
-    font-weight: 700;
-    color: var(--text-main);
-    overflow-wrap: anywhere;
-    letter-spacing: -.01em;
-    line-height: 1.3;
-  }
-  .radar-subname { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
-
-  .badge {
-    font-size: 12px;
-    font-weight: 700;
-    border-radius: var(--radius-full);
-    padding: 4px 12px;
-    white-space: nowrap;
-  }
-  .badge.fit-gpu {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: oklch(62% 0.18 152 / .15);
-    color: var(--good);
-    border: 1px solid oklch(62% 0.18 152 / .3);
-  }
-  .badge.fit-gpu::before {
-    content: "";
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--good);
-    box-shadow: 0 0 6px var(--good);
-  }
-  .badge.fit-cpu { background: oklch(58% 0.16 240 / .15); color: oklch(65% 0.16 240); border: 1px solid oklch(58% 0.16 240 / .3); }
-  .badge.fit-tight { background: oklch(68% 0.16 75 / .15); color: var(--warn); border: 1px solid oklch(68% 0.16 75 / .3); }
-
-  /* Memory Horizon Gauge on each card */
-  .card-meter {
-    margin-top: 14px;
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 9px 13px;
-  }
-  .card-meter-labels {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 12px;
-    margin-bottom: 6px;
-  }
-  .card-meter-title { color: var(--text-muted); font-weight: 500; }
-  .card-meter-title b { color: var(--text-main); }
-  .card-meter-speed { font-weight: 700; }
-  .card-meter-speed.speed-fast { color: var(--good); }
-  .card-meter-speed.speed-med { color: var(--text-main); }
-  .card-meter-speed.speed-slow { color: var(--text-muted); }
-
-  .meter-track {
-    height: 6px;
-    border-radius: var(--radius-full);
-    background: color-mix(in oklch, var(--border) 60%, transparent);
-    overflow: hidden;
-  }
-  .meter-fill {
-    height: 100%;
-    border-radius: var(--radius-full);
-    transition: width .4s cubic-bezier(.16, 1, .3, 1);
-  }
-  .meter-fill.fill-gpu { background: linear-gradient(90deg, oklch(62% 0.18 152), oklch(72% 0.18 140)); }
-  .meter-fill.fill-cpu { background: linear-gradient(90deg, oklch(58% 0.16 240), oklch(68% 0.16 220)); }
-  .meter-fill.fill-tight { background: linear-gradient(90deg, oklch(68% 0.16 75), oklch(76% 0.16 65)); }
-
-  /* Chips row */
-  .chips-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; align-items: center; }
-  .chip-meta {
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-full);
-    padding: 3px 10px;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-muted);
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .chip-meta.highlight { background: var(--accent-subtle); color: var(--accent); font-weight: 700; border-color: transparent; }
-  .chip-meta.moe-badge { background: oklch(62% 0.22 300 / 0.15); color: oklch(65% 0.22 300); border-color: oklch(62% 0.22 300 / 0.3); font-weight: 700; }
-  .chip-svg { width: 12px; height: 12px; }
-
-  /* Radar Foot */
-  .radar-foot {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-top: 16px;
-    padding-top: 12px;
-    border-top: 1px solid var(--border);
-  }
-  .radar-foot-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .radar-icon-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-full);
-    padding: 5px 11px;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all .12s;
-  }
-  .radar-icon-btn:hover {
-    background: var(--surface-hover);
-    color: var(--text-main);
-    border-color: var(--border-hover);
-  }
-  .radar-icon-btn svg { width: 13px; height: 13px; }
-  .btn.installed {
-    background: var(--bg-subtle);
-    color: var(--good);
-    border: 1px solid oklch(62% 0.18 152 / 0.3);
-  }
-
-  /* Drawer: technical specs */
-  .radar-drawer {
-    margin-top: 14px;
-    padding: 12px 14px;
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    font-size: 13px;
-    color: var(--text-muted);
-    line-height: 1.5;
-    animation: fadeIn .15s ease-out;
-  }
-  .radar-drawer dl {
-    margin: 0;
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 6px 14px;
-  }
-  .radar-drawer dt { font-weight: 600; color: var(--text-main); }
-  .radar-drawer dd { margin: 0; overflow-wrap: anywhere; }
-
-  /* Terminal download box & code copy rows */
-  .terminal-download-box {
-    text-align: left;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px 18px;
-    margin-top: 18px;
-    box-shadow: var(--shadow-sm);
-  }
-  .terminal-box-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    font-weight: 700;
-    margin-bottom: 6px;
-    color: var(--accent);
-  }
-  .terminal-icon {
-    font-family: var(--mono);
-    font-size: 14px;
-    font-weight: 800;
-  }
-  .code-copy-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 6px 10px;
-    margin-top: 4px;
-  }
-  .inline-code {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--text-main);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    user-select: all;
-  }
-  .sub.small {
-    font-size: 12px;
-    margin: 4px 0 8px;
-    line-height: 1.4;
-  }
-
-  /* Scanner animation */
-  .radar-scanner-wrap { text-align: center; padding: 60px 20px; }
-  .radar-dish {
-    width: 80px;
-    height: 80px;
-    margin: 0 auto 20px;
-    border-radius: 50%;
-    border: 2px solid var(--accent);
-    position: relative;
-    display: grid;
-    place-items: center;
-    box-shadow: 0 0 24px color-mix(in oklch, var(--accent) 30%, transparent);
-  }
-  .radar-dish::before {
-    content: "";
-    position: absolute;
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
-    border: 1px dashed color-mix(in oklch, var(--accent) 60%, transparent);
-  }
-  .radar-dish-sweep {
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
-    background: conic-gradient(from 0deg, transparent 0deg, color-mix(in oklch, var(--accent) 35%, transparent) 60deg, transparent 65deg);
-    animation: dishRotate 1.4s linear infinite;
-  }
-  @keyframes dishRotate { to { transform: rotate(360deg); } }
-  .radar-scanner-title { font-size: 18px; font-weight: 700; color: var(--text-main); margin: 0 0 6px; }
-  .radar-scanner-sub { font-size: 14px; color: var(--text-muted); margin: 0; }
-
-  /* Empty state */
-  .radar-empty {
-    text-align: center;
-    padding: 48px 20px;
-    background: var(--surface);
-    border: 1px dashed var(--border);
-    border-radius: var(--radius);
-    margin-top: 20px;
-  }
-  .radar-empty-icon { width: 44px; height: 44px; color: var(--text-faint); margin: 0 auto 12px; }
-  .radar-empty h3 { font-size: 18px; font-weight: 700; margin: 0 0 8px; color: var(--text-main); }
-  .radar-empty p { font-size: 14px; color: var(--text-muted); margin: 0 0 16px; }
-
-  @media (max-width: 768px) {
-    .radar-horizon { grid-template-columns: 1fr; gap: 14px; }
-    .horizon-stats {
-      border-left: none;
-      border-right: none;
-      border-top: 1px solid var(--border);
-      border-bottom: 1px solid var(--border);
-      padding: 10px 0;
-    }
-    .horizon-actions {
-      align-items: flex-start;
-      flex-direction: row;
-      justify-content: space-between;
-    }
-    .spotlight-body { flex-direction: column; align-items: stretch; }
-    .spotlight-cta { margin-top: 12px; }
-    .spotlight-install-btn { width: 100%; }
-    .radar-foot { flex-direction: column; align-items: stretch; }
-    .radar-foot-actions { justify-content: space-between; }
-  }
-
-  @media (max-width: 600px) {
-    header { padding: 12px 16px; }
+  /* --- Responsive: tablets, then phones (tested at 360 px in tests/browser_check.js) --- */
+  @media (max-width: 720px) {
+    header { padding: 8px 12px; gap: 8px; }
+    nav { order: 3; width: 100%; margin: 0 -4px; }
+    .theme-btn .label { display: none; }
+    main { padding-top: 22px; }
     .tiles { grid-template-columns: 1fr; }
-    h1 { font-size: 26px; }
-    .hide-mobile { display: none; }
+    .card { padding: 18px; }
+    .compare { grid-template-columns: 1fr; }
+    .compare .arrow { display: none; }
+    .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stats { width: 100%; justify-content: space-between; }
+    .steps .label { display: none; }
+    .steps li[aria-current="step"] .label { display: inline; }
+    .m-foot .btn { width: 100%; }
+    .actions .btn { width: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
+  }
+  /* Windows High Contrast / forced colours: keep boundaries visible where backgrounds carry the meaning. */
+  @media (forced-colors: active) {
+    .btn, .tab, .pill, .fit, .status, .tag, .fact, .copy-btn, .nav[aria-current="page"], .tab[aria-selected="true"] { border: 1px solid CanvasText; }
+    .meter i, .progress i { background: Highlight; }
   }
 </style>
 </head>
 <body>
+<a class="sr-only" href="#main">Skip to content</a>
 <header>
-  <div class="brand">
-    <div class="brand-badge"><svg viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09zM12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2zM9 12H4s.55-3.03 2-4.5c1.45-1.47 4.5-2 4.5-2M15 9V4s3.03.55 4.5 2c1.47 1.45 2 4.5 2 4.5"/></svg></div>
-    <span><b>llama-cpp-launchpad</b> <span class="tag">setup</span></span>
-  </div>
-  <div class="nav-group">
-    <button class="nav" id="radar-btn">
-      <svg viewBox="0 0 24 24" class="nav-svg"><path d="M12 20a8 8 0 1 0-8-8m8 4a4 4 0 1 0-4-4m4 0V4m0 8 5.5-5.5"/></svg>
-      Model Radar
-    </button>
-    <button class="nav" id="history-btn">
-      <svg viewBox="0 0 24 24" class="nav-svg"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>
-      Sync History
-    </button>
-    <button class="nav" id="tools-btn">
-      <svg viewBox="0 0 24 24" class="nav-svg"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-      Installed tools
-    </button>
-    <button class="theme-btn" id="theme-btn" title="Toggle theme">
-      <svg viewBox="0 0 24 24" class="nav-svg" id="theme-icon"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6zm4 15h8m-4-4v4"/></svg>
-      <span id="theme-label" class="hide-mobile">Auto</span>
-    </button>
-    <span class="chip" id="hw" hidden></span>
+  <div class="brand"><span class="brand-mark"><svg viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg></span>llama-cpp-launchpad</div>
+  <nav aria-label="Sections">
+    <button class="nav" id="home-btn"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Get a model</button>
+    <button class="nav" id="radar-btn"><svg viewBox="0 0 24 24"><path d="M12 20a8 8 0 1 0-8-8m8 4a4 4 0 1 0-4-4m4 0V4m0 8 5.5-5.5"/></svg>Model radar</button>
+    <button class="nav" id="history-btn"><svg viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>What changed</button>
+    <button class="nav" id="tools-btn"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>Installed tools</button>
+  </nav>
+  <div class="header-end">
+    <button class="theme-btn" id="theme-btn"><svg viewBox="0 0 24 24" id="theme-icon"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6zm4 15h8m-4-4v4"/></svg><span class="label" id="theme-label">Auto</span></button>
   </div>
 </header>
-<main>
+
+<main id="main">
   <div id="warn"></div>
+  <ol class="steps" id="steps" aria-label="Progress" hidden></ol>
+  <p class="sr-only" id="live" aria-live="polite"></p>
 
   <section class="view" id="v-use">
-    <h1>What will you use it for?</h1>
-    <p class="sub">We'll find the best model for your computer.</p>
+    <div class="page-head">
+      <h1 id="use-title" tabindex="-1">What will you use it for?</h1>
+      <p class="sub" id="use-sub">We'll pick the model that runs best on this computer.</p>
+    </div>
     <div class="tiles" id="tiles"></div>
   </section>
 
   <section class="view" id="v-wait" hidden>
-    <div class="spin"></div>
-    <p class="sub" id="wait-text">Finding the best model for your computer&hellip;</p>
+    <div class="spin" aria-hidden="true"></div>
+    <div class="page-head"><h1 id="wait-title" tabindex="-1">One moment</h1><p class="sub" id="wait-text">Finding the best model for your computer&hellip;</p></div>
   </section>
 
   <section class="view" id="v-pick" hidden>
-    <button class="link back" id="back">&larr; Change</button>
+    <button class="back" id="back"><svg viewBox="0 0 24 24"><path d="M19 12H5m7-7-7 7 7 7"/></svg>Choose something else</button>
+    <h1 id="pick-title" class="sr-only" tabindex="-1">Recommended model</h1>
     <div id="top"></div>
-    <p class="center" id="more-wrap"><button class="link" id="more-btn">See other options</button></p>
+    <p class="center" id="more-wrap" style="margin-top:22px"><button class="link" id="more-btn">See other options</button></p>
     <div id="others"></div>
   </section>
 
   <section class="view" id="v-install" hidden>
-    <h1 id="i-title">Downloading&hellip;</h1>
-    <div class="bar" id="bar"><i id="bar-i"></i></div>
-    <p class="sub" id="i-text" style="margin:0"></p>
-    <div id="i-terminal-box"></div>
+    <div class="card">
+      <h1 id="install-title" tabindex="-1" style="font-size:22px"><span id="i-title">Downloading&hellip;</span></h1>
+      <div class="progress" id="bar" role="progressbar" aria-labelledby="i-title" aria-valuemin="0" aria-valuemax="100"><i id="bar-i"></i></div>
+      <div class="progress-meta"><span id="i-text"></span><span id="i-pct"></span></div>
+      <p class="muted" id="i-hint">Closing this tab does not stop the download. Stopping the setup page (Ctrl+C in its window) does; start it again to continue where it stopped.</p>
+      <div id="i-terminal-box"></div>
+    </div>
   </section>
 
   <section class="view" id="v-done" hidden>
-    <div class="tick">&#10003;</div>
-    <h1>Ready</h1>
-    <p class="sub" id="d-text"></p>
-    <p class="center" style="margin-top:0">To start chatting, run:</p>
-    <div class="code"><span id="cmd"></span><button class="btn small ghost" id="copy">Copy</button></div>
-    <p class="center"><button class="link" id="again">Get another model</button></p>
+    <div class="card">
+      <div class="badge-ok"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></div>
+      <div class="center"><h1 id="done-title" tabindex="-1">Ready</h1><p class="sub" id="d-text"></p></div>
+      <div class="next" id="done-next"></div>
+      <p class="center" style="margin:24px 0 0"><button class="link" id="again">Get another model</button></p>
+    </div>
   </section>
 
   <section class="view" id="v-tools" hidden>
-    <button class="link back" id="tools-back">&larr; Back</button>
-    <h1>Installed tools</h1>
-    <p class="sub">What is already on this computer.</p>
+    <button class="back" id="tools-back"><svg viewBox="0 0 24 24"><path d="M19 12H5m7-7-7 7 7 7"/></svg>Back</button>
+    <div class="page-head">
+      <h1 id="tools-title" tabindex="-1">Installed tools</h1>
+      <p class="sub">Local AI programs already on this computer, and how to start each one.</p>
+    </div>
     <div id="tools-list"></div>
-    <p class="center"><button class="btn ghost" id="tools-recheck">Check again</button></p>
+    <p class="center" style="margin-top:22px"><button class="btn ghost" id="tools-recheck"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5 M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16 M16 16h5v5"/></svg>Check again</button></p>
   </section>
 
   <section class="view" id="v-radar" hidden>
-    <button class="link back" id="radar-back">&larr; Back</button>
-    <div class="radar-header">
-      <div class="radar-eyebrow">
-        <span class="pulse-dot"></span>
-        <span>LIVE SILICON CALIBRATION</span>
-      </div>
-      <h1>Hugging Face Model Radar</h1>
-      <p class="sub">Fresh, curated weights from the open-source frontier — fit-tested for your machine.</p>
+    <button class="back" id="radar-back"><svg viewBox="0 0 24 24"><path d="M19 12H5m7-7-7 7 7 7"/></svg>Back</button>
+    <div class="page-head">
+      <p class="eyebrow">Hugging Face</p>
+      <h1 id="radar-title" tabindex="-1">Model radar</h1>
+      <p class="sub">Trending and new GGUF models, checked against this computer's memory. Speeds are estimates until a model is downloaded and tested.</p>
     </div>
-
-    <!-- Hardware Horizon Telemetry Banner -->
-    <div class="radar-horizon" id="radar-horizon">
-      <div class="horizon-device">
-        <div class="horizon-chip-icon">
-          <svg viewBox="0 0 24 24"><path d="M12 20a8 8 0 1 0-8-8m8 4a4 4 0 1 0-4-4m4 0V4m0 8 5.5-5.5"/></svg>
-        </div>
-        <div class="horizon-device-info">
-          <div class="horizon-device-name" id="radar-hw-name">Hardware Engine</div>
-          <div class="horizon-device-sub" id="radar-hw-sub">High-bandwidth unified memory architecture</div>
-        </div>
+    <div class="card strip">
+      <div class="strip-machine">
+        <span class="strip-icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z M9 2v2 M15 2v2 M9 20v2 M15 20v2 M2 9h2 M2 15h2 M20 9h2 M20 15h2 M9 9h6v6H9z"/></svg></span>
+        <div style="min-width:0"><b id="radar-hw-name">This computer</b><span class="muted" id="radar-hw-sub"></span></div>
       </div>
-      <div class="horizon-stats">
-        <div class="horizon-stat">
-          <span class="horizon-stat-val" id="radar-stat-scanned">&mdash;</span>
-          <span class="horizon-stat-lbl">On Radar</span>
-        </div>
-        <div class="horizon-stat stat-gpu">
-          <span class="horizon-stat-val" id="radar-stat-gpu">&mdash;</span>
-          <span class="horizon-stat-lbl">Full GPU Ready</span>
-        </div>
-        <div class="horizon-stat">
-          <span class="horizon-stat-val" id="radar-stat-tps">&mdash;</span>
-          <span class="horizon-stat-lbl">Peak Velocity</span>
-        </div>
+      <div class="stats">
+        <div class="stat"><b id="radar-stat-scanned">&ndash;</b><span>models</span></div>
+        <div class="stat"><b id="radar-stat-gpu">&ndash;</b><span>fit the GPU</span></div>
+        <div class="stat"><b id="radar-stat-tps">&ndash;</b><span>fastest (est.)</span></div>
       </div>
-      <div class="horizon-actions">
-        <button class="radar-sync-btn" id="radar-sync-btn" title="Refresh radar from Hugging Face Hub">
-          <svg viewBox="0 0 24 24" class="chip-svg"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5 M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16 M16 16h5v5"/></svg>
-          <span>Sync Hub</span>
-        </button>
-        <button class="radar-sync-btn" id="radar-open-history-btn" title="View what changed since last sync">
-          <svg viewBox="0 0 24 24" class="chip-svg"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>
-          <span>What Changed?</span>
-        </button>
-        <span id="radar-updated" class="radar-updated"></span>
+      <div class="strip-actions">
+        <button class="btn small ghost" id="radar-sync-btn"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5 M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16 M16 16h5v5"/></svg><span>Sync now</span></button>
+        <button class="btn small ghost" id="radar-open-history-btn"><svg viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>What changed</button>
+        <span class="muted" id="radar-updated"></span>
       </div>
     </div>
-
-    <!-- Keynote Spotlight Hero Card -->
-    <div id="radar-spotlight" class="radar-spotlight-wrap" hidden></div>
-
-    <!-- Segmented Navigation & Filter Bar -->
-    <div class="radar-nav-deck">
-      <div class="segmented-control" id="radar-tabs" role="tablist">
-        <button class="seg-btn active" data-tab="all">All Models <span class="seg-count" id="count-all">0</span></button>
-        <button class="seg-btn" data-tab="gpu">⚡ Full GPU <span class="seg-count" id="count-gpu">0</span></button>
-        <button class="seg-btn" data-tab="trending">🔥 Trending</button>
-        <button class="seg-btn" data-tab="new">✨ Newest</button>
-        <button class="seg-btn" data-tab="fast">🚀 Blazing (&gt;30 t/s)</button>
-      </div>
-
-      <!-- Backward compatibility toggle for tests if needed -->
-      <button class="btn small ghost" id="radar-toggle-gpu" style="display:none"></button>
-
-      <div class="radar-search-row">
-        <div class="search-box">
-          <svg viewBox="0 0 24 24" class="search-icon"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm10 2-4.35-4.35"/></svg>
-          <input type="text" id="radar-search" placeholder="Search models, architectures, or quants (e.g. Qwen, Llama, Q4_K_M)..." autocomplete="off">
-          <button class="search-clear-btn" id="radar-search-clear" title="Clear search" hidden>&times;</button>
-          <span class="search-kbd-hint"><kbd>/</kbd></span>
-        </div>
-
-        <div class="sort-bar">
-          <span class="sort-label">Sort:</span>
-          <div class="sort-group">
-            <button class="sort-btn active" data-sort="downloads" id="sort-downloads">Downloads</button>
-            <button class="sort-btn" data-sort="speed" id="sort-speed">Speed</button>
-            <button class="sort-btn" data-sort="size" id="sort-size">Size</button>
-            <button class="sort-btn" data-sort="name" id="sort-name">Name</button>
-          </div>
-          <button class="sort-dir-btn" id="sort-dir" title="Toggle Ascending / Descending">
-            <span id="sort-dir-icon">▼</span> <span id="sort-dir-text">Desc</span>
-          </button>
+    <div id="radar-notice" aria-live="polite"></div>
+    <div id="radar-spotlight" hidden></div>
+    <div class="filters">
+      <div class="tabs" id="radar-tabs" role="tablist" aria-label="Show"></div>
+      <div class="toolbar">
+        <label class="search">
+          <svg viewBox="0 0 24 24"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm10 2-4.35-4.35"/></svg>
+          <span class="sr-only">Search models</span>
+          <input type="search" id="radar-search" placeholder="Search name, family or quant (Qwen, Q4_K_M...)" autocomplete="off" spellcheck="false">
+          <span class="end"><button class="search-clear" id="radar-search-clear" aria-label="Clear search" hidden><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button><kbd id="search-kbd">/</kbd></span>
+        </label>
+        <div class="sort" role="group" aria-label="Sort by">
+          <span>Sort</span>
+          <button id="sort-downloads" aria-pressed="true">Popular</button>
+          <button id="sort-speed" aria-pressed="false">Speed</button>
+          <button id="sort-size" aria-pressed="false">Size</button>
+          <button id="sort-name" aria-pressed="false">Name</button>
+          <button id="sort-dir" aria-label="Sort direction: descending"><span id="sort-dir-text">High to low</span></button>
         </div>
       </div>
-
-      <div class="arch-pills-row" id="radar-arch-pills">
-        <span class="arch-pill-lbl">Family:</span>
-        <button class="arch-pill active" data-arch="all">All</button>
-        <button class="arch-pill" data-arch="qwen">Qwen</button>
-        <button class="arch-pill" data-arch="llama">Llama</button>
-        <button class="arch-pill" data-arch="deepseek">DeepSeek</button>
-        <button class="arch-pill" data-arch="gemma">Gemma</button>
-        <button class="arch-pill" data-arch="mistral">Mistral</button>
-        <button class="arch-pill" data-arch="phi">Phi</button>
-        <button class="arch-pill" data-arch="moe">MoE</button>
-      </div>
-
-      <div class="cluster-pills-row" id="radar-cluster-pills">
-        <span class="cluster-pill-lbl">Cluster:</span>
-        <button class="cluster-pill active" data-cluster="all">All Clusters</button>
-        <button class="cluster-pill" data-cluster="coding"><span class="cluster-emoji">💻</span> Coding</button>
-        <button class="cluster-pill" data-cluster="agentic"><span class="cluster-emoji">🤖</span> Agentic Work</button>
-        <button class="cluster-pill" data-cluster="chat"><span class="cluster-emoji">💬</span> Chat & Instruct</button>
-        <button class="cluster-pill" data-cluster="reasoning"><span class="cluster-emoji">🧠</span> Reasoning & Math</button>
-        <button class="cluster-pill" data-cluster="creative"><span class="cluster-emoji">🎭</span> Creative & RP</button>
-      </div>
+      <div class="pills" id="radar-arch-pills" role="group" aria-label="Family"></div>
+      <div class="pills" id="radar-cluster-pills" role="group" aria-label="Good for"></div>
     </div>
-
     <div id="radar-list"></div>
   </section>
 
   <section class="view" id="v-history" hidden>
-    <button class="link back" id="history-back">&larr; Back to Radar</button>
-    <div class="history-header">
-      <div class="radar-eyebrow">
-        <span class="pulse-dot"></span>
-        <span>FRONTIER SYNCHRONIZATION CHRONICLE</span>
-      </div>
-      <h1>What Changed Since Last Sync</h1>
-      <p class="sub">Compare telemetry between scans to discover newly appeared frontier weights, download velocity surges, and retired models.</p>
+    <button class="back" id="history-back"><svg viewBox="0 0 24 24"><path d="M19 12H5m7-7-7 7 7 7"/></svg>Model radar</button>
+    <div class="page-head">
+      <p class="eyebrow">Between two radar syncs</p>
+      <h1 id="history-title" tabindex="-1">What changed</h1>
+      <p class="sub">New models, the biggest download gains, and models that dropped off the radar.</p>
     </div>
-
-    <!-- History Horizon Comparison Banner -->
-    <div class="history-horizon" id="history-horizon">
-      <div class="history-sync-box">
-        <span class="history-sync-label">Current Scan</span>
-        <span class="history-sync-val" id="hist-curr-val">&mdash;</span>
-        <span class="history-sync-sub" id="hist-curr-sub">&mdash;</span>
-      </div>
-      <div class="history-sync-arrow">&rarr;</div>
-      <div class="history-sync-box">
-        <span class="history-sync-label">Compare With Baseline</span>
-        <select class="history-select-snap" id="hist-base-select">
-          <option value="">Previous Sync (Auto)</option>
-        </select>
-        <span class="history-sync-sub" id="hist-prev-sub">&mdash;</span>
-      </div>
+    <div class="card compare">
+      <div class="box"><span>Latest sync</span><b id="hist-curr-val">&ndash;</b><span class="muted" id="hist-curr-sub"></span></div>
+      <svg class="arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-7-7 7 7-7 7"/></svg>
+      <label class="box"><span>Compared with</span><select id="hist-base-select"><option value="">The sync before it</option></select><span class="muted" id="hist-prev-sub"></span></label>
     </div>
-
-    <!-- KPI Summary Cards -->
-    <div class="history-kpi-deck">
-      <div class="history-kpi-card kpi-new">
-        <div class="history-kpi-val" id="hist-stat-new">0</div>
-        <div class="history-kpi-lbl">New on Frontier</div>
-      </div>
-      <div class="history-kpi-card kpi-surge">
-        <div class="history-kpi-val" id="hist-stat-surge">0</div>
-        <div class="history-kpi-lbl">Top DL Gain</div>
-      </div>
-      <div class="history-kpi-card kpi-gpu">
-        <div class="history-kpi-val" id="hist-stat-gpu">0</div>
-        <div class="history-kpi-lbl">GPU Ready New</div>
-      </div>
-      <div class="history-kpi-card kpi-depart">
-        <div class="history-kpi-val" id="hist-stat-depart">0</div>
-        <div class="history-kpi-lbl">Cooled Off</div>
-      </div>
+    <div class="kpis">
+      <div class="card kpi"><b id="hist-stat-new">0</b><span>new models</span></div>
+      <div class="card kpi"><b id="hist-stat-surge">0</b><span>top download gain</span></div>
+      <div class="card kpi"><b id="hist-stat-gpu">0</b><span>new, fit the GPU</span></div>
+      <div class="card kpi"><b id="hist-stat-depart">0</b><span>dropped off</span></div>
     </div>
-
-    <!-- Section Navigation Tabs -->
-    <div class="radar-nav-deck">
-      <div class="segmented-control" id="history-tabs" role="tablist">
-        <button class="seg-btn active" data-tab="new">🆕 New Arrivals <span class="seg-count" id="hist-count-new">0</span></button>
-        <button class="seg-btn" data-tab="movers">🚀 Velocity Movers <span class="seg-count" id="hist-count-movers">0</span></button>
-        <button class="seg-btn" data-tab="depart">📉 Cooled Off <span class="seg-count" id="hist-count-depart">0</span></button>
-        <button class="seg-btn" data-tab="snapshots">📅 Snapshot Archive</button>
-      </div>
-    </div>
-
-    <!-- Dynamic History Container -->
+    <div class="filters"><div class="tabs" id="history-tabs" role="tablist" aria-label="Show"></div></div>
     <div id="history-content"></div>
   </section>
 
   <section class="view" id="v-error" hidden>
-    <h1>That didn't work</h1>
-    <p class="sub" id="e-text"></p>
-    <div id="e-terminal-box"></div>
-    <p class="center"><button class="btn" id="retry">Try again</button></p>
+    <div class="card">
+      <div class="badge-bad"><svg viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></div>
+      <div class="center"><h1 id="error-title" tabindex="-1">That didn't work</h1><p class="sub" id="e-text"></p></div>
+      <div id="e-terminal-box" style="margin-top:20px"></div>
+      <p class="center" style="margin-top:22px"><button class="btn" id="retry">Try again</button></p>
+    </div>
   </section>
 </main>
 
 <script>
 "use strict";
 const $ = (s) => document.querySelector(s);
-let S = {}, use = "", lastId = "";
+let S = {}, use = "", lastId = "", booted = false;
 
 const ICONS = {
   chat: "M7.9 20A9 9 0 1 0 4 16.1L2 22z",
@@ -1628,12 +527,7 @@ const ICONS = {
   moon: "M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z",
   monitor: "M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6zm4 15h8m-4-4v4",
   radar: "M12 20a8 8 0 1 0-8-8m8 4a4 4 0 1 0-4-4m4 0V4m0 8 5.5-5.5",
-  tools: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
   download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
-  gauge: "m12 14 4-4M3.34 19a10 10 0 1 1 17.32 0",
-  zap: "M13 2 3 14h9l-1 8 10-12h-9l1-8z",
-  cpu: "M4 4h16v16H4z M9 2v2 M15 2v2 M9 20v2 M15 20v2 M2 9h2 M2 15h2 M20 9h2 M20 15h2 M9 9h6v6H9z",
-  refresh: "M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5 M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16 M16 16h5v5",
   copy: "M8 4v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.242a2 2 0 0 0-.602-1.43L16.083 2.57A2 2 0 0 0 14.685 2H10a2 2 0 0 0-2 2z M16 18v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2",
   check: "M20 6 9 17l-5-5",
   external: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6 M15 3h6v6 M10 14 21 3",
@@ -1642,29 +536,44 @@ const ICONS = {
   chevronUp: "m18 15-6-6-6 6",
   sparkles: "m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z",
   terminal: "m4 17 6-6-6-6m8 14h8",
+  alert: "M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z",
+  info: "M12 16v-4m0-4h.01M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z",
+  flame: "M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z",
+  star: "m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z",
+  bulb: "M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z",
+  bot: "M12 8V4H8 M4 8h16v12H4z M2 14h2 M20 14h2 M9 13v2 M15 13v2",
+  pen: "M12 20h9 M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z",
+  layers: "m12 2 10 5-10 5L2 7l10-5z M2 17l10 5 10-5 M2 12l10 5 10-5",
+  trendUp: "m22 7-8.5 8.5-5-5L2 17 M16 7h6v6",
+  trendDown: "m22 17-8.5-8.5-5 5L2 7 M16 17h6v-6",
+  archive: "M21 8v13H3V8 M1 3h22v5H1z M10 12h4",
+  gpu: "M4 4h16v16H4z M9 2v2 M15 2v2 M9 20v2 M15 20v2 M2 9h2 M2 15h2 M20 9h2 M20 15h2 M9 9h6v6H9z",
+  grid: "M3 3h7v7H3z M14 3h7v7h-7z M14 14h7v7h-7z M3 14h7v7H3z",
 };
 
 const USES = [
   ["chat", "General chat", "Ask questions, write, brainstorm"],
   ["coding", "Writing code", "Help with programming"],
   ["translation", "Translation", "Between many languages"],
-  ["fast", "Fastest", "Smallest model, instant replies"],
+  ["fast", "Fastest replies", "Smallest model that still helps"],
 ];
 
 function h(tag, props, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
     if (k === "class") el.className = v;
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
     else el.setAttribute(k, v);
   }
-  for (const kid of kids.flat()) if (kid != null) el.append(kid.nodeType ? kid : document.createTextNode(kid));
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(kid));
   return el;
 }
 
 function icon(name, cls) {
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   s.setAttribute("viewBox", "0 0 24 24");
+  s.setAttribute("aria-hidden", "true");
   if (cls) s.setAttribute("class", cls);
   const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
   p.setAttribute("d", ICONS[name] || ICONS.chat);
@@ -1672,54 +581,125 @@ function icon(name, cls) {
   return s;
 }
 
-// --- Theme Management ---
+const say = (text) => { const l = $("#live"); if (l) l.textContent = text; };   // for screen readers
+
+// --- Theme: Auto (follow the system) -> Dark -> Light ---------------------------------------------------------
 let currentTheme = "system";
-try {
-  if (typeof localStorage !== "undefined") {
-    currentTheme = localStorage.getItem("lp_theme") || "system";
-  }
-} catch (e) {}
+try { currentTheme = localStorage.getItem("lp_theme") || "system"; } catch (e) {}
 
 function applyTheme(theme) {
-  currentTheme = theme;
-  try {
-    if (typeof localStorage !== "undefined") localStorage.setItem("lp_theme", theme);
-  } catch (e) {}
-  const meta = document.querySelector('meta[name="color-scheme"]');
-  if (meta && meta.setAttribute) {
-    meta.setAttribute("content", theme === "system" ? "light dark" : theme);
-  }
-  if (typeof document !== "undefined" && document.documentElement && document.documentElement.setAttribute) {
-    document.documentElement.setAttribute("data-theme", theme);
-  }
-  updateThemeButton();
+  currentTheme = ["system", "dark", "light"].includes(theme) ? theme : "system";
+  try { localStorage.setItem("lp_theme", currentTheme); } catch (e) {}
+  const root = document.documentElement;
+  if (currentTheme === "system") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", currentTheme);
+  const names = { system: "Auto", dark: "Dark", light: "Light" };
+  const p = $("#theme-icon") && $("#theme-icon").querySelector("path");
+  if (p) p.setAttribute("d", ICONS[{ system: "monitor", dark: "moon", light: "sun" }[currentTheme]]);
+  $("#theme-label").textContent = names[currentTheme];
+  $("#theme-btn").setAttribute("aria-label", "Theme: " + names[currentTheme] + (currentTheme === "system" ? " (follows your system)" : "") + ". Change theme");
 }
-
-function updateThemeButton() {
-  const iconMap = { system: "monitor", dark: "moon", light: "sun" };
-  const labelMap = { system: "Auto", dark: "Dark", light: "Light" };
-  const iconPath = ICONS[iconMap[currentTheme]] || ICONS.monitor;
-  const p = $("#theme-icon")?.querySelector("path");
-  if (p) p.setAttribute("d", iconPath);
-  const lbl = $("#theme-label");
-  if (lbl) lbl.textContent = labelMap[currentTheme] || "Auto";
-}
-
-const themeBtn = $("#theme-btn");
-if (themeBtn) {
-  themeBtn.onclick = () => {
-    const cycle = { system: "dark", dark: "light", light: "system" };
-    applyTheme(cycle[currentTheme] || "system");
-  };
-}
+$("#theme-btn").onclick = () => applyTheme({ system: "dark", dark: "light", light: "system" }[currentTheme]);
 applyTheme(currentTheme);
 
-// --- View Router ---
+// --- Copying: the Clipboard API, then the old execCommand path, and an honest message when both are blocked ------
+function legacyCopy(text) {
+  try {
+    const ta = h("textarea", { readonly: "", style: "position:fixed;top:-1000px;opacity:0" });
+    ta.value = text;
+    document.body.append(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return !!ok;
+  } catch (e) { return false; }
+}
+
+async function copyText(text, btn) {
+  let ok = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); ok = true; }
+  } catch (e) {}
+  if (!ok) ok = legacyCopy(text);
+  if (!btn) return ok;
+  const orig = Array.from(btn.childNodes || btn.children || []);
+  const key = S.os === "mac" ? "⌘C" : "Ctrl+C";
+  btn.classList.add(ok ? "ok" : "no");
+  btn.replaceChildren(ok ? icon("check") : icon("info"), ok ? "Copied" : "Select it and press " + key);
+  say(ok ? "Copied to the clipboard" : "Copying was blocked. Select the command and press " + key);
+  setTimeout(() => { btn.classList.remove("ok", "no"); btn.replaceChildren(...orig); }, 2200);
+  return ok;
+}
+
+function copyButton(text, label = "Copy") {
+  return h("button", { class: "copy-btn", "aria-label": label + ": " + text, onclick: (e) => copyText(text, e.currentTarget) }, icon("copy"), label);
+}
+function cmdRow(cmd) { return h("div", { class: "cmd" }, h("code", {}, cmd), copyButton(cmd)); }
+
+// Commands come from the server, built for this OS from programs it found (rule 3). The page never invents one.
+function commandList(cmds) {
+  return (cmds || []).flatMap((c) => [h("p", { class: "cmd-label" }, c.label), cmdRow(c.cmd)]);
+}
+function terminalDetails(cmds, summary, open) {
+  if (!cmds || !cmds.length) return null;
+  return h("details", { class: "terminal", open: open ? "" : null },
+    h("summary", {}, icon("terminal"), summary || "Prefer the terminal?"),
+    h("div", { class: "terminal-body" }, h("p", { class: "muted", style: "margin:0 0 4px" }, "Run from the llama-cpp-launchpad folder:"), commandList(cmds)));
+}
+
+// --- Views and the URL: every top-level view has an address, so browser Back/Forward and bookmarks work -------
+const NAV = { "": "home-btn", "#radar": "radar-btn", "#history": "history-btn", "#tools": "tools-btn" };
+const WIZARD = { "v-use": 1, "v-wait": 1, "v-pick": 1, "v-install": 2, "v-done": 3, "v-error": 2 };
+const AWAY = ["v-tools", "v-radar", "v-history"];
 let view = "", jobLive = false;
+
 function show(id) {
+  const changed = id !== view;
   view = id;
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== id));
+  $("#main").className = AWAY.slice(1).includes(id) ? "wide" : "";
+  $("#warn").hidden = !["v-use", "v-pick"].includes(id);       // where it changes the decision; tools/done say it too
+  renderSteps(WIZARD[id] || 0);
+  if (!changed) return;
   window.scrollTo(0, 0);
+  if (booted) { const t = $("#" + id.slice(2) + "-title"); if (t && t.focus) t.focus(); }   // tells screen readers the view changed
+}
+
+function renderSteps(n) {
+  const el = $("#steps");
+  el.hidden = !n;
+  if (!n) return;
+  el.replaceChildren(...["Choose", "Download", "Run"].map((label, i) =>
+    h("li", { class: i + 1 < n ? "past" : "", "aria-current": i + 1 === n ? "step" : null },
+      h("span", { class: "n" }, i + 1 < n ? icon("check") : String(i + 1)), h("span", { class: "label" }, label))));
+}
+
+function markNav(hash) {
+  for (const [hh, id] of Object.entries(NAV)) {
+    const b = $("#" + id);
+    if (hh === hash) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  }
+}
+
+function navigate(hash) {
+  if ((location.hash || "") === hash) return route();
+  if (hash) { location.hash = hash; return; }                         // the "hashchange" event calls route()
+  try { history.pushState(null, "", location.pathname + location.search); } catch (e) {}
+  return route();
+}
+
+function route() {
+  const hash = location.hash || "";
+  const open = { "#tools": openTools, "#radar": openRadar, "#history": openHistory }[hash];
+  markNav(open ? hash : "");
+  return open ? open() : goHome();
+}
+window.addEventListener("hashchange", () => route());
+
+async function goHome() {
+  let j = { state: "idle" };
+  try { j = await api("/api/progress"); } catch (e) {}
+  if (jobLive && ["downloading", "testing", "done", "error"].includes(j.state)) { view = ""; watch(); }
+  else renderUse();
 }
 
 async function api(path, body) {
@@ -1728,13 +708,13 @@ async function api(path, body) {
   return r.json();
 }
 
-const UNREACHABLE = "Could not reach the setup server. Is the launcher still running in your terminal? Then try again.";
+const UNREACHABLE = "Could not reach the setup page's server. Is its window still open? Start it again, then press Try again.";
 let gen = 0;
 const fmt = (n) => (n >= 1073741824 ? (n / 1073741824).toFixed(1) + " GB" : Math.round(n / 1048576) + " MB");
 
 const VERDICT = {
-  smooth: "Runs smoothly", usable: "Works, replies take a moment",
-  slow: "Slow on this computer", tight: "Tight fit, may crash",
+  smooth: "Runs smoothly", usable: "Usable, replies take a moment",
+  slow: "Slow on this computer", tight: "Tight fit, may not load",
 };
 function where(m) {
   if (m.where === "gpu") return "on your graphics card";
@@ -1745,13 +725,13 @@ function meta(m) {
   return h("span", {}, h("span", { class: "verdict " + m.verdict }, VERDICT[m.verdict] || ""), " " + where(m) + " · " + m.size_h);
 }
 
-// --- Screens ---
+// --- Choose -> pick -> download -> done --------------------------------------------------------------------------
 function renderUse() {
   jobLive = false;
   gen++; moreBusy = false;
   const t = $("#tiles"); t.replaceChildren();
   for (const [id, title, text] of USES)
-    t.append(h("button", { class: "tile", onclick: () => pick(id) }, icon(id), h("b", {}, title), h("span", {}, text)));
+    t.append(h("button", { class: "tile", onclick: () => pick(id) }, h("span", { class: "tile-icon" }, icon(id)), h("b", {}, title), h("span", {}, text)));
   show("v-use");
 }
 
@@ -1766,28 +746,37 @@ async function pick(u) {
   const ms = data.models || [];
   $("#top").replaceChildren(); $("#others").replaceChildren();
   $("#more-wrap").hidden = false; $("#more-btn").textContent = "See other options";
+  const label = (USES.find((x) => x[0] === u) || [, "this"])[1].toLowerCase();
   if (ms.length) {
     const m = ms[0];
-    $("#top").append(h("div", { class: "card" },
-      h("h2", {}, m.title), h("p", { class: "meta" }, meta(m)),
+    $("#top").append(h("div", { class: "card pick" },
+      h("p", { class: "eyebrow" }, "Best for " + label + " on this computer"),
+      h("h2", {}, m.title), h("p", { class: "repo" }, m.repo + (m.quant ? " · " + m.quant : "")),
+      h("ul", { class: "facts" },
+        h("li", { class: "fact " + m.verdict }, VERDICT[m.verdict] || ""),
+        h("li", { class: "fact" }, icon(m.where === "gpu" ? "gpu" : "monitor"), where(m)),
+        h("li", { class: "fact" }, icon("download"), m.size_h),
+        m.tps ? h("li", { class: "fact" }, icon("fast"), "~" + m.tps + " tokens/s est.") : null),
       m.note ? h("p", { class: "note" }, m.note) : null,
-      h("button", { class: "btn", onclick: () => install(m) }, m.have ? "Use this model" : "Get this model")));
+      h("div", { class: "actions" },
+        h("button", { class: "btn", onclick: () => install(m) }, icon(m.have ? "check" : "download"), m.have ? "Use this model" : "Get this model"),
+        m.have ? h("span", { class: "muted" }, "Already downloaded") : h("span", { class: "muted" }, "Downloads into the models folder")),
+      terminalDetails(m.commands)));
     if (ms.length > 1) $("#others").append(list("Also good for your computer", ms.slice(1)));
   } else {
     $("#top").append(h("div", { class: "card" }, h("h2", {}, "Nothing built in fits well"),
-      h("p", { class: "meta" }, "Let's look through Hugging Face for something smaller or newer.")));
+      h("p", { class: "note" }, "Searching Hugging Face for something smaller or newer…")));
   }
   show("v-pick");
   if (!ms.length) more(false);
 }
 
 function list(title, ms) {
-  const box = h("div", {}, h("p", { class: "rows-title" }, title));
   const rows = h("div", { class: "rows" });
   for (const m of ms)
     rows.append(h("div", { class: "row" }, h("div", { class: "t" }, h("b", {}, m.title), meta(m)),
-      h("button", { class: "btn small", onclick: () => install(m) }, m.have ? "Use" : "Get")));
-  box.append(rows); return box;
+      h("button", { class: "btn small ghost", onclick: () => install(m) }, m.have ? "Use" : "Get")));
+  return h("div", {}, h("p", { class: "rows-title" }, title), rows);
 }
 
 let moreBusy = false;
@@ -1800,7 +789,7 @@ async function more(everything) {
   try { d = await api("/api/more?use=" + use + "&all=" + (everything ? 1 : 0)); } catch (e) { failed = true; }
   if (g !== gen) return;
   moreBusy = false;
-  const o = $("#others"); o.querySelector(".found")?.remove();
+  const o = $("#others"); const old = o.querySelector(".found"); if (old) old.remove();
   const wrap = h("div", { class: "found" });
   if (failed) wrap.append(h("p", { class: "rows-title" }, "Could not search Hugging Face. Check your connection and try again."));
   else if (d.error) wrap.append(h("p", { class: "rows-title" }, d.error));
@@ -1813,110 +802,25 @@ async function more(everything) {
 
 let activeModel = null;
 
-function dlFile(m) {
-  if (!m) return "";
-  if (m.file) return m.file;
-  if (m.files && m.files[0] && m.files[0][0]) return m.files[0][0];
-  const repoName = (m.repo || "").split("/")[1] || m.repo || "model";
-  return (m.name || repoName) + ".gguf";
-}
-
-function dlUrl(m) {
-  if (!m) return "";
-  if (m.download_url) return m.download_url;
-  const f = dlFile(m);
-  return m.repo ? "https://huggingface.co/" + m.repo + "/resolve/main/" + f : "";
-}
-
-function terminalCmd(m) {
-  if (!m) return "";
-  const f = dlFile(m);
-  const u = dlUrl(m);
-  return 'curl -L -C - -o "models/' + f + '" "' + u + '"';
-}
-
-function cliCmd(m) {
-  if (!m || !m.repo) return "";
-  return 'python3 utils/hf_radar.py --download "' + m.repo + '"';
-}
-
-function renderInstallTerminalBox(j) {
-  const box = $("#i-terminal-box");
-  if (!box) return;
-  const repo = (j && j.repo) || (activeModel ? activeModel.repo : "");
-  const file = (j && j.file) || (activeModel ? dlFile(activeModel) : "");
-  const url = (j && j.download_url) || (activeModel ? dlUrl(activeModel) : (repo && file ? "https://huggingface.co/" + repo + "/resolve/main/" + file : ""));
-  const curl = url && file ? 'curl -L -C - -o "models/' + file + '" "' + url + '"' : "";
-  const cli = repo ? 'python3 utils/hf_radar.py --download "' + repo + '"' : "";
-  if (!curl && !cli) { box.replaceChildren(); return; }
-  box.replaceChildren(
-    h("div", { class: "terminal-box-head" },
-      h("span", { class: "terminal-icon" }, ">_"),
-      h("span", { class: "terminal-title" }, "Live Terminal Monitoring & Direct Link")
-    ),
-    h("p", { class: "sub small" },
-      j && j.source === "terminal"
-        ? "This download was initiated in your terminal and is syncing progress live here in the web browser."
-        : "Download progress is streamed live to your terminal stdout/stderr. To resume or download via command line:"
-    ),
-    curl ? h("div", { class: "code-copy-row" },
-      h("span", { class: "inline-code" }, curl),
-      h("button", {
-        class: "btn small ghost",
-        onclick: (e) => copyText(curl, e.currentTarget, "Copied!")
-      }, "Copy curl")
-    ) : null,
-    cli ? h("div", { class: "code-copy-row", style: "margin-top:6px;" },
-      h("span", { class: "inline-code" }, cli),
-      h("button", {
-        class: "btn small ghost",
-        onclick: (e) => copyText(cli, e.currentTarget, "Copied!")
-      }, "Copy CLI")
-    ) : null
-  );
-}
-
-function renderErrorTerminalBox(j) {
-  const box = $("#e-terminal-box");
-  if (!box) return;
-  const curl = (j && j.curl_cmd) || (activeModel ? terminalCmd(activeModel) : "");
-  const cli = (j && j.cli_cmd) || (activeModel ? cliCmd(activeModel) : "");
-  if (!curl && !cli) { box.replaceChildren(); return; }
-  box.replaceChildren(
-    h("div", { class: "terminal-box-head", style: "color:var(--warn);" },
-      h("span", { class: "terminal-icon" }, ">_"),
-      h("span", { class: "terminal-title" }, "Resume Download via Terminal")
-    ),
-    h("p", { class: "sub small" },
-      "Browser connection interrupted? The download supports HTTP Range resume so no progress is lost. Run either in your terminal:"
-    ),
-    curl ? h("div", { class: "code-copy-row" },
-      h("span", { class: "inline-code" }, curl),
-      h("button", {
-        class: "btn small ghost",
-        onclick: (e) => copyText(curl, e.currentTarget, "Copied!")
-      }, "Copy curl")
-    ) : null,
-    cli ? h("div", { class: "code-copy-row", style: "margin-top:6px;" },
-      h("span", { class: "inline-code" }, cli),
-      h("button", {
-        class: "btn small ghost",
-        onclick: (e) => copyText(cli, e.currentTarget, "Copied!")
-      }, "Copy CLI")
-    ) : null
-  );
-}
-
 async function install(m) {
   lastId = m.id;
   activeModel = m;
   let r;
   try { r = await api("/api/install", { id: m.id }); } catch (e) { return fail(UNREACHABLE); }
   if (r.error) return fail(r.error);
+  if (AWAY.includes(view)) {                    // started from the radar: show the download, not a silent poll
+    try { history.pushState(null, "", location.pathname + location.search); } catch (e) {}
+    markNav("");
+    view = "";
+  }
   watch();
 }
 
-let timer = null;
+function renderTerminalBox(box, cmds, open) {
+  box.replaceChildren(...[terminalDetails(cmds, open ? "Continue from a terminal" : "Prefer the terminal?", open)].filter(Boolean));
+}
+
+let timer = null, lastTermKey = "";
 function watch() {
   clearTimeout(timer);
   jobLive = true;
@@ -1928,20 +832,26 @@ function watch() {
       timer = setTimeout(tick, 500);
       return;
     }
-    const away = view === "v-tools" || view === "v-radar" || view === "v-history";
+    const away = AWAY.includes(view);
+    const cmds = j.commands || (activeModel && activeModel.commands) || [];
+    const key = JSON.stringify(cmds);
+    if (key !== lastTermKey) { lastTermKey = key; renderTerminalBox($("#i-terminal-box"), cmds, false); }
     if (j.state === "downloading") {
       if (!away) show("v-install");
+      const pct = j.total ? Math.min(100, (j.done * 100) / j.total) : 0;
       $("#i-title").textContent = "Downloading " + j.title;
       $("#bar").classList.remove("busy");
-      $("#bar-i").style.width = (j.total ? Math.min(100, (j.done * 100) / j.total) : 0) + "%";
-      $("#i-text").textContent = fmt(j.done) + " of " + fmt(j.total) + (j.source === "terminal" ? " (Synced from terminal)" : "");
-      renderInstallTerminalBox(j);
+      $("#bar").setAttribute("aria-valuenow", String(Math.round(pct)));
+      $("#bar-i").style.width = pct + "%";
+      $("#i-text").textContent = fmt(j.done) + " of " + fmt(j.total) + (j.source === "terminal" ? " · started in a terminal" : "");
+      $("#i-pct").textContent = Math.floor(pct) + "%";
     } else if (j.state === "testing") {
       if (!away) show("v-install");
-      $("#i-title").textContent = "Testing speed…";
+      $("#i-title").textContent = "Testing the speed…";
       $("#bar").classList.add("busy");
+      $("#bar").removeAttribute("aria-valuenow");
       $("#i-text").textContent = "About 10 seconds";
-      renderInstallTerminalBox(j);
+      $("#i-pct").textContent = "";
     } else if (away) return;
     else if (j.state === "done") return done(j);
     else if (j.state === "error") return fail(j);
@@ -1951,856 +861,441 @@ function watch() {
   tick();
 }
 
-function done(j) {
-  let text = j.title + " is installed.";
-  if (j.bench === "ok") text += " Your computer writes about " + j.tps + " tokens a second" + (j.tps >= 15 ? ": smooth." : j.tps >= 5 ? ": usable." : ": slow, a smaller model would feel snappier.");
-  else if (j.bench === "skipped") text += " The speed test was skipped because llama.cpp isn't installed yet.";
+async function done(j) {
+  try { const fresh = await api("/api/state"); if (fresh && fresh.token) S = fresh; } catch (e) {}   // llama.cpp may be installed by now
+  let text = j.title + " is downloaded.";
+  if (j.bench === "ok") text += " This computer writes about " + j.tps + " tokens a second" + (j.tps >= 15 ? ": smooth." : j.tps >= 5 ? ": usable." : ": slow; a smaller model would feel snappier.");
+  else if (j.bench === "skipped") text += " The speed test was skipped because llama.cpp is not installed yet.";
   else text += " The speed test could not load it; the model may be too big for this computer.";
   $("#d-text").textContent = text;
-  $("#cmd").textContent = S.serve_cmd;
+  const next = $("#done-next");
+  const tip = { mac: "Or double-click scripts/mac/serve.command in Finder.", windows: "Or double-click scripts\\win\\serve.bat in File Explorer." }[S.os];
+  if (!S.llama_server) {
+    const li = S.llama_install || {};
+    next.replaceChildren(
+      h("p", {}, h("b", {}, "One more step: llama.cpp is not installed. "), "It is the program that runs the model. Install it:"),
+      li.install_cmd ? cmdRow(li.install_cmd) : h("p", { class: "note", style: "margin:0" }, li.install || "See the README for install steps."),
+      h("p", {}, "Then start chatting with:"), cmdRow(S.serve_cmd));
+  } else {
+    next.replaceChildren(h("p", {}, "To start chatting, run this from the project folder:"), cmdRow(S.serve_cmd),
+      ...(tip ? [h("p", { class: "muted", style: "margin-top:10px" }, tip)] : []));     // replaceChildren(null) prints "null"
+  }
   show("v-done");
-}
-function fail(msgOrJob) {
-  const msg = typeof msgOrJob === "string" ? msgOrJob : ((msgOrJob && msgOrJob.error) || "Download failed");
-  $("#e-text").textContent = msg;
-  renderErrorTerminalBox(typeof msgOrJob === "object" ? msgOrJob : null);
-  show("v-error");
+  say(text);
 }
 
-// --- Installed Tools Screen ---
+function fail(msgOrJob) {
+  const job = typeof msgOrJob === "object" && msgOrJob ? msgOrJob : null;
+  $("#e-text").textContent = job ? (job.error || "The download failed.") : msgOrJob;
+  renderTerminalBox($("#e-terminal-box"), (job && job.commands) || (activeModel && activeModel.commands) || [], true);
+  show("v-error");
+  say($("#e-text").textContent);
+}
+
+// --- Installed tools -------------------------------------------------------------------------------------------
 const STATUS = { installed: "Installed", "data-only": "Only leftovers found", "not-found": "Not found" };
 function toolCard(t) {
-  const card = h("div", { class: "tool" },
+  const card = h("div", { class: "card tool" },
     h("div", { class: "tool-head" }, h("b", {}, t.label), h("span", { class: "status " + t.status }, STATUS[t.status] || t.status)));
   if (t.version) card.append(h("p", {}, "Version " + t.version));
   const first = t.evidence[0];
-  if (first) card.append(h("p", {}, first.path));
-  if (t.status === "installed" && t.hint.start) card.append(h("p", {}, "Start it with: " + t.hint.start));
+  if (first) card.append(h("p", { class: "muted" }, first.path));
+  if (t.status === "installed" && t.hint.start) card.append(h("p", {}, "Start it with:"), cmdRow(t.hint.start));
   if (t.status === "installed" && !t.hint.start && t.hint.setup) card.append(h("p", {}, t.hint.setup));
-  if (t.status !== "installed") card.append(h("p", {}, t.hint.install));
+  if (t.status !== "installed" && t.hint.install_cmd) card.append(h("p", {}, "Install it with:"), cmdRow(t.hint.install_cmd));
+  else if (t.status !== "installed") card.append(h("p", {}, t.hint.install));
   const rows = (t.searched || []).map((s) => h("li", { class: s.found ? "hit" : "" }, (s.found ? "found  " : "no     ") + s.check + ": " + s.target));
-  card.append(h("details", {}, h("summary", {}, "Why we think so (" + t.evidence.length + " found, " + rows.length + " places checked)"),
+  card.append(h("details", {}, h("summary", {}, "How we checked (" + t.evidence.length + " found, " + rows.length + " places looked at)"),
     h("ul", {}, t.evidence.map((e) => h("li", { class: "hit" }, e.kind + ": " + e.path)), rows)));
   return card;
 }
 
 async function loadTools() {
-  const list = $("#tools-list"); list.replaceChildren(h("div", { class: "spin" }));
+  const box = $("#tools-list"); box.replaceChildren(h("div", { class: "spin", "aria-label": "Checking" }));
   try {
     const d = await api("/api/tools?verbose=1");
     if (d.error) throw new Error(d.error);
-    list.replaceChildren(...d.tools.map(toolCard));
-  } catch (e) { list.replaceChildren(h("p", { class: "warn" }, "Could not check: " + e.message)); }
+    box.replaceChildren(...d.tools.map(toolCard));
+  } catch (e) { box.replaceChildren(h("div", { class: "notice warn" }, icon("alert"), h("div", {}, "Could not check: " + e.message))); }
+}
+function openTools() { show("v-tools"); loadTools(); }
+
+$("#home-btn").onclick = () => navigate("");
+$("#tools-btn").onclick = () => navigate("#tools");
+$("#radar-btn").onclick = () => navigate("#radar");
+$("#history-btn").onclick = () => navigate("#history");
+$("#tools-recheck").onclick = loadTools;
+$("#tools-back").onclick = () => navigate("");
+
+// --- Model radar ------------------------------------------------------------------------------------------------
+let radarModels = [], radarOffline = false;
+let radarTab = "all", radarArch = "all", radarCluster = "all";
+let radarSortKey = "downloads", radarSortAsc = false, radarFilter = "";
+const radarExpanded = new Set();
+let historyData = null, historyTab = "new";
+
+const RADAR_TABS = [["all", "All", "grid"], ["gpu", "Fits the GPU", "gpu"], ["trending", "Trending", "flame"], ["new", "Newest", "sparkles"], ["fast", "Fast (30+ t/s est.)", "fast"]];
+const FAMILIES = [["all", "All"], ["qwen", "Qwen"], ["llama", "Llama"], ["deepseek", "DeepSeek"], ["gemma", "Gemma"], ["mistral", "Mistral"], ["phi", "Phi"], ["moe", "Mixture of experts"]];
+const CLUSTERS = { coding: ["Coding", "coding"], agentic: ["Agents", "bot"], chat: ["Chat", "chat"], reasoning: ["Reasoning", "bulb"], creative: ["Creative", "pen"] };
+
+function selectable(items, current, onPick, kind) {
+  // kind "tab": role=tab + aria-selected; otherwise a toggle button with aria-pressed.
+  const els = items.map(([id, label, ic]) => {
+    const props = kind === "tab"
+      ? { class: "tab", role: "tab", "data-tab": id, "aria-selected": String(id === current) }
+      : { class: "pill", "data-value": id, "aria-pressed": String(id === current) };
+    props.onclick = () => {
+      for (const e of els) e.setAttribute(kind === "tab" ? "aria-selected" : "aria-pressed", String(e === el(id)));
+      onPick(id);
+    };
+    return h("button", props, ic ? icon(ic) : null, label, kind === "tab" && (id === "all" || id === "gpu") ? h("span", { class: "count", "data-count": id }, "0") : null);
+  });
+  const el = (id) => els[items.findIndex((x) => x[0] === id)];
+  return els;
 }
 
-$("#tools-btn").onclick = () => { show("v-tools"); loadTools(); };
-$("#tools-recheck").onclick = loadTools;
-$("#tools-back").onclick = async () => {
-  let j = { state: "idle" };
-  try { j = await api("/api/progress"); } catch (e) {}
-  if (jobLive && ["downloading", "testing", "done", "error"].includes(j.state)) { view = ""; watch(); } else renderUse();
-};
+const radarTabEls = selectable(RADAR_TABS, radarTab, (id) => { radarTab = id; refreshRadar(); }, "tab");
+$("#radar-tabs").replaceChildren(...radarTabEls);
+const archEls = selectable(FAMILIES, radarArch, (id) => { radarArch = id; refreshRadar(); });
+$("#radar-arch-pills").replaceChildren(h("span", {}, "Family"), ...archEls);
+const clusterItems = [["all", "Anything"], ...Object.entries(CLUSTERS).map(([id, [label, ic]]) => [id, label, ic])];
+const clusterEls = selectable(clusterItems, radarCluster, (id) => { radarCluster = id; refreshRadar(); });
+$("#radar-cluster-pills").replaceChildren(h("span", {}, "Good for"), ...clusterEls);
 
-// --- Hugging Face Model Radar (Steve Jobs Edition) ---
-let radarModels = [];
-let radarGpuOnly = false;
-let radarTab = "all";
-let radarArch = "all";
-let radarCluster = "all";
-let radarSortKey = "downloads";
-let radarSortAsc = false;
-let radarFilter = "";
-let radarExpanded = new Set();
-
-let historyData = null;
-let historyTab = "new";
+function setSelected(els, attr, value, key) { for (const e of els) e.setAttribute(attr, String(e.getAttribute(key) === value)); }
+function selectRadarCluster(c) { radarCluster = c; setSelected(clusterEls, "aria-pressed", c, "data-value"); refreshRadar(); }
 
 function authorAvatar(author) {
-  const initial = (author || "HF")[0].toUpperCase();
-  const gradients = [
-    "linear-gradient(135deg, #4f46e5, #7c3aed)",
-    "linear-gradient(135deg, #059669, #10b981)",
-    "linear-gradient(135deg, #d97706, #f59e0b)",
-    "linear-gradient(135deg, #2563eb, #38bdf8)",
-    "linear-gradient(135deg, #db2777, #f472b6)",
-    "linear-gradient(135deg, #7c2d12, #ea580c)",
-    "linear-gradient(135deg, #4338ca, #6366f1)",
-    "linear-gradient(135deg, #0f766e, #14b8a6)",
-  ];
+  const hues = [245, 160, 35, 210, 330, 15, 265, 180];
   let hash = 0;
   for (let i = 0; i < (author || "").length; i++) hash = (hash * 31 + author.charCodeAt(i)) & 0xffffffff;
-  const grad = gradients[Math.abs(hash) % gradients.length];
-  return h("div", { class: "radar-avatar", style: "background: " + grad }, initial);
+  const hue = hues[Math.abs(hash) % hues.length];
+  return h("span", { class: "avatar", "aria-hidden": "true", style: "background:linear-gradient(135deg,hsl(" + hue + " 65% 48%),hsl(" + (hue + 30) + " 70% 40%))" }, (author || "H")[0].toUpperCase());
 }
 
-async function copyText(text, btn, feedback = "Copied!") {
-  const orig = Array.from(btn.childNodes);
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-    }
-  } catch (e) {}
-  btn.textContent = feedback;
-  setTimeout(() => { btn.replaceChildren(...orig); }, 1800);
+function isInstalled(m) {
+  const i = S.installed;
+  return !!i && ((typeof i === "object" && (i.repo === m.repo || i.name === m.name)) || i === m.name || i === m.repo);
 }
 
-function toggleDrawer(repo) {
-  if (radarExpanded.has(repo)) radarExpanded.delete(repo);
-  else radarExpanded.add(repo);
-  renderRadarList();
-}
+const FIT = { gpu: ["gpu", "Fits the graphics card"], cpu: ["cpu", "Runs on the processor"], tight: ["tight", "Tight fit"] };
 
-function updateSortButtons() {
-  document.querySelectorAll(".sort-btn").forEach((b) => {
-    b.classList.toggle("active", b.getAttribute("data-sort") === radarSortKey);
-  });
-  const dirIcon = $("#sort-dir-icon");
-  const dirText = $("#sort-dir-text");
-  if (dirIcon) dirIcon.textContent = radarSortAsc ? "▲" : "▼";
-  if (dirText) dirText.textContent = radarSortAsc ? "Asc" : "Desc";
-}
-
-function handleSort(key) {
-  if (radarSortKey === key) {
-    radarSortAsc = !radarSortAsc;
-  } else {
-    radarSortKey = key;
-    radarSortAsc = (key === "name" || key === "size") ? true : false;
-  }
-  updateSortButtons();
-  renderRadarList();
-}
-
-function updateRadarHorizon(updatedAt) {
-  const hwName = $("#radar-hw-name");
-  const hwSub = $("#radar-hw-sub");
-  const scanned = $("#radar-stat-scanned");
-  const gpuStat = $("#radar-stat-gpu");
-  const tpsStat = $("#radar-stat-tps");
-  const countAll = $("#count-all");
-  const countGpu = $("#count-gpu");
-  const updated = $("#radar-updated");
-
-  if (hwName) {
-    if (S.mode === "gpu" && S.gpu) {
-      hwName.textContent = S.gpu + (S.vram_gb ? " (" + S.vram_gb + " GB VRAM)" : "");
-      if (hwSub) hwSub.textContent = S.ram_gb + " GB System RAM · Dedicated GPU Acceleration";
-    } else {
-      hwName.textContent = (S.ram_gb || 16) + " GB Memory Architecture";
-      if (hwSub) hwSub.textContent = S.mode === "gpu" ? "Unified Memory Architecture · Zero-Copy GPU Bandwidth" : "Standard CPU Execution Environment";
-    }
-  }
-
-  const gpuCount = radarModels.filter((m) => m.fit_mode === "gpu").length;
-  const maxTps = Math.max(...radarModels.map((m) => m.tps || 0), 0);
-
-  if (scanned) scanned.textContent = radarModels.length;
-  if (gpuStat) gpuStat.textContent = gpuCount;
-  if (tpsStat) tpsStat.textContent = maxTps > 0 ? "~" + maxTps + " t/s" : "—";
-  if (countAll) countAll.textContent = radarModels.length;
-  if (countGpu) countGpu.textContent = gpuCount;
-
-  if (updated) {
-    if (updatedAt) {
-      updated.textContent = "Synced " + updatedAt.slice(0, 10);
-    } else {
-      updated.textContent = "";
-    }
-  }
-}
-
-function renderClusterBadges(clusters) {
-  if (!clusters || !clusters.length) return [];
-  const map = {
-    coding: { label: "Coding", icon: "💻", cls: "cluster-coding" },
-    agentic: { label: "Agentic", icon: "🤖", cls: "cluster-agentic" },
-    chat: { label: "Chat", icon: "💬", cls: "cluster-chat" },
-    reasoning: { label: "Reasoning", icon: "🧠", cls: "cluster-reasoning" },
-    creative: { label: "Creative", icon: "🎭", cls: "cluster-creative" },
+// Memory use, measured against the memory the model will actually run from. Never clamp silently: a model bigger
+// than that memory says so.
+function memory(m) {
+  const sizeMb = m.size_mb || Math.round((m.size_bytes || 0) / 1048576);
+  const onCard = m.fit_mode === "gpu" && S.mode === "gpu" && S.gpu && S.vram_gb > 0;
+  const poolGb = (onCard ? S.vram_gb : S.ram_gb) || 0;
+  const pool = onCard ? "graphics memory" : "memory";
+  const gb = (sizeMb / 1024).toFixed(1);
+  const pct = poolGb ? Math.round((sizeMb / (poolGb * 1024)) * 100) : 0;
+  const over = pct > 100;
+  return {
+    label: !poolGb ? gb + " GB" : over ? gb + " GB, bigger than your " + poolGb + " GB " + pool : gb + " GB of " + poolGb + " GB " + pool + " (" + pct + "%)",
+    width: Math.max(2, Math.min(pct, 100)), over, gb,
   };
-  return clusters.map((c) => {
-    const info = map[c] || { label: c, icon: "🏷️", cls: "cluster-gen" };
-    return h("button", {
-      class: "radar-cluster-badge " + info.cls,
-      title: "Filter by " + info.label + " cluster",
-      onclick: (e) => {
-        e.stopPropagation();
-        selectRadarCluster(c);
-      }
-    }, info.icon + " " + info.label);
-  });
 }
 
-function selectRadarCluster(c) {
-  radarCluster = c;
-  document.querySelectorAll("#radar-cluster-pills .cluster-pill").forEach((b) => {
-    b.classList.toggle("active", b.getAttribute("data-cluster") === c);
-  });
-  renderSpotlight();
-  renderRadarList();
+function modelTags(m) {
+  return [
+    m.params_b ? h("span", { class: "tag strong" }, m.params_b + "B parameters") : null,
+    m.quant ? h("span", { class: "tag" }, m.quant) : null,
+    m.moe ? h("span", { class: "tag" }, icon("layers"), "Mixture of experts") : null,
+    m.arch ? h("span", { class: "tag" }, m.arch) : null,
+    ...(m.clusters || []).map((c) => {
+      const [label, ic] = CLUSTERS[c] || [c, "star"];
+      return h("button", { class: "tag", title: "Show only " + label.toLowerCase() + " models", onclick: () => selectRadarCluster(c) }, icon(ic), label);
+    }),
+    m.downloads != null ? h("span", { class: "tag", title: "Downloads on Hugging Face" }, icon("download"), (m.downloads || 0).toLocaleString()) : null,
+    m.likes != null ? h("span", { class: "tag", title: "Likes on Hugging Face" }, icon("heart"), (m.likes || 0).toLocaleString()) : null,
+    m.created_at ? h("span", { class: "tag" }, "Added " + m.created_at) : null,
+  ];
 }
 
-function renderSpotlight() {
-  const container = $("#radar-spotlight");
-  if (!container) return;
-  if (radarTab !== "all" || radarArch !== "all" || radarCluster !== "all" || radarFilter.trim() || !radarModels.length) {
-    container.hidden = true;
-    return;
-  }
-  const hero = radarModels.find((m) => m.fit_mode === "gpu") || radarModels[0];
-  if (!hero) {
-    container.hidden = true;
-    return;
-  }
-  container.hidden = false;
-
-  const author = (hero.repo || "").split("/")[0] || "HF";
-  const repoName = (hero.repo || "").split("/")[1] || hero.repo || "";
-  const displayName = hero.name || repoName;
-  const totalMb = ((S.mode === "gpu" && S.vram_gb ? S.vram_gb : S.ram_gb) || 16) * 1024;
-  const sizeMb = hero.size_mb || Math.round((hero.size_bytes || 0) / 1048576);
-  const memPct = Math.min(Math.max(Math.round((sizeMb / totalMb) * 100), 2), 100);
-  const sizeGb = (sizeMb / 1024).toFixed(1);
-  const totalGb = Math.round(totalMb / 1024);
-  const tps = hero.tps || 0;
-
-  const isInstalled = S.installed && (
-    (typeof S.installed === "object" && (S.installed.repo === hero.repo || S.installed.name === hero.name)) ||
-    S.installed === hero.name || S.installed === hero.repo
-  );
-
-  const card = h("div", { class: "spotlight-card" },
-    h("div", { class: "spotlight-badge-row" },
-      h("span", { class: "spotlight-crown-badge" }, icon("sparkles", "chip-svg"), " KEYNOTE SPOTLIGHT · BEST HARDWARE MATCH"),
-      h("span", { class: "badge fit-gpu" }, "100% GPU OFFLOAD · ~" + tps + " tok/s")
-    ),
-    h("div", { class: "spotlight-body" },
-      h("div", { class: "spotlight-info" },
-        h("div", { class: "spotlight-author" }, "Curated by " + author),
-        h("h2", { class: "spotlight-title" }, displayName),
-        h("p", { class: "spotlight-desc" },
-          "Optimized open weights ready for instantaneous local execution on your silicon with zero disk thrashing."
-        ),
-        h("div", { class: "spotlight-meter-wrap" },
-          h("div", { class: "spotlight-meter-labels" },
-            h("span", {}, "Memory Footprint: ", h("b", {}, sizeGb + " GB of " + totalGb + " GB (" + memPct + "%)")),
-            h("span", { class: "speed" }, "⚡ ~" + tps + " tok/s (Real-Time)")
-          ),
-          h("div", { class: "meter-track" },
-            h("div", { class: "meter-fill fill-gpu", style: "width: " + memPct + "%" })
-          )
-        ),
-        h("div", { class: "chips-row" },
-          hero.params_b ? h("span", { class: "chip-meta highlight" }, hero.params_b + "B Params") : null,
-          hero.quant ? h("span", { class: "chip-meta" }, hero.quant) : null,
-          hero.moe ? h("span", { class: "chip-meta moe-badge" }, "MoE") : null,
-          hero.arch ? h("span", { class: "chip-meta" }, hero.arch) : null,
-          h("span", { class: "chip-meta" }, sizeGb + " GB"),
-          ...renderClusterBadges(hero.clusters),
-          hero.downloads != null ? h("span", { class: "chip-meta" }, icon("download", "chip-svg"), " " + (hero.downloads || 0).toLocaleString()) : null
-        )
-      ),
-      h("div", { class: "spotlight-cta" },
-        isInstalled
-          ? h("button", { class: "btn small installed", disabled: true }, icon("check", "chip-svg"), " Installed")
-          : (hero.id ? h("button", { class: "btn spotlight-install-btn", onclick: () => install(hero) }, "Install & Launch") : null),
-        h("button", {
-          class: "btn small ghost",
-          style: "margin-top:6px;width:100%;font-size:12px;",
-          onclick: (e) => copyText(terminalCmd(hero), e.currentTarget, "Copied curl!")
-        }, icon("terminal", "chip-svg"), " Copy curl")
-      )
-    )
-  );
-  container.replaceChildren(card);
-}
+function openHub(repo) { window.open("https://huggingface.co/" + repo, "_blank", "noopener,noreferrer"); }
 
 function radarCard(m) {
   const author = (m.repo || "").split("/")[0] || "HF";
-  const repoName = (m.repo || "").split("/")[1] || m.repo || "";
-  const displayName = m.name || repoName;
-  const fitMode = m.fit_mode || "cpu";
-  const fitClass = fitMode === "gpu" ? "fit-gpu" : fitMode === "cpu" ? "fit-cpu" : "fit-tight";
-  const fitText = fitMode === "gpu" ? "Full GPU" : fitMode === "cpu" ? "CPU Hybrid" : "Tight Fit";
-  const fitLabel = fitText + (m.tps ? " · ~" + m.tps + " t/s" : "");
-
-  const totalMb = ((S.mode === "gpu" && S.vram_gb ? S.vram_gb : S.ram_gb) || 16) * 1024;
-  const sizeMb = m.size_mb || Math.round((m.size_bytes || 0) / 1048576);
-  const memPct = Math.min(Math.max(Math.round((sizeMb / totalMb) * 100), 2), 100);
-  const sizeGb = (sizeMb / 1024).toFixed(1);
-  const totalGb = Math.round(totalMb / 1024);
-
-  const tps = m.tps || 0;
-  const speedClass = tps >= 40 ? "speed-fast" : tps >= 15 ? "speed-med" : "speed-slow";
-
-  const isInstalled = S.installed && (
-    (typeof S.installed === "object" && (S.installed.repo === m.repo || S.installed.name === m.name)) ||
-    S.installed === m.name || S.installed === m.repo
-  );
-
-  const isExpanded = radarExpanded.has(m.repo);
-
-  const card = h("article", { class: "radar-card" + (isInstalled ? " is-installed" : "") },
-    h("header", { class: "radar-head" },
+  const name = m.name || (m.repo || "").split("/")[1] || m.repo || "";
+  const [fitCls, fitText] = FIT[m.fit_mode] || FIT.cpu;
+  const mem = memory(m);
+  const installed = isInstalled(m);
+  const open = radarExpanded.has(m.repo);
+  const cmds = m.commands || [];
+  return h("article", { class: "card m-card" },
+    h("div", { class: "m-head" },
       authorAvatar(author),
-      h("div", { class: "radar-title-group" },
-        h("div", { class: "radar-repo" }, displayName),
-        h("div", { class: "radar-subname" }, m.repo)
-      ),
-      h("span", { class: "badge " + fitClass }, fitLabel)
-    ),
+      h("div", { class: "m-title" }, h("b", {}, name), h("span", {}, m.repo)),
+      h("span", { class: "fit " + fitCls }, fitText)),
+    h("div", {},
+      h("div", { class: "meter-label" }, h("span", {}, "Memory: ", h("b", {}, mem.label)),
+        h("span", {}, m.tps ? "~" + m.tps + " tokens/s est." : "speed unknown")),
+      h("div", { class: "meter" }, h("i", { class: mem.over ? "over" : fitCls, style: "width:" + mem.width + "%" }))),
+    h("div", { class: "tags" }, modelTags(m)),
+    open ? h("dl", { class: "drawer" },
+      h("dt", {}, "Repository"), h("dd", {}, m.repo),
+      m.file ? [h("dt", {}, "File"), h("dd", {}, m.file)] : null,
+      h("dt", {}, "Quantization"), h("dd", {}, (m.quant || "unknown") + (m.other_quants ? " (" + m.other_quants + " other quants on the Hub)" : "")),
+      h("dt", {}, "Runs"), h("dd", {}, fitText.toLowerCase() + (m.tps ? ", about " + m.tps + " tokens/s (estimate from size and memory speed)" : "")),
+      cmds.length ? h("div", { class: "cmds" }, commandList(cmds)) : null) : null,
+    h("div", { class: "m-foot" },
+      h("div", { class: "left" },
+        cmds.length ? h("button", { class: "icon-btn", onclick: (e) => copyText(cmds[0].cmd, e.currentTarget) }, icon("terminal"), "Copy command") : null,
+        h("button", { class: "icon-btn", "aria-expanded": String(open), onclick: () => {
+          open ? radarExpanded.delete(m.repo) : radarExpanded.add(m.repo);
+          if (view === "v-history") renderHistoryTabContent(); else renderRadarList();     // cards live in both views
+        } },
+          icon(open ? "chevronUp" : "chevronDown"), open ? "Less" : "Details"),
+        h("button", { class: "icon-btn", title: "Open on Hugging Face", "aria-label": "Open " + m.repo + " on Hugging Face", onclick: () => openHub(m.repo) }, icon("external"), "Hub")),
+      installed ? h("span", { class: "btn small done" }, icon("check"), "Downloaded")
+        : m.id ? h("button", { class: "btn small", onclick: () => install(m) }, icon("download"), "Download") : null));
+}
 
-    h("div", { class: "card-meter" },
-      h("div", { class: "card-meter-labels" },
-        h("span", { class: "card-meter-title" },
-          "Memory Footprint: ",
-          h("b", {}, sizeGb + " GB of " + totalGb + " GB (" + memPct + "%)")
-        ),
-        h("span", { class: "card-meter-speed " + speedClass }, "⚡ ~" + tps + " tok/s")
-      ),
-      h("div", { class: "meter-track" },
-        h("div", {
-          class: "meter-fill fill-" + fitMode,
-          style: "width: " + memPct + "%"
-        })
-      )
-    ),
+function updateRadarHorizon(updatedAt) {
+  const gpuCount = radarModels.filter((m) => m.fit_mode === "gpu").length;
+  const maxTps = Math.max(0, ...radarModels.map((m) => m.tps || 0));
+  if (S.mode === "gpu" && S.gpu) {
+    $("#radar-hw-name").textContent = S.gpu + (S.vram_gb ? " · " + S.vram_gb + " GB" : "");
+    $("#radar-hw-sub").textContent = S.ram_gb + " GB memory";
+  } else {
+    $("#radar-hw-name").textContent = S.ram_gb + " GB memory";
+    $("#radar-hw-sub").textContent = S.gpu_unused ? "graphics card not usable by this llama.cpp" : "models run on the processor";
+  }
+  $("#radar-stat-scanned").textContent = radarModels.length;
+  $("#radar-stat-gpu").textContent = gpuCount;
+  $("#radar-stat-tps").textContent = maxTps ? "~" + maxTps + " t/s" : "–";
+  for (const t of radarTabEls) {
+    const c = Array.from(t.children || []).find((k) => k.getAttribute && k.getAttribute("data-count"));
+    if (c) c.textContent = String(c.getAttribute("data-count") === "gpu" ? gpuCount : radarModels.length);
+  }
+  $("#radar-updated").textContent = updatedAt ? "Synced " + updatedAt.slice(0, 10) : "";
+}
 
-    h("div", { class: "chips-row" },
-      m.params_b ? h("span", { class: "chip-meta highlight" }, m.params_b + "B Params") : null,
-      m.quant ? h("span", { class: "chip-meta" }, m.quant) : null,
-      m.moe ? h("span", { class: "chip-meta moe-badge" }, "MoE") : null,
-      m.arch ? h("span", { class: "chip-meta" }, m.arch) : null,
-      h("span", { class: "chip-meta" }, sizeGb + " GB"),
-      ...renderClusterBadges(m.clusters),
-      m.downloads != null ? h("span", { class: "chip-meta" }, icon("download", "chip-svg"), " " + (m.downloads || 0).toLocaleString()) : null,
-      m.likes != null ? h("span", { class: "chip-meta" }, icon("heart", "chip-svg"), " " + (m.likes || 0).toLocaleString()) : null,
-      m.created_at ? h("span", { class: "chip-meta" }, "Added " + m.created_at) : null
-    ),
+function renderSpotlight() {
+  const box = $("#radar-spotlight");
+  const filtered = radarTab !== "all" || radarArch !== "all" || radarCluster !== "all" || radarFilter.trim();
+  const hero = radarModels.find((m) => m.fit_mode === "gpu") || radarModels.find((m) => m.fit_mode === "cpu");
+  if (filtered || !hero) { box.hidden = true; return; }
+  box.hidden = false;
+  const [fitCls, fitText] = FIT[hero.fit_mode] || FIT.cpu;
+  const mem = memory(hero);
+  box.replaceChildren(h("div", { class: "card spotlight" },
+    h("p", { class: "eyebrow" }, hero.fit_mode === "gpu" ? "Popular, and fits your graphics card" : "Popular, and runs on this computer"),
+    h("div", { class: "m-head" },
+      h("div", { class: "m-title" }, h("h2", {}, hero.name || hero.repo), h("span", {}, hero.repo)),
+      h("span", { class: "fit " + fitCls }, fitText)),
+    h("div", { style: "margin-top:14px" },
+      h("div", { class: "meter-label" }, h("span", {}, "Memory: ", h("b", {}, mem.label)), h("span", {}, hero.tps ? "~" + hero.tps + " tokens/s est." : "")),
+      h("div", { class: "meter" }, h("i", { class: mem.over ? "over" : fitCls, style: "width:" + mem.width + "%" }))),
+    h("div", { class: "actions" },
+      isInstalled(hero) ? h("span", { class: "btn small done" }, icon("check"), "Downloaded")
+        : hero.id ? h("button", { class: "btn", onclick: () => install(hero) }, icon("download"), "Download") : null,
+      (hero.commands || []).length ? h("button", { class: "btn ghost", onclick: (e) => copyText(hero.commands[0].cmd, e.currentTarget) }, icon("terminal"), "Copy command") : null)));
+}
 
-    isExpanded ? h("div", { class: "radar-drawer" },
-      h("dl", {},
-        h("dt", {}, "Architecture:"), h("dd", {}, m.arch || "Standard Transformer"),
-        h("dt", {}, "Quantization:"), h("dd", {}, (m.quant || "Standard") + " (" + (m.other_quants || 0) + " other quants on Hub)"),
-        h("dt", {}, "Context KV Cache:"), h("dd", {}, "Configured for 4,096 tokens"),
-        h("dt", {}, "Execution Mode:"), h("dd", {}, fitMode === "gpu" ? "100% Full GPU (Zero CPU bottleneck)" : fitMode === "cpu" ? "CPU Memory Bandwidth" : "Memory Tight"),
-        h("dt", {}, "Hugging Face ID:"), h("dd", {}, m.repo),
-        h("dt", {}, "Direct Link:"), h("dd", {},
-          h("div", { class: "code-copy-row" },
-            h("span", { class: "inline-code" }, dlUrl(m)),
-            h("button", {
-              class: "btn small ghost",
-              onclick: (e) => copyText(dlUrl(m), e.currentTarget, "Copied!")
-            }, "Copy URL")
-          )
-        ),
-        h("dt", {}, "Terminal (curl):"), h("dd", {},
-          h("div", { class: "code-copy-row" },
-            h("span", { class: "inline-code" }, terminalCmd(m)),
-            h("button", {
-              class: "btn small ghost",
-              onclick: (e) => copyText(terminalCmd(m), e.currentTarget, "Copied!")
-            }, "Copy curl")
-          )
-        ),
-        h("dt", {}, "Launchpad CLI:"), h("dd", {},
-          h("div", { class: "code-copy-row" },
-            h("span", { class: "inline-code" }, cliCmd(m)),
-            h("button", {
-              class: "btn small ghost",
-              onclick: (e) => copyText(cliCmd(m), e.currentTarget, "Copied!")
-            }, "Copy CLI")
-          )
-        )
-      )
-    ) : null,
-
-    h("footer", { class: "radar-foot" },
-      h("div", { class: "radar-foot-actions" },
-        h("button", {
-          class: "radar-icon-btn",
-          title: "Copy terminal curl download command",
-          onclick: (e) => copyText(terminalCmd(m), e.currentTarget, "Copied curl!")
-        }, icon("terminal", "chip-svg"), " Copy curl"),
-
-        h("button", {
-          class: "radar-icon-btn",
-          title: "Copy model repository ID",
-          onclick: (e) => copyText(m.repo, e.currentTarget, "Copied ID!")
-        }, icon("copy", "chip-svg"), " Copy ID"),
-
-        h("button", {
-          class: "radar-icon-btn",
-          title: "View technical specifications & terminal links",
-          onclick: () => toggleDrawer(m.repo)
-        }, icon(isExpanded ? "chevronUp" : "chevronDown", "chip-svg"), isExpanded ? " Less" : " Specs & CLI"),
-
-        h("button", {
-          class: "radar-icon-btn",
-          title: "Open on Hugging Face Hub",
-          onclick: () => window.open("https://huggingface.co/" + m.repo, "_blank", "noopener,noreferrer")
-        }, icon("external", "chip-svg"), " Hub")
-      ),
-
-      isInstalled
-        ? h("button", { class: "btn small installed", disabled: true }, icon("check", "chip-svg"), " Installed")
-        : (m.id ? h("button", { class: "btn small", onclick: () => install(m) }, "Install") : null)
-    )
-  );
-  return card;
+function filteredRadar() {
+  let ms = radarModels.slice();
+  if (radarTab === "gpu") ms = ms.filter((m) => m.fit_mode === "gpu");
+  else if (radarTab === "fast") ms = ms.filter((m) => (m.tps || 0) >= 30);
+  if (radarArch === "moe") ms = ms.filter((m) => m.moe || /moe|8x|a3b|a2b/i.test((m.repo || "") + " " + (m.name || "")));
+  else if (radarArch !== "all") ms = ms.filter((m) => [m.repo, m.name, m.arch].some((s) => (s || "").toLowerCase().includes(radarArch)));
+  if (radarCluster !== "all") ms = ms.filter((m) => (m.clusters || []).includes(radarCluster));
+  const q = radarFilter.trim().toLowerCase();
+  if (q) ms = ms.filter((m) => [m.repo, m.arch, m.quant, m.name].some((s) => (s || "").toLowerCase().includes(q)));
+  const val = { speed: (m) => m.tps || 0, size: (m) => m.size_mb || (m.size_bytes || 0) / 1048576, name: (m) => (m.repo || "").toLowerCase(),
+    downloads: (m) => (m.downloads || 0) + (m.likes || 0) * 10 }[radarSortKey];
+  ms.sort((a, b) => { const x = val(a), y = val(b); return x < y ? (radarSortAsc ? -1 : 1) : x > y ? (radarSortAsc ? 1 : -1) : 0; });
+  if (radarTab === "new" && radarSortKey === "downloads") ms.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+  return ms;
 }
 
 function renderRadarList() {
-  const list = $("#radar-list");
-  let ms = radarModels.slice();
-
-  // Tab filter
-  if (radarTab === "gpu" || radarGpuOnly) {
-    ms = ms.filter((m) => m.fit_mode === "gpu");
-  } else if (radarTab === "fast") {
-    ms = ms.filter((m) => (m.tps || 0) >= 30);
-  }
-
-  // Family / arch filter
-  if (radarArch !== "all") {
-    if (radarArch === "moe") {
-      ms = ms.filter((m) => m.moe || /moe|8x|a3b|a2b/i.test(m.repo || "") || /moe|8x|a3b|a2b/i.test(m.name || ""));
-    } else {
-      const re = new RegExp(radarArch, "i");
-      ms = ms.filter((m) => re.test(m.repo || "") || re.test(m.name || "") || re.test(m.arch || ""));
-    }
-  }
-
-  // Cluster filter
-  if (radarCluster !== "all") {
-    ms = ms.filter((m) => (m.clusters || []).includes(radarCluster));
-  }
-
-  // Free text search
-  if (radarFilter.trim()) {
-    const q = radarFilter.trim().toLowerCase();
-    ms = ms.filter((m) =>
-      (m.repo || "").toLowerCase().includes(q) ||
-      (m.arch || "").toLowerCase().includes(q) ||
-      (m.quant || "").toLowerCase().includes(q) ||
-      (m.name || "").toLowerCase().includes(q)
-    );
-  }
-
-  // Sorting
-  ms.sort((a, b) => {
-    let va, vb;
-    if (radarSortKey === "speed") {
-      va = a.tps || 0; vb = b.tps || 0;
-    } else if (radarSortKey === "size") {
-      va = a.size_mb || 0; vb = b.size_mb || 0;
-    } else if (radarSortKey === "name") {
-      va = (a.repo || "").toLowerCase(); vb = (b.repo || "").toLowerCase();
-    } else {
-      va = (a.downloads || 0) + (a.likes || 0) * 10;
-      vb = (b.downloads || 0) + (b.likes || 0) * 10;
-    }
-    if (va < vb) return radarSortAsc ? -1 : 1;
-    if (va > vb) return radarSortAsc ? 1 : -1;
-    return 0;
-  });
-
-  if (radarTab === "new" && radarSortKey === "downloads") {
-    ms.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
-  }
-
-  if (!ms.length) {
-    const emptyBox = h("div", { class: "radar-empty" },
-      icon("radar", "radar-empty-icon"),
-      h("h3", {}, "No matching models found"),
-      h("p", {}, radarFilter.trim()
-        ? "No models matching \"" + radarFilter + "\". Try searching by architecture or clearing filters."
-        : "No models match the selected filter criteria."
-      ),
-      h("button", { class: "btn small ghost", onclick: resetRadarFilters }, "Reset All Filters")
-    );
-    list.replaceChildren(emptyBox);
-    return;
-  }
-  list.replaceChildren(...ms.map(radarCard));
+  const box = $("#radar-list");
+  const ms = filteredRadar();
+  if (ms.length) { box.replaceChildren(h("div", { class: "grid" }, ms.map(radarCard))); return; }
+  const nothing = !radarModels.length;
+  box.replaceChildren(h("div", { class: "empty" }, icon("radar"),
+    h("h3", {}, nothing ? "Nothing on the radar yet" : "No models match"),
+    h("p", {}, nothing ? (radarOffline ? "Hugging Face could not be reached, and there is no saved scan yet." : "Press Sync now to fetch the latest models from Hugging Face.")
+      : radarFilter.trim() ? "Nothing matches “" + radarFilter.trim() + "” with these filters." : "Nothing matches these filters."),
+    nothing ? h("button", { class: "btn small", onclick: () => loadRadar(true) }, icon("refresh"), "Sync now")
+      : h("button", { class: "btn small ghost", onclick: resetRadarFilters }, "Clear filters")));
 }
+
+function refreshRadar() { renderSpotlight(); renderRadarList(); }
+
+function updateSortButtons() {
+  for (const k of ["downloads", "speed", "size", "name"]) $("#sort-" + k).setAttribute("aria-pressed", String(k === radarSortKey));
+  const text = radarSortKey === "name" ? (radarSortAsc ? "A to Z" : "Z to A") : radarSortAsc ? "Low to high" : "High to low";
+  $("#sort-dir-text").textContent = text;
+  $("#sort-dir").setAttribute("aria-label", "Sort direction: " + text);
+}
+function handleSort(key) {
+  if (radarSortKey === key) radarSortAsc = !radarSortAsc;
+  else { radarSortKey = key; radarSortAsc = key === "name" || key === "size"; }
+  updateSortButtons(); renderRadarList();
+}
+for (const k of ["downloads", "speed", "size", "name"]) $("#sort-" + k).onclick = () => handleSort(k);
+$("#sort-dir").onclick = () => { radarSortAsc = !radarSortAsc; updateSortButtons(); renderRadarList(); };
+
+const searchInput = $("#radar-search"), searchClear = $("#radar-search-clear");
+function setFilter(text) { radarFilter = text; searchInput.value = text; searchClear.hidden = !text; refreshRadar(); }
+searchInput.oninput = (e) => setFilter(e.target.value || "");
+searchClear.onclick = () => { setFilter(""); searchInput.focus(); };
 
 function resetRadarFilters() {
-  radarFilter = "";
-  radarTab = "all";
-  radarArch = "all";
-  radarCluster = "all";
-  radarGpuOnly = false;
-  if (searchInput) searchInput.value = "";
-  const clearBtn = $("#radar-search-clear");
-  if (clearBtn) clearBtn.hidden = true;
-  document.querySelectorAll("#radar-tabs .seg-btn").forEach((b) => {
-    b.classList.toggle("active", b.getAttribute("data-tab") === "all");
-  });
-  document.querySelectorAll("#radar-arch-pills .arch-pill").forEach((b) => {
-    b.classList.toggle("active", b.getAttribute("data-arch") === "all");
-  });
-  document.querySelectorAll("#radar-cluster-pills .cluster-pill").forEach((b) => {
-    b.classList.toggle("active", b.getAttribute("data-cluster") === "all");
-  });
-  renderSpotlight();
-  renderRadarList();
+  radarTab = radarArch = radarCluster = "all";
+  setSelected(radarTabEls, "aria-selected", "all", "data-tab");
+  setSelected(archEls, "aria-pressed", "all", "data-value");
+  setSelected(clusterEls, "aria-pressed", "all", "data-value");
+  setFilter("");
 }
+
+window.addEventListener("keydown", (e) => {
+  if (view !== "v-radar") return;
+  const typing = document.activeElement && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
+  if (!typing && (e.key === "/" || ((e.metaKey || e.ctrlKey) && (e.key || "").toLowerCase() === "k"))) {
+    e.preventDefault(); searchInput.focus(); searchInput.select();
+  } else if (e.key === "Escape" && document.activeElement === searchInput) {
+    setFilter(""); searchInput.blur();
+  }
+});
 
 async function loadRadar(sync = false) {
-  const list = $("#radar-list");
-  const syncBtn = $("#radar-sync-btn");
-  if (sync && syncBtn) syncBtn.classList.add("syncing");
-
-  const scanner = h("div", { class: "radar-scanner-wrap" },
-    h("div", { class: "radar-dish" },
-      h("div", { class: "radar-dish-sweep" }),
-      icon("radar", "nav-svg")
-    ),
-    h("div", { class: "radar-scanner-title" }, sync ? "Synchronizing Hugging Face Radar..." : "Scanning Hugging Face Radar..."),
-    h("div", { class: "radar-scanner-sub" }, "Benchmarking open weights against your silicon memory bandwidth...")
-  );
-  list.replaceChildren(scanner);
-
+  const box = $("#radar-list"), btn = $("#radar-sync-btn");
+  btn.disabled = true;
+  if (sync) btn.classList.add("syncing");
+  box.replaceChildren(h("div", { class: "empty" }, h("div", { class: "spin", style: "margin:0 auto 14px" }),
+    h("h3", {}, sync ? "Syncing with Hugging Face…" : "Loading the radar…"),
+    h("p", {}, sync ? "Looking up trending and new models and checking each against this computer. This can take a minute." : "")));
   try {
-    const q = sync ? "1" : "0";
-    const d = await api("/api/radar?sync=" + q);
+    const d = await api("/api/radar?sync=" + (sync ? "1" : "0"));
     if (d.error) throw new Error(d.error);
     radarModels = d.models || [];
+    radarOffline = !!d.offline;
+    $("#radar-notice").replaceChildren(...(radarOffline ? [h("div", { class: "notice warn" }, icon("alert"), h("div", { class: "notice-body" },
+      h("b", {}, "Could not reach Hugging Face. "),
+      d.updated_at ? "Showing the saved results from " + d.updated_at.slice(0, 10) + "." : "There are no saved results yet."))] : []));
     updateRadarHorizon(d.updated_at);
-    renderSpotlight();
-    renderRadarList();
+    refreshRadar();
   } catch (e) {
-    list.replaceChildren(h("p", { class: "warn" }, "Could not load radar: " + e.message));
+    box.replaceChildren(h("div", { class: "notice warn" }, icon("alert"), h("div", {}, "Could not load the radar: " + e.message)));
   } finally {
-    if (syncBtn) syncBtn.classList.remove("syncing");
+    btn.disabled = false;
+    btn.classList.remove("syncing");
   }
 }
+function openRadar() { show("v-radar"); return loadRadar(); }
+$("#radar-sync-btn").onclick = () => loadRadar(true);
+$("#radar-back").onclick = () => navigate("");
+$("#radar-open-history-btn").onclick = () => navigate("#history");
+$("#search-kbd").textContent = "/";
 
-$("#radar-btn").onclick = () => { show("v-radar"); loadRadar(); };
-$("#radar-toggle-gpu").onclick = () => {
-  radarGpuOnly = !radarGpuOnly;
-  radarTab = radarGpuOnly ? "gpu" : "all";
-  document.querySelectorAll("#radar-tabs .seg-btn").forEach((b) => {
-    b.classList.toggle("active", b.getAttribute("data-tab") === radarTab);
-  });
-  renderSpotlight();
-  renderRadarList();
-};
+// --- What changed between syncs ------------------------------------------------------------------------------
+const HISTORY_TABS = [["new", "New", "sparkles"], ["movers", "Gaining", "trendUp"], ["depart", "Dropped off", "trendDown"], ["snapshots", "Saved syncs", "archive"]];
+const historyTabEls = selectable(HISTORY_TABS, historyTab, (id) => { historyTab = id; renderHistoryTabContent(); }, "tab");
+$("#history-tabs").replaceChildren(...historyTabEls);
 
-const syncBtn = $("#radar-sync-btn");
-if (syncBtn) {
-  syncBtn.onclick = () => loadRadar(true);
-}
-
-document.querySelectorAll("#radar-tabs .seg-btn").forEach((btn) => {
-  btn.onclick = () => {
-    document.querySelectorAll("#radar-tabs .seg-btn").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    radarTab = btn.getAttribute("data-tab") || "all";
-    radarGpuOnly = radarTab === "gpu";
-    renderSpotlight();
-    renderRadarList();
-  };
-});
-
-document.querySelectorAll("#radar-arch-pills .arch-pill").forEach((btn) => {
-  btn.onclick = () => {
-    document.querySelectorAll("#radar-arch-pills .arch-pill").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    radarArch = btn.getAttribute("data-arch") || "all";
-    renderSpotlight();
-    renderRadarList();
-  };
-});
-
-document.querySelectorAll("#radar-cluster-pills .cluster-pill").forEach((btn) => {
-  btn.onclick = () => {
-    document.querySelectorAll("#radar-cluster-pills .cluster-pill").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    radarCluster = btn.getAttribute("data-cluster") || "all";
-    renderSpotlight();
-    renderRadarList();
-  };
-});
-
-$("#sort-downloads").onclick = () => handleSort("downloads");
-$("#sort-speed").onclick = () => handleSort("speed");
-$("#sort-size").onclick = () => handleSort("size");
-$("#sort-name").onclick = () => handleSort("name");
-$("#sort-dir").onclick = () => {
-  radarSortAsc = !radarSortAsc;
-  updateSortButtons();
-  renderRadarList();
-};
-
-const searchInput = $("#radar-search");
-const searchClear = $("#radar-search-clear");
-if (searchInput) {
-  searchInput.oninput = (e) => {
-    radarFilter = e.target.value || "";
-    if (searchClear) searchClear.hidden = !radarFilter;
-    renderRadarList();
-    renderSpotlight();
-  };
-}
-if (searchClear) {
-  searchClear.onclick = () => {
-    if (searchInput) searchInput.value = "";
-    radarFilter = "";
-    searchClear.hidden = true;
-    renderRadarList();
-    renderSpotlight();
-    if (searchInput) searchInput.focus();
-  };
-}
-
-if (typeof window !== "undefined" && window.addEventListener) {
-  window.addEventListener("keydown", (e) => {
-    const radarView = $("#v-radar");
-    if (!radarView || radarView.hidden) return;
-    if ((e.key === "/" || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k"))) {
-      const active = document.activeElement;
-      if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
-      e.preventDefault();
-      if (searchInput) {
-        searchInput.focus();
-        searchInput.select();
-      }
-    } else if (e.key === "Escape" && document.activeElement === searchInput) {
-      if (searchInput) searchInput.value = "";
-      radarFilter = "";
-      if (searchClear) searchClear.hidden = true;
-      if (searchInput) searchInput.blur();
-      renderSpotlight();
-      renderRadarList();
-    }
-  });
-}
-
-$("#radar-back").onclick = async () => {
-  let j = { state: "idle" };
-  try { j = await api("/api/progress"); } catch (e) {}
-  if (jobLive && ["downloading", "testing", "done", "error"].includes(j.state)) { view = ""; watch(); } else renderUse();
-};
-
-// --- History Page ("What Changed Since Last Sync") ---
 async function loadHistory(baseSnap = "") {
-  const content = $("#history-content");
-  if (!content) return;
-  content.replaceChildren(h("div", { class: "spin" }));
+  const box = $("#history-content");
+  box.replaceChildren(h("div", { class: "spin", "aria-label": "Loading" }));
   try {
-    const url = "/api/radar/history" + (baseSnap ? "?base=" + encodeURIComponent(baseSnap) : "");
-    const d = await api(url);
+    const d = await api("/api/radar/history" + (baseSnap ? "?base=" + encodeURIComponent(baseSnap) : ""));
     if (d.error) throw new Error(d.error);
     historyData = d;
     renderHistoryView(baseSnap);
   } catch (e) {
-    content.replaceChildren(h("p", { class: "warn" }, "Could not load history: " + e.message));
+    box.replaceChildren(h("div", { class: "notice warn" }, icon("alert"), h("div", {}, "Could not load the history: " + e.message)));
   }
 }
+function openHistory() { show("v-history"); return loadHistory(); }
 
 function renderHistoryView(selectedBase = "") {
-  if (!historyData) return;
-  const d = historyData;
-  const sm = d.summary || {};
-
-  const currVal = $("#hist-curr-val");
-  const currSub = $("#hist-curr-sub");
-  const prevSub = $("#hist-prev-sub");
-  const baseSelect = $("#hist-base-select");
-
-  if (currVal) currVal.textContent = d.latest_sync ? d.latest_sync.replace("T", " ").slice(0, 19) + " UTC" : "Current";
-  if (currSub) currSub.textContent = (sm.total_current || 0) + " frontier models tracked";
-  if (prevSub) prevSub.textContent = d.previous_sync ? "Baseline from " + d.previous_sync.slice(0, 10) + " (" + (sm.total_previous || 0) + " models)" : "No prior baseline recorded";
-
-  if (baseSelect) {
-    const opts = [h("option", { value: "" }, "Previous Sync (Auto)")];
-    (d.snapshots || []).forEach((s) => {
-      const optProps = { value: s.date };
-      if (s.date === selectedBase) optProps.selected = "selected";
-      opts.push(h("option", optProps, s.date + " (" + (s.count || 0) + " models)"));
-    });
-    baseSelect.replaceChildren(...opts);
-    baseSelect.onchange = (e) => loadHistory(e.target.value);
-  }
-
-  const statNew = $("#hist-stat-new");
-  const statSurge = $("#hist-stat-surge");
-  const statGpu = $("#hist-stat-gpu");
-  const statDepart = $("#hist-stat-depart");
-
-  if (statNew) statNew.textContent = "+" + (sm.new_count || 0);
-  const topGain = (d.top_movers && d.top_movers[0] && d.top_movers[0].delta_downloads) || 0;
-  if (statSurge) statSurge.textContent = topGain > 0 ? "+" + (topGain >= 1000 ? (topGain / 1000).toFixed(1) + "k" : topGain) : "—";
-  if (statGpu) statGpu.textContent = sm.gpu_ready_new || 0;
-  if (statDepart) statDepart.textContent = sm.removed_count || 0;
-
-  const cNew = $("#hist-count-new");
-  const cMovers = $("#hist-count-movers");
-  const cDepart = $("#hist-count-depart");
-
-  if (cNew) cNew.textContent = (d.new_models || []).length;
-  if (cMovers) cMovers.textContent = (d.top_movers || []).length;
-  if (cDepart) cDepart.textContent = (d.removed_models || []).length;
-
+  const d = historyData, sm = d.summary || {};
+  $("#hist-curr-val").textContent = d.latest_sync ? d.latest_sync.replace("T", " ").slice(0, 16) + " UTC" : "No sync yet";
+  $("#hist-curr-sub").textContent = (sm.total_current || 0) + " models";
+  $("#hist-prev-sub").textContent = d.previous_sync ? d.previous_sync.slice(0, 10) + " · " + (sm.total_previous || 0) + " models" : "Nothing to compare with yet: sync on another day";
+  const sel = $("#hist-base-select");
+  sel.replaceChildren(h("option", { value: "" }, "The sync before it"),
+    ...(d.snapshots || []).map((s) => h("option", { value: s.date, selected: s.date === selectedBase ? "selected" : null }, s.date + " (" + (s.count || 0) + " models)")));
+  sel.onchange = (e) => loadHistory(e.target.value);
+  const gain = (d.top_movers && d.top_movers[0] && d.top_movers[0].delta_downloads) || 0;
+  $("#hist-stat-new").textContent = "+" + (sm.new_count || 0);
+  $("#hist-stat-surge").textContent = gain > 0 ? "+" + (gain >= 1000 ? (gain / 1000).toFixed(1) + "k" : gain) : "–";
+  $("#hist-stat-gpu").textContent = sm.gpu_ready_new || 0;
+  $("#hist-stat-depart").textContent = sm.removed_count || 0;
   renderHistoryTabContent();
 }
 
-function renderHistoryTabContent() {
-  const content = $("#history-content");
-  if (!content || !historyData) return;
-  const d = historyData;
+function emptyBox(title, text) { return h("div", { class: "empty" }, icon("radar"), h("h3", {}, title), h("p", {}, text)); }
+function withBadge(card, badge) { card.prepend(h("div", {}, badge)); return card; }
 
+function renderHistoryTabContent() {
+  const box = $("#history-content"), d = historyData;
+  if (!d) return;
   if (historyTab === "new") {
-    const list = d.new_models || [];
-    if (!list.length) {
-      content.replaceChildren(h("div", { class: "history-empty" },
-        h("h3", {}, "No New Models in this Window"),
-        h("p", { class: "sub" }, "All models in the current scan were already present in the selected baseline snapshot.")
-      ));
-      return;
-    }
-    const cards = list.map((m) => {
-      const card = radarCard(m);
-      const head = card.querySelector(".radar-head");
-      if (head) {
-        head.prepend(h("div", { style: "width:100%;margin-bottom:8px" },
-          h("span", { class: "delta-new-badge" }, icon("sparkles", "chip-svg"), " NEW ON FRONTIER")
-        ));
-      }
-      return card;
-    });
-    content.replaceChildren(...cards);
+    const ms = d.new_models || [];
+    box.replaceChildren(ms.length ? h("div", { class: "grid" }, ms.map((m) => withBadge(radarCard(m), h("span", { class: "delta new" }, icon("sparkles"), "New since the last sync"))))
+      : emptyBox("No new models", "Every model in the latest sync was already in the one it is compared with."));
   } else if (historyTab === "movers") {
-    const list = d.top_movers || [];
-    if (!list.length) {
-      content.replaceChildren(h("div", { class: "history-empty" },
-        h("h3", {}, "No Velocity Movers Found"),
-        h("p", { class: "sub" }, "No models were tracked across both the baseline and current scan to measure download velocity.")
-      ));
-      return;
-    }
-    const cards = list.map((m) => {
-      const card = radarCard(m);
-      const head = card.querySelector(".radar-head");
-      if (head) {
-        const gain = m.delta_downloads || 0;
-        const gainStr = gain >= 0 ? "+" + gain.toLocaleString() : gain.toLocaleString();
-        head.prepend(h("div", { style: "width:100%;margin-bottom:8px;display:flex;gap:8px;align-items:center" },
-          h("span", { class: "delta-surge-badge" }, "📈 " + gainStr + " downloads"),
-          m.delta_likes ? h("span", { class: "chip-meta" }, "❤️ +" + m.delta_likes.toLocaleString() + " likes") : null
-        ));
-      }
-      return card;
-    });
-    content.replaceChildren(...cards);
+    const ms = d.top_movers || [];
+    box.replaceChildren(ms.length ? h("div", { class: "grid" }, ms.map((m) => {
+      const g = m.delta_downloads || 0;
+      return withBadge(radarCard(m), h("span", { class: "delta up" }, icon("trendUp"), (g >= 0 ? "+" : "") + g.toLocaleString() + " downloads"));
+    })) : emptyBox("Nothing to compare yet", "Download gains need the same model in two syncs."));
   } else if (historyTab === "depart") {
-    const list = d.removed_models || [];
-    if (!list.length) {
-      content.replaceChildren(h("div", { class: "history-empty" },
-        h("h3", {}, "Zero Departures"),
-        h("p", { class: "sub" }, "None of the models from the previous scan dropped below the trending radar horizon.")
-      ));
-      return;
-    }
-    const rows = list.map((m) => {
-      const author = (m.repo || "").split("/")[0] || "HF";
-      return h("div", { class: "history-snapshot-row" },
-        h("div", { style: "display:flex;align-items:center;gap:12px;" },
-          authorAvatar(author),
-          h("div", {},
-            h("div", { class: "radar-repo" }, m.name || m.repo),
-            h("div", { class: "radar-subname" }, m.repo + " · " + (m.quant || "GGUF") + " · " + ((m.downloads || 0).toLocaleString()) + " dl")
-          )
-        ),
-        h("div", { style: "display:flex;gap:8px;align-items:center;" },
-          h("span", { class: "badge fit-tight" }, "Cooled Off"),
-          h("button", {
-            class: "btn small ghost",
-            onclick: () => window.open("https://huggingface.co/" + m.repo, "_blank", "noopener,noreferrer")
-          }, icon("external", "chip-svg"), " View on Hub")
-        )
-      );
-    });
-    content.replaceChildren(...rows);
-  } else if (historyTab === "snapshots") {
+    const ms = d.removed_models || [];
+    box.replaceChildren(ms.length ? h("div", { class: "stack" }, ms.map((m) => h("div", { class: "card snap-row" },
+      h("div", { class: "m-head", style: "flex:1;min-width:0" }, authorAvatar((m.repo || "").split("/")[0]),
+        h("div", { class: "m-title" }, h("b", {}, m.name || m.repo), h("span", {}, m.repo + " · " + (m.quant || "GGUF") + " · " + (m.downloads || 0).toLocaleString() + " downloads"))),
+      h("button", { class: "btn small ghost", onclick: () => openHub(m.repo) }, icon("external"), "Hugging Face"))))
+      : emptyBox("Nothing dropped off", "Every model from the earlier sync is still on the radar."));
+  } else {
     const snaps = d.snapshots || [];
-    if (!snaps.length) {
-      content.replaceChildren(h("div", { class: "history-empty" },
-        h("h3", {}, "No Historical Snapshots"),
-        h("p", { class: "sub" }, "Run sync to archive daily snapshots in data/hf_history/snapshots/.")
-      ));
-      return;
-    }
-    const rows = snaps.map((s) => {
-      return h("div", { class: "history-snapshot-row" },
-        h("div", { class: "history-snap-meta" },
-          h("div", { class: "history-snap-date" }, "Snapshot " + s.date),
-          h("div", { class: "history-snap-sub" }, (s.count || 0) + " models recorded · " + (s.updated_at ? s.updated_at.slice(0, 19).replace("T", " ") + " UTC" : ""))
-        ),
-        h("button", {
-          class: "btn small ghost",
-          onclick: () => {
-            const sel = $("#hist-base-select");
-            if (sel) sel.value = s.date;
-            loadHistory(s.date);
-          }
-        }, "Compare with this")
-      );
-    });
-    content.replaceChildren(...rows);
+    box.replaceChildren(snaps.length ? h("div", { class: "stack" }, snaps.map((s) => h("div", { class: "card snap-row" },
+      h("div", {}, h("b", {}, s.date), h("div", { class: "muted" }, (s.count || 0) + " models" + (s.updated_at ? " · " + s.updated_at.slice(11, 16) + " UTC" : ""))),
+      h("button", { class: "btn small ghost", onclick: () => { $("#hist-base-select").value = s.date; loadHistory(s.date); } }, "Compare with this"))))
+      : emptyBox("No saved syncs", "Each sync is saved in data/hf_history/snapshots/. Sync on the radar to start one."));
   }
 }
+$("#history-back").onclick = () => navigate("#radar");
 
-document.querySelectorAll("#history-tabs .seg-btn").forEach((btn) => {
-  btn.onclick = () => {
-    document.querySelectorAll("#history-tabs .seg-btn").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    historyTab = btn.getAttribute("data-tab") || "new";
-    renderHistoryTabContent();
-  };
-});
-
-const histNavBtn = $("#history-btn");
-if (histNavBtn) {
-  histNavBtn.onclick = () => { show("v-history"); loadHistory(); };
-}
-
-const openHistBtn = $("#radar-open-history-btn");
-if (openHistBtn) {
-  openHistBtn.onclick = () => { show("v-history"); loadHistory(); };
-}
-
-const histBackBtn = $("#history-back");
-if (histBackBtn) {
-  histBackBtn.onclick = () => { show("v-radar"); loadRadar(); };
-}
-
+// --- Wiring and start-up ---------------------------------------------------------------------------------------
 $("#back").onclick = renderUse;
 $("#more-btn").onclick = () => more(false);
 $("#again").onclick = renderUse;
-$("#retry").onclick = () => (lastId ? install({ id: lastId }) : renderUse());
-$("#copy").onclick = async () => {
-  try { await navigator.clipboard.writeText(S.serve_cmd); $("#copy").textContent = "Copied"; } catch (e) { $("#copy").textContent = "Select and copy"; }
-  setTimeout(() => ($("#copy").textContent = "Copy"), 1800);
-};
+$("#retry").onclick = () => (lastId ? install({ id: lastId, commands: activeModel && activeModel.commands }) : renderUse());
+
+function renderMachine() {
+  const gpu = S.gpu && S.mode === "gpu" ? S.gpu + (S.vram_gb ? ", " + S.vram_gb + " GB" : "") : "";
+  const summary = S.ram_gb + " GB memory" + (gpu ? " · " + gpu : " · no graphics card used");
+  $("#use-sub").textContent = "We'll pick the model that runs best on this computer (" + summary + ").";
+}
+
+function renderWarn() {
+  const warn = $("#warn");
+  warn.replaceChildren();
+  if (!S.llama_server) {
+    const li = S.llama_install || {};
+    warn.append(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" },
+      h("b", {}, "llama.cpp is not installed yet. "), "You can download models now; running them and the speed test need llama.cpp. ",
+      li.install_cmd ? ["Install it with:", cmdRow(li.install_cmd)] : li.install)));
+  } else if (S.gpu_unused) {
+    warn.append(h("div", { class: "notice info", role: "status" }, icon("info"), h("div", { class: "notice-body" },
+      "This llama.cpp build cannot use your graphics card, so models will run on the processor.")));
+  }
+}
 
 (async function init() {
   try { S = await api("/api/state"); } catch (e) { return fail(UNREACHABLE); }
-  const gpu = S.gpu && S.mode === "gpu" ? S.gpu + ", " + S.vram_gb + " GB" : "";
-  const chip = $("#hw"); chip.hidden = false;
-  chip.textContent = S.ram_gb + " GB memory" + (gpu ? " · " + gpu : " · no graphics card used");
-  const warn = $("#warn");
-  if (!S.llama_server) warn.append(h("p", { class: "warn" }, "llama.cpp isn't installed yet, so the speed test will be skipped. See step 1 in the README."));
-  else if (S.gpu_unused) warn.append(h("p", { class: "warn" }, "Your llama.cpp build can't use your graphics card, so models will run on the processor."));
-  renderUse();
-  if (location.hash === "#tools") $("#tools-btn").click();
-  if (location.hash === "#radar") $("#radar-btn").click();
-  if (location.hash === "#history") $("#history-btn").click();
+  renderMachine();
+  renderWarn();
+  if (NAV[location.hash || ""] && location.hash) await route();
+  else { markNav(""); renderUse(); }          // one progress request below, not two: a lost one must not hide a download
   let j = { state: "idle" };
   try { j = await api("/api/progress"); } catch (e) {}
   if (j.state === "downloading" || j.state === "testing") watch();
+  booted = true;
 })();
 </script>
 </body>

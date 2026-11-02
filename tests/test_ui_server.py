@@ -3,6 +3,7 @@ a fake Hugging Face, a fake downloader. No network, GPU or llama.cpp needed.
 Run: python3 -m unittest discover -s tests -v
 """
 import http.client
+import io
 import json
 import re
 import shutil
@@ -36,6 +37,7 @@ class UiBase(tms.Base):
             p.start()
             self.addCleanup(p.stop)
         self.app = ui_server.App(ms)
+        self.app.probe = FakeProbe("Linux")     # rule 2: commands and hints must not depend on the host
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), ui_server.make_handler(self.app))
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -113,8 +115,24 @@ class TestPage(UiBase):
         text = ui_server.PAGE.read_text(encoding="utf-8")
         for needle in ('id="v-tools"', 'id="tools-btn"', 'id="tools-list"', 'id="tools-recheck"', "/api/tools"):
             self.assertIn(needle, text)
-        self.assertIn('location.hash === "#tools"', text, "the view can be opened by link: /#tools")
         self.assertNotIn("innerHTML", text, "text from the server is only ever inserted as text")
+        # Opening /#tools by link is a behaviour: tests/page_harness.js checks it ("the /#tools link opens ...").
+
+    def test_page_draws_its_symbols_instead_of_relying_on_emoji_fonts(self):
+        """Regression: tabs and badges used emoji (🔥 ⚡ 💻 ...). Linux machines without a colour-emoji font show
+        empty boxes, and Windows/macOS draw them in different styles. The page uses its own SVG icons instead."""
+        text = ui_server.PAGE.read_text(encoding="utf-8")
+        emoji = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿️]")
+        found = sorted({(text[:m.start()].count("\n") + 1, m.group()) for m in emoji.finditer(text)})
+        self.assertEqual(found[:10], [], f"{len(found)} emoji in the page (line, char)")
+
+    def test_every_view_has_a_heading_that_can_take_focus(self):
+        """Moving focus to the heading tells screen readers that the view changed (checked in the page harness)."""
+        text = ui_server.PAGE.read_text(encoding="utf-8")
+        views = re.findall(r'<section class="view" id="v-([a-z]+)"', text)
+        self.assertGreaterEqual(len(views), 8)
+        for v in views:
+            self.assertTrue(re.search(rf'<h1 id="{v}-title"[^>]*\btabindex="-1"', text), f"v-{v} has no focusable <h1 id={v}-title>")
 
     def test_unknown_paths_are_404_and_there_is_no_file_serving(self):
         for path in ("/etc/passwd", "/../README.md", "/utils/model_setup.py", "/ui/setup/index.html"):
@@ -468,26 +486,184 @@ class TestInstall(UiBase):
         self.assertEqual(self.wait_for("done")["bench"], "skipped")
 
 
+WIN_CURL = {"curl": r"C:\Windows\System32\curl.exe"}
+
+
+class TestOsAwareHelp(UiBase):
+    """Every command the page shows is built here, for the OS the server runs on, and only from programs that were
+    found (rule 3). Regressions: Linux was told `brew install llama.cpp`; Windows got `python3 ...` (usually the
+    Microsoft Store stub) and `curl` (an Invoke-WebRequest alias in Windows PowerShell 5, which rejects -L -C)."""
+
+    def use(self, system, path=None):
+        self.app.probe = FakeProbe(system, path=path or {})
+
+    def install_hint(self, system, path=None):
+        self.use(system, path)
+        return self.get_json("/api/tools?tool=llama-cpp")["tools"][0]["hint"]
+
+    def test_llama_cpp_install_hint_fits_the_os_and_needs_its_package_manager(self):
+        cases = [
+            ("Windows", {"winget": r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\winget.exe"}, "winget install ggml.llamacpp"),
+            ("Darwin", {"brew": "/opt/homebrew/bin/brew"}, "brew install llama.cpp"),
+            ("Linux", {"brew": "/home/linuxbrew/.linuxbrew/bin/brew"}, "brew install llama.cpp"),
+        ]
+        for system, path, cmd in cases:
+            with self.subTest(system=system):
+                hint = self.install_hint(system, path)
+                self.assertEqual(hint["install_cmd"], cmd)
+                self.assertIn(cmd, hint["install"])
+        for system in ("Windows", "Darwin", "Linux"):
+            with self.subTest(system=system, package_manager="missing"):
+                hint = self.install_hint(system)
+                self.assertNotIn("install_cmd", hint, "no command when its program is missing")
+                self.assertNotRegex(hint["install"], r"^(brew|winget) ", hint["install"])
+                self.assertNotRegex(hint["install"], r"https?://", "plain text, never links")
+        self.assertIn("releases", self.install_hint("Linux")["install"])
+        self.assertIn("Homebrew", self.install_hint("Darwin")["install"])
+
+    def test_state_tells_the_page_the_os_and_how_to_get_llama_cpp(self):
+        for system, name, serve in (("Windows", "windows", "scripts\\win\\serve.bat"),
+                                    ("Darwin", "mac", "./scripts/unix/serve.sh"), ("Linux", "linux", "./scripts/unix/serve.sh")):
+            with self.subTest(system=system):
+                self.use(system, {"brew": "/usr/local/bin/brew"} if system == "Darwin" else {})
+                s = self.get_json("/api/state")
+                self.assertEqual((s["os"], s["serve_cmd"]), (name, serve))
+                self.assertTrue(s["llama_install"]["install"])
+        self.assertEqual(s["llama_install"].get("install_cmd"), None)                   # Linux without brew
+        self.use("Darwin", {"brew": "/usr/local/bin/brew"})
+        self.assertEqual(self.get_json("/api/state")["llama_install"]["install_cmd"], "brew install llama.cpp")
+
+    def commands(self, system, path=None):
+        self.use(system, path)
+        return {c["kind"]: c for c in self.get_json("/api/recommend?use=chat")["models"][0]["commands"]}
+
+    def test_download_commands_use_this_os_launcher_and_only_programs_that_were_found(self):
+        win = self.commands("Windows", WIN_CURL)
+        self.assertRegex(win["resume"]["cmd"], r'^scripts\\win\\radar\.bat --download "[^"]+/[^"]+" --file "[^"]+\.gguf"$')
+        self.assertTrue(win["manual"]["cmd"].startswith("curl.exe -L -o "), win["manual"]["cmd"])
+        lin = self.commands("Linux", {"curl": "/usr/bin/curl"})
+        self.assertTrue(lin["resume"]["cmd"].startswith("./scripts/unix/radar.sh --download "))
+        self.assertTrue(lin["manual"]["cmd"].startswith("curl -L -o "))
+        self.assertEqual(set(self.commands("Linux")), {"resume"}, "no curl on PATH: no curl command")
+        for cmds in (win, lin):
+            self.assertNotIn("python3", " ".join(c["cmd"] for c in cmds.values()))
+            self.assertNotIn("-C -", cmds["manual"]["cmd"], "curl cannot resume the app's .part file: do not claim it")
+
+    def test_manual_download_lands_exactly_where_the_app_looks_for_the_model(self):
+        top = self.get_json("/api/recommend?use=chat")["models"][0]
+        offer = self.app.offered[top["id"]]
+        f, size = offer["files"][0]
+        dest, _ = ms.local_path(offer["repo"], f, size)
+        self.use("Linux", {"curl": "/usr/bin/curl"})
+        cmd = {c["kind"]: c for c in self.app.download_commands(offer)}["manual"]["cmd"]
+        self.assertIn(f'-o "{dest}"', cmd)
+        self.assertIn(f'/{offer["repo"]}/resolve/main/{f}"', cmd)
+
+    def test_split_models_are_resumed_whole_not_by_their_first_part(self):
+        self.use("Linux", {"curl": "/usr/bin/curl"})
+        card = self.app.card({"repo": "o/Big-GGUF", "name": "Big-Q4_K_M", "size": 9, "tps": 20, "mode": "gpu",
+                              "files": [("Big-00001-of-00002.gguf", 5), ("Big-00002-of-00002.gguf", 4)]})
+        kinds = {c["kind"]: c["cmd"] for c in card["commands"]}
+        self.assertEqual(kinds, {"resume": './scripts/unix/radar.sh --download "o/Big-GGUF"'})
+
+    def test_a_split_download_started_in_a_terminal_is_resumed_whole(self):
+        """Review finding: the state file only names the first shard (with the whole model's size). Rebuilding a
+        one-file offer from it gave `--file <first shard>` and a shard-only curl command, which checked that shard
+        against the whole size and never fetched the other parts."""
+        self.use("Linux", {"curl": "/usr/bin/curl"})
+        values = {"dl_active": "1", "dl_state": "downloading", "dl_repo": "o/Big-GGUF",
+                  "dl_file": "Big-Q4_K_M-00001-of-00003.gguf", "dl_done": "1", "dl_total": "30"}
+        with unittest.mock.patch.object(ms, "state_get", side_effect=lambda k: values.get(k, "")):
+            snap = self.app.snapshot()
+        self.assertEqual([(c["kind"], c["cmd"]) for c in snap["commands"]],
+                         [("resume", './scripts/unix/radar.sh --download "o/Big-GGUF"')])
+
+    def test_a_failed_download_offers_the_resume_that_really_resumes(self):
+        self.use("Windows", WIN_CURL)
+        unittest.mock.patch.object(ms, "download", lambda *a, **k: None).start()
+        self.addCleanup(unittest.mock.patch.stopall)
+        mid = self.get_json("/api/recommend?use=chat")["models"][0]["id"]
+        self.post("/api/install", {"id": mid})
+        for _ in range(100):
+            j = self.get_json("/api/progress")
+            if j["state"] == "error":
+                break
+            time.sleep(0.05)
+        self.assertEqual(j["state"], "error")
+        self.assertEqual(j["commands"][0]["kind"], "resume")
+        self.assertTrue(j["commands"][0]["cmd"].startswith("scripts\\win\\radar.bat --download"))
+        self.assertNotIn("curl_cmd", j)
+
+    def test_radar_and_terminal_downloads_carry_commands_too(self):
+        self.use("Linux")
+        with unittest.mock.patch("hf_radar.load_latest") as load:
+            load.return_value = {"updated_at": "2026-11-01T00:00:00Z",
+                                 "models": [{"repo": "t/m-GGUF", "file": "m.gguf", "size_bytes": 7, "fit_mode": "gpu"}]}
+            m = self.get_json("/api/radar")["models"][0]
+        self.assertEqual(m["commands"][0]["cmd"], './scripts/unix/radar.sh --download "t/m-GGUF" --file "m.gguf"')
+        values = {"dl_active": "1", "dl_state": "downloading", "dl_repo": "t/m-GGUF", "dl_file": "m.gguf",
+                  "dl_done": "1", "dl_total": "7"}
+        with unittest.mock.patch.object(ms, "state_get", side_effect=lambda k: values.get(k, "")):
+            snap = self.app.snapshot()
+        self.assertEqual(snap["source"], "terminal")
+        self.assertEqual(snap["commands"][0]["kind"], "resume")
+
+
+class TestRadarOffline(UiBase):
+    def test_a_sync_that_cannot_reach_the_hub_says_so_and_keeps_the_saved_scan(self):
+        saved = {"updated_at": "2026-10-30T00:00:00Z", "models": [{"repo": "t/saved-GGUF", "fit_mode": "gpu"}]}
+        with unittest.mock.patch("hf_radar.http_json", return_value=None), \
+                unittest.mock.patch("hf_radar.load_latest", return_value=saved):
+            d = self.get_json("/api/radar?sync=1")
+        self.assertTrue(d["offline"])
+        self.assertEqual([m["repo"] for m in d["models"]], ["t/saved-GGUF"])
+        self.assertEqual(d["updated_at"], "2026-10-30T00:00:00Z")
+
+
 class TestServe(unittest.TestCase):
-    def test_busy_port_falls_forward(self):
-        busy = ThreadingHTTPServer(("127.0.0.1", 0), ui_server.BaseHTTPRequestHandler)
-        self.addCleanup(busy.server_close)
-        port = busy.server_address[1]
-        started = []
+    """serve() takes the first free port from `port` upward.
 
-        class Stop(Exception):
-            pass
+    Regression (rule 2): this used to hold a real OS-assigned port P and assume one of P+1..P+19 was free. On the
+    Windows CI runner that whole range was unavailable (Windows reserves blocks of ports around 49xxx, and other
+    test servers use ephemeral ports), so the test failed by machine, not by code. The ports are now simulated."""
 
-        def fake_forever(self_):
-            started.append(self_.server_address[1])
-            raise KeyboardInterrupt
+    def run_serve(self, busy, port=8765):
+        tried, started = [], []
 
+        class FakeServer:
+            def __init__(self, addr, handler):
+                tried.append(addr[1])
+                if addr[1] in busy:
+                    raise OSError(98, "Address already in use")
+                self.server_address = addr
+
+            def serve_forever(self):
+                started.append(self.server_address[1])
+                raise KeyboardInterrupt
+
+            def server_close(self):
+                pass
+
+        out = io.StringIO()
         with unittest.mock.patch.object(ui_server, "App", lambda ms_: None), \
-                unittest.mock.patch.object(ui_server, "make_handler", lambda app: ui_server.BaseHTTPRequestHandler), \
-                unittest.mock.patch.object(ThreadingHTTPServer, "serve_forever", fake_forever):
-            self.assertEqual(ui_server.serve(None, port, open_browser=False), 0)
-        self.assertEqual(len(started), 1)
-        self.assertNotEqual(started[0], port)
+                unittest.mock.patch.object(ui_server, "make_handler", lambda app: None), \
+                unittest.mock.patch.object(ui_server, "Server", FakeServer), \
+                unittest.mock.patch("sys.stdout", out):
+            rc = ui_server.serve(None, port, open_browser=False)
+        return rc, tried, started, out.getvalue()
+
+    def test_busy_port_falls_forward(self):
+        rc, tried, started, _ = self.run_serve(busy={8765, 8766})
+        self.assertEqual(rc, 0)
+        self.assertEqual(tried, [8765, 8766, 8767])
+        self.assertEqual(started, [8767])
+
+    def test_no_free_port_in_range_is_a_clear_error(self):
+        rc, tried, started, text = self.run_serve(busy=set(range(8765, 8785)))
+        self.assertEqual(rc, 1)
+        self.assertEqual(tried, list(range(8765, 8785)))
+        self.assertEqual(started, [])
+        self.assertIn("Could not open a port between 8765 and 8784", text)
 
 
 if __name__ == "__main__":

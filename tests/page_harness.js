@@ -10,20 +10,37 @@ const script = html.slice(html.indexOf("<script>") + 8, html.indexOf("</script>"
 
 class El {
   constructor(id = "", hidden = false, className = "") {
-    Object.assign(this, { id, hidden, className, textContent: "", children: [], style: {}, nodeType: 1, onclick: null, attrs: {}, handlers: {} });
-    this.classList = { add() {}, remove() {}, contains: () => false };
+    Object.assign(this, { id, hidden, className, textContent: "", children: [], style: {}, nodeType: 1, onclick: null, attrs: {}, handlers: {}, value: "" });
+    const names = () => this.className.split(/\s+/).filter(Boolean);
+    this.classList = {
+      add: (...c) => { this.className = [...new Set([...names(), ...c])].join(" "); },
+      remove: (...c) => { this.className = names().filter((n) => !c.includes(n)).join(" "); },
+      toggle: (c, on) => { const want = on === undefined ? !names().includes(c) : !!on; (want ? this.classList.add : this.classList.remove)(c); return want; },
+      contains: (c) => names().includes(c),
+    };
   }
-  append(...kids) { for (const k of kids) this.children.push(k); }
+  // As in the DOM, anything that is not a node becomes a text node: strings, and also null -> "null",
+  // undefined -> "undefined" (a real bug once: tool cards showed the word "null").
+  append(...kids) { for (const k of kids) this.children.push(k && typeof k === "object" ? k : { nodeType: 3, textContent: String(k) }); }
+  prepend(...kids) { const old = this.children; this.children = []; this.append(...kids); this.children.push(...old); }
   replaceChildren(...kids) { this.children = []; this.append(...kids); }
   addEventListener(ev, fn) { this.handlers[ev] = fn; }
-  setAttribute(k, v) { this.attrs[k] = v; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  removeAttribute(k) { delete this.attrs[k]; }
   querySelector() { return null; }
+  querySelectorAll() { return []; }
+  focus() { focused.el = this; }
+  select() {}
+  blur() {}
   remove() {}
-  click() { const f = this.onclick || this.handlers.click; if (f) return f(); }
+  click() { const f = this.onclick || this.handlers.click; if (f) return f({ currentTarget: this, stopPropagation() {}, preventDefault() {} }); }
   text() { return [this.textContent, ...this.children.map((c) => (c.text ? c.text() : c.textContent || ""))].join(" "); }
 }
+const focused = { el: null };
 
-function makePage({ hash = "", routes }) {
+function makePage({ hash = "", routes, clipboard = "ok" }) {
+  focused.el = null;
   const els = new Map();
   for (const m of html.matchAll(/<(\w+)([^>]*)>/g)) {
     const id = /\bid="([^"]+)"/.exec(m[2]);
@@ -33,18 +50,48 @@ function makePage({ hash = "", routes }) {
   const views = [...els.values()].filter((e) => e.className.split(/\s+/).includes("view"));
   const timers = [];
   let now = 0, nextId = 1;
-  const state = { routes, calls: [] };
-  const ctx = {
-    document: {
-      querySelector: (s) => els.get(s.replace(/^#/, "")) || new El(s),
-      querySelectorAll: (s) => (s === ".view" ? views : []),
-      createElement: () => new El(),
-      createElementNS: () => new El(),
-      createTextNode: (t) => ({ nodeType: 3, textContent: String(t) }),
+  const state = { routes, calls: [], copied: [] };
+  // A browser's URL history: setting location.hash adds an entry and fires "hashchange" (asynchronously, as browsers
+  // do); history.pushState adds one silently; history.back() goes to the previous entry and fires "hashchange".
+  const winHandlers = {};
+  const fire = (ev) => Promise.resolve().then(() => (winHandlers[ev] || []).forEach((fn) => fn({})));
+  const entries = [hash];
+  let at = 0, current = hash;
+  const location = {
+    pathname: "/", search: "",
+    get hash() { return current; },
+    set hash(v) {
+      v = v && !v.startsWith("#") ? "#" + v : v;
+      if (v === current) return;
+      entries.splice(at + 1); entries.push(v); at++; current = v; fire("hashchange");
     },
-    window: { scrollTo() {} },
-    location: { hash },
-    navigator: { clipboard: { writeText: async () => {} } },
+  };
+  const history = {
+    pushState(_s, _t, url) { const v = (/#.*/.exec(url || "") || [""])[0]; entries.splice(at + 1); entries.push(v); at++; current = v; },
+    back() { if (at > 0) { const old = current; current = entries[--at]; if (old !== current) fire("hashchange"); } },
+    forward() { if (at < entries.length - 1) { const old = current; current = entries[++at]; if (old !== current) fire("hashchange"); } },
+  };
+  const doc = {
+    documentElement: new El("html"),
+    get activeElement() { return focused.el; },
+    querySelector: (s) => els.get(s.replace(/^#/, "")) || new El(s),
+    querySelectorAll: (s) => (s === ".view" ? views : []),
+    createElement: () => new El(),
+    createElementNS: () => new El(),
+    createTextNode: (t) => ({ nodeType: 3, textContent: String(t) }),
+    body: new El("body"),
+    execCommand: () => clipboard === "fallback",
+  };
+  const ctx = {
+    document: doc,
+    window: {
+      scrollTo() {},
+      addEventListener: (ev, fn) => { (winHandlers[ev] = winHandlers[ev] || []).push(fn); },
+      isSecureContext: true,
+    },
+    location,
+    history,
+    navigator: { clipboard: { writeText: async (t) => { if (clipboard !== "ok") throw new Error("denied"); state.copied.push(t); } } },
     console,
     fetch: async (path, opts) => {
       state.calls.push(path);
@@ -60,6 +107,10 @@ function makePage({ hash = "", routes }) {
   const settle = async () => { for (let i = 0; i < 25; i++) await new Promise((r) => setImmediate(r)); };
   const page = {
     state,
+    location,
+    async back() { history.back(); await settle(); },
+    async forward() { history.forward(); await settle(); },
+    focused: () => focused.el,
     el: (id) => els.get(id),
     visible: () => views.filter((v) => !v.hidden).map((v) => v.id).join(","),
     text: (id) => els.get(id).text(),
@@ -86,11 +137,28 @@ function makePage({ hash = "", routes }) {
   return page;
 }
 
-const STATE = { token: "t", ram_gb: 16, gpu: "", vram_gb: 0, mode: "cpu", llama_server: true, serve_cmd: "serve-it", installed: "" };
+const STATE = { token: "t", ram_gb: 16, gpu: "", vram_gb: 0, mode: "cpu", llama_server: true, serve_cmd: "serve-it", installed: "",
+  os: "linux", llama_install: { install: "Download a Linux release and copy llama-server into bin" } };
+const RESUME = { kind: "resume", label: "Download or resume it from a terminal", cmd: "RESUME-CMD --download x" };
+const MANUAL = { kind: "manual", label: "Or download it by hand with curl (starts from zero)", cmd: "MANUAL-CMD -o x" };
+const idle = (extra) => (path, o, full) => {
+  if (path === "/api/state") return STATE;
+  if (path === "/api/progress") return { state: "idle" };
+  return extra ? extra(path, o, full) : {};
+};
+// A download that is running when the page opens and has finished by the first poll.
+const finishing = (st, done) => {
+  let polls = 0;
+  return (path) => (path === "/api/state" ? st : path === "/api/progress" ? (++polls === 1 ? DOWNLOADING : done) : {});
+};
+const radarModel = (over) => Object.assign({ repo: "a/m-GGUF", name: "m-Q4_K_M", fit_mode: "gpu", tps: 30, downloads: 10,
+  size_mb: 4000, quant: "Q4_K_M", id: "a/m-GGUF|m.gguf", commands: [RESUME] }, over);
 const TOOLS = { tools: [{ id: "ollama", label: "Ollama", status: "installed", version: "0.5.1",
   evidence: [{ kind: "on-PATH", path: "/usr/bin/ollama" }], searched: [], hint: { install: "get it", start: "ollama serve" } },
   { id: "llama-cpp", label: "llama.cpp", status: "installed", version: "", evidence: [{ kind: "python-package", path: "python:llama-cpp-python" }],
-    searched: [], hint: { install: "brew install llama.cpp", setup: "llama-server was not found" } }] };
+    searched: [], hint: { install: "brew install llama.cpp", setup: "llama-server was not found" } },
+  { id: "lmstudio", label: "LM Studio", status: "not-found", version: "", evidence: [], searched: [], hint: { install: "Download it from lmstudio.ai" } },
+  { id: "unsloth", label: "Unsloth", status: "not-found", version: "", evidence: [], searched: [], hint: { install: "pip install unsloth", install_cmd: "pip install unsloth" } }] };
 const DOWNLOADING = { state: "downloading", title: "Qwen", done: 5, total: 10 };
 
 function routes(job) {
@@ -126,7 +194,7 @@ const scenarios = {
     if (p.visible() !== "v-tools") return "the result replaced the tools view: " + p.visible();
     await p.click("tools-back");
     if (p.visible() !== "v-done") return "Back should show the finished job, got " + p.visible();
-    if (!p.text("d-text").includes("Qwen is installed")) return "result text missing: " + p.text("d-text");
+    if (!p.text("d-text").includes("Qwen is downloaded")) return "result text missing: " + p.text("d-text");
   },
 
   async "a download that fails while the tools view is open is shown after Back"() {
@@ -175,9 +243,11 @@ const scenarios = {
     await p.start();
     await p.click("tools-btn");
     const text = p.text("tools-list");
-    if (!text.includes("Start it with: ollama serve")) return "start command missing: " + text;
+    if (!/Start it with:\s+ollama serve/.test(text)) return "start command missing: " + text;
     if (!text.includes("llama-server was not found")) return "setup step missing: " + text;
-    if (text.includes("Start it with: undefined")) return "undefined leaked into the page";
+    if (/\b(undefined|null)\b/.test(text)) return "undefined or null leaked into the page: " + text;
+    if (!text.includes("Download it from lmstudio.ai")) return "install hint missing for a tool that was not found";
+    if (!p.button("tools-list", "Copy")) return "no copy button for a runnable install command";
   },
   async "a slow Hub search that finishes after the user chose something else is discarded"() {
     let release;
@@ -388,80 +458,197 @@ const scenarios = {
     }
   },
 
-  async "radar cards render terminal curl buttons and specs"() {
-    const radarData = {
-      updated_at: "2026-11-01T00:00:00Z",
-      models: [
-        {
-          repo: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
-          name: "Qwen2.5-Coder-7B-Instruct-Q4_K_M",
-          file: "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
-          download_url: "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
-          fit_mode: "gpu",
-          tps: 35,
-          downloads: 1000,
-          size_mb: 4500,
-          clusters: ["coding"],
-          id: "m1",
-        },
-      ],
-    };
-    const p = makePage({
-      routes: (path) => {
-        if (path === "/api/state") return STATE;
-        if (path === "/api/progress") return { state: "idle" };
-        if (path.startsWith("/api/radar")) return radarData;
-        return {};
-      },
-    });
+  // --- Commands: the page shows exactly what the server built for this OS (rule 3), never its own guesses ---
+  async "download commands on screen are the server's, during a download and after a failure"() {
+    let job = { state: "downloading", title: "Qwen", done: 1, total: 4, source: "terminal", repo: "q/Q-GGUF", file: "q.gguf", commands: [RESUME, MANUAL] };
+    const p = makePage({ routes: (path) => (path === "/api/state" ? STATE : path === "/api/progress" ? job : {}) });
     await p.start();
-    await p.click("radar-btn");
-    await p.advance(100);
-    const text = p.text("radar-list");
-    if (!text.includes("Copy curl")) {
-      return "expected Copy curl button on radar cards, got: " + text;
+    if (p.visible() !== "v-install") return "expected v-install, got " + p.visible();
+    const box = p.text("i-terminal-box");
+    if (!box.includes("RESUME-CMD") || !box.includes("MANUAL-CMD")) return "server commands missing: " + box;
+    if (/python3|curl -L -C/.test(box)) return "page built its own command: " + box;
+    job = { state: "error", error: "Network interrupted", commands: [RESUME] };
+    await p.advance(600);
+    if (p.visible() !== "v-error") return "expected v-error, got " + p.visible();
+    const err = p.text("e-terminal-box");
+    if (!err.includes("RESUME-CMD")) return "resume command missing after failure: " + err;
+    if (/python3|curl/.test(err)) return "page built its own command: " + err;
+  },
+
+  async "a model the server gave no commands for shows no copy-command button"() {
+    const p = makePage({ hash: "#radar", routes: idle((path) => (path.startsWith("/api/radar") ? { models: [radarModel({ commands: [] })] } : {})) });
+    await p.start();
+    if (/Copy (curl|command)/.test(p.text("radar-list"))) return "a copy button without a command: " + p.text("radar-list");
+    const q = makePage({ hash: "#radar", routes: idle((path) => (path.startsWith("/api/radar") ? { models: [radarModel()] } : {})) });
+    await q.start();
+    const btn = q.button("radar-list", "Copy command");
+    if (!btn) return "no copy button for a model with a command: " + q.text("radar-list");
+    btn.click(); await q.settle();
+    if (q.state.copied[0] !== RESUME.cmd) return "copied " + JSON.stringify(q.state.copied);
+  },
+
+  async "the done screen says to install llama.cpp first when llama-server is missing"() {
+    const done = { state: "done", title: "Qwen", bench: "skipped", tps: 0 };
+    const missing = { ...STATE, llama_server: false, llama_install: { install: "brew install llama.cpp", install_cmd: "brew install llama.cpp" } };
+    const p = makePage({ routes: finishing(missing, done) });
+    await p.start();
+    await p.advance(600);
+    if (p.visible() !== "v-done") return "expected v-done, got " + p.visible();
+    const t = p.text("done-next");
+    if (!t.includes("brew install llama.cpp")) return "install step missing: " + t;
+    if (!/llama\.cpp is not installed|install llama\.cpp/i.test(t)) return "no explanation: " + t;
+    const ok = makePage({ routes: finishing(STATE, done) });
+    await ok.start();
+    await ok.advance(600);
+    if (!ok.text("done-next").includes("serve-it")) return "serve command missing when llama-server exists";
+    if (ok.text("done-next").includes("Download a Linux release")) return "install step shown although llama-server exists";
+  },
+
+  async "the llama.cpp warning gives this computer's install step, with a copy button only for a command"() {
+    const text = makePage({ routes: (path) => (path === "/api/state" ? { ...STATE, llama_server: false } : { state: "idle" }) });
+    await text.start();
+    const w = text.text("warn");
+    if (!w.includes("Download a Linux release")) return "OS install step missing: " + w;
+    if (w.includes("README")) return "still sends the user to the README: " + w;
+    if (text.button("warn", "Copy")) return "copy button for plain text";
+    const cmd = makePage({ routes: (path) => (path === "/api/state" ? { ...STATE, llama_server: false, llama_install: { install: "winget install ggml.llamacpp", install_cmd: "winget install ggml.llamacpp" } } : { state: "idle" }) });
+    await cmd.start();
+    if (!cmd.button("warn", "Copy")) return "no copy button for a runnable install command";
+  },
+
+  async "downloading from the radar shows the progress screen instead of polling silently"() {
+    let started = false;
+    const p = makePage({ hash: "#radar", routes: (path) => {
+      if (path === "/api/state") return STATE;
+      if (path === "/api/install") { started = true; return { ok: true }; }
+      if (path === "/api/progress") return started ? DOWNLOADING : { state: "idle" };
+      if (path.startsWith("/api/radar")) return { models: [radarModel()] };
+      return {};
+    } });
+    await p.start();
+    const btn = p.button("radar-list", "Download");
+    if (!btn) return "no Download button: " + p.text("radar-list");
+    btn.click(); await p.settle();
+    if (p.visible() !== "v-install") return "expected the progress screen, got " + p.visible();
+    if (p.location.hash !== "") return "the address still says " + p.location.hash;
+    await p.back();
+    if (p.visible() !== "v-radar") return "browser Back should return to the radar, got " + p.visible();
+  },
+
+  async "the done screen has no stray text on any OS when llama.cpp is installed"() {
+    // Review finding: on Linux the optional double-click tip is undefined and replaceChildren(..., null) printed "null".
+    const done = { state: "done", title: "Qwen", bench: "ok", tps: 20 };
+    for (const os of ["linux", "mac", "windows"]) {
+      const p = makePage({ routes: finishing({ ...STATE, os }, done) });
+      await p.start();
+      await p.advance(600);
+      const t = p.text("done-next");
+      if (/\b(null|undefined)\b/.test(t)) return `${os}: stray text on the done screen: ${t}`;
+      if (os !== "linux" && !/double-click/.test(t)) return `${os}: the double-click tip is missing: ${t}`;
     }
   },
 
-  async "terminal download box is rendered during download and failure"() {
-    let progressState = {
-      state: "downloading",
-      title: "Qwen2.5-Coder",
-      done: 1000,
-      total: 5000,
-      repo: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
-      file: "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
-      download_url: "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
-      source: "terminal",
-    };
-    const p = makePage({
-      routes: (path) => {
-        if (path === "/api/state") return STATE;
-        if (path === "/api/progress") return progressState;
-        return {};
-      },
-    });
+  async "Details opens on the cards of the What changed view too"() {
+    // Review finding: the toggle re-rendered only the (hidden) radar list, so history cards never opened.
+    const hist = { summary: { new_count: 1 }, new_models: [radarModel({ repo: "new/x-GGUF", file: "x.gguf" })], top_movers: [], removed_models: [], snapshots: [] };
+    const p = makePage({ hash: "#history", routes: idle((path) => (path.startsWith("/api/radar/history") ? hist : {})) });
     await p.start();
-    await p.advance(100);
-    if (p.visible() !== "v-install") return "expected v-install during download, got: " + p.visible();
-    const installBox = p.text("i-terminal-box");
-    if (!installBox.includes("curl -L -C -") || !installBox.includes("qwen2.5-coder-7b-instruct-q4_k_m.gguf")) {
-      return "expected curl command in install box, got: " + installBox;
-    }
+    const btn = p.button("history-content", "Details");
+    if (!btn) return "no Details button: " + p.text("history-content");
+    btn.click(); await p.settle();
+    const t = p.text("history-content");
+    if (!t.includes("Repository") || !t.includes("x.gguf")) return "details did not open in the history view: " + t;
+  },
 
-    // Now test error view
-    progressState = {
-      state: "error",
-      error: "Network interrupted",
-      curl_cmd: 'curl -L -C - -o "models/test.gguf" "https://huggingface.co/test/model/resolve/main/test.gguf"',
-      cli_cmd: 'python3 utils/hf_radar.py --download "test/model"',
-    };
-    await p.advance(550);
-    if (p.visible() !== "v-error") return "expected v-error on error, got: " + p.visible();
-    const errorBox = p.text("e-terminal-box");
-    if (!errorBox.includes("curl -L -C - -o") || !errorBox.includes("test.gguf")) {
-      return "expected resume curl command in error box, got: " + errorBox;
+  // --- Navigation: views live in the URL, so browser Back/Forward and bookmarks work ---
+  async "browser Back and Forward move between views"() {
+    const p = makePage({ routes: idle((path) => (path === "/api/tools" ? TOOLS : path.startsWith("/api/radar") ? { models: [radarModel()] } : {})) });
+    await p.start();
+    await p.click("radar-btn");
+    if (p.visible() !== "v-radar" || p.location.hash !== "#radar") return "radar: " + p.visible() + " " + p.location.hash;
+    await p.click("tools-btn");
+    if (p.visible() !== "v-tools" || p.location.hash !== "#tools") return "tools: " + p.visible() + " " + p.location.hash;
+    await p.back();
+    if (p.visible() !== "v-radar") return "Back from tools should show radar, got " + p.visible();
+    await p.back();
+    if (p.visible() !== "v-use") return "Back again should show the first screen, got " + p.visible();
+    await p.forward();
+    if (p.visible() !== "v-radar") return "Forward should show radar again, got " + p.visible();
+  },
+
+  async "the in-page Back link goes home and leaves a history entry"() {
+    const p = makePage({ routes: idle((path) => (path === "/api/tools" ? TOOLS : {})) });
+    await p.start();
+    await p.click("tools-btn");
+    await p.click("tools-back");
+    if (p.visible() !== "v-use" || p.location.hash !== "") return "expected v-use with no hash, got " + p.visible() + " " + p.location.hash;
+    await p.back();
+    if (p.visible() !== "v-tools") return "browser Back should reopen tools, got " + p.visible();
+  },
+
+  async "the open view is marked in the nav and gets keyboard focus"() {
+    const p = makePage({ routes: idle((path) => (path === "/api/tools" ? TOOLS : {})) });
+    await p.start();
+    await p.click("tools-btn");
+    if (p.el("tools-btn").getAttribute("aria-current") !== "page") return "tools nav not aria-current";
+    if (p.el("radar-btn").getAttribute("aria-current") === "page") return "radar nav still marked current";
+    const f = p.focused();
+    if (!f || f.id !== "tools-title") return "focus should move to the view heading, got " + (f && f.id);
+    await p.click("tools-back");
+    if (p.el("tools-btn").getAttribute("aria-current") === "page") return "tools still marked current after going home";
+  },
+
+  // --- Honest feedback ---
+  async "copying says so when the clipboard is blocked, and falls back when it can"() {
+    const done = { state: "done", title: "Qwen", bench: "ok", tps: 20 };
+    for (const [mode, want] of [["ok", /copied/i], ["fallback", /copied/i], ["denied", /select|press|ctrl|⌘/i]]) {
+      const p = makePage({ clipboard: mode, routes: finishing(STATE, done) });
+      await p.start();
+      await p.advance(600);
+      const btn = p.button("done-next", "Copy");
+      if (!btn) return "no Copy button next to the serve command: " + p.text("done-next");
+      btn.click(); await p.settle();
+      const t = btn.text();
+      if (!want.test(t)) return `${mode}: button says ${JSON.stringify(t)}`;
+      if (mode === "denied" && /copied/i.test(t)) return "claimed Copied although copying failed";
     }
+  },
+
+  async "a radar sync that cannot reach Hugging Face says so instead of showing an empty list"() {
+    const p = makePage({ hash: "#radar", routes: idle((path) => (path.startsWith("/api/radar") ? { offline: true, updated_at: "2026-10-30T00:00:00Z", models: [radarModel()] } : {})) });
+    await p.start();
+    const t = p.text("radar-notice");
+    if (!/could not reach hugging face/i.test(t)) return "no offline notice: " + t;
+    if (!t.includes("2026-10-30")) return "should say how old the saved results are: " + t;
+    if (!p.text("radar-list").includes("a/m-GGUF")) return "saved results should still be listed";
+  },
+
+  async "radar figures are labelled as estimates and never overstate the fit"() {
+    const cpuOnly = [radarModel({ repo: "big/cpu-GGUF", fit_mode: "cpu", tps: 9, size_mb: 20480 })];
+    const p = makePage({ hash: "#radar", routes: idle((path) => (path.startsWith("/api/radar") ? { models: cpuOnly } : {})) });
+    await p.start();
+    const all = p.text("radar-spotlight") + " " + p.text("radar-list");
+    if (/100% GPU|Real-Time|KV Cache/i.test(all)) return "overstated claim on screen: " + all;
+    if (!/est\./.test(all)) return "speed not labelled as an estimate: " + all;
+    if (/20\.0 GB of 16 GB \(100%\)/.test(all)) return "a 20 GB model was shown as 100% of 16 GB";
+    if (!/bigger than|more than/i.test(all)) return "should say the model is bigger than the memory: " + all;
+  },
+
+  async "the progress bar reports its value to assistive technology"() {
+    const p = makePage({ routes: (path) => (path === "/api/state" ? STATE : path === "/api/progress" ? { ...DOWNLOADING, commands: [] } : {}) });
+    await p.start();
+    if (p.el("bar").getAttribute("aria-valuenow") !== "50") return "aria-valuenow is " + p.el("bar").getAttribute("aria-valuenow");
+  },
+
+  async "radar tabs expose which one is selected"() {
+    const p = makePage({ hash: "#radar", routes: idle((path) => (path.startsWith("/api/radar") ? { models: [radarModel()] } : {})) });
+    await p.start();
+    const tabs = p.el("radar-tabs").children;
+    if (!tabs.length) return "tabs are not built by the script";
+    const gpu = tabs.find((t) => t.getAttribute("data-tab") === "gpu");
+    gpu.click(); await p.settle();
+    const sel = tabs.filter((t) => t.getAttribute("aria-selected") === "true").map((t) => t.getAttribute("data-tab"));
+    if (sel.join() !== "gpu") return "aria-selected on: " + sel.join();
   },
 };
 

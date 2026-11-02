@@ -105,8 +105,8 @@ def tps_fn_for(hw: hardware.Hw):
     return _fn
 
 
-def fetch_hf_repos(sort: str = "trendingScore", limit: int = 40, search: str | None = None) -> list:
-    """Fetch repo metadata list from Hugging Face API."""
+def fetch_hf_repos(sort: str = "trendingScore", limit: int = 40, search: str | None = None) -> list | None:
+    """Fetch repo metadata list from Hugging Face API. None = the request failed; [] = it was answered, no matches."""
     params = [
         "filter=gguf",
         "pipeline_tag=text-generation",
@@ -119,7 +119,7 @@ def fetch_hf_repos(sort: str = "trendingScore", limit: int = 40, search: str | N
         params.append(f"search={urllib.parse.quote(search)}")
     url = f"{HF_API}?{'&'.join(params)}"
     data = http_json(url)
-    return data if isinstance(data, list) else []
+    return data if isinstance(data, list) else None
 
 
 def fetch_repo_details(repo_id: str) -> dict | None:
@@ -381,10 +381,13 @@ def sync_radar(hw: hardware.Hw | None = None, hdir: Path | None = None,
     target_hw = hw or hardware.detect_hw()
     seen_ids = set()
     repos_to_check = []
+    answered = False                            # did any listing request get an answer (even an empty one)?
 
     sources = [("trendingScore", 30), ("createdAt", 30), ("downloads", 20)]
     for sort_key, limit in sources:
-        for r in fetch_hf_repos(sort=sort_key, limit=limit, search=search):
+        listing = fetch_hf_repos(sort=sort_key, limit=limit, search=search)
+        answered = answered or listing is not None
+        for r in listing or []:
             rid = r.get("id") or r.get("modelId")
             if rid and rid not in seen_ids:
                 seen_ids.add(rid)
@@ -406,17 +409,19 @@ def sync_radar(hw: hardware.Hw | None = None, hdir: Path | None = None,
             evaluated.append(ev)
 
     evaluated.sort(key=lambda m: (m["downloads"] + m["likes"] * 20), reverse=True)
+    offline = not answered                      # every request failed; an answered search with no matches is not offline
     if evaluated:
         record_history(evaluated, hdir)
     else:
         cached = load_latest(hdir)
         if cached and cached.get("models"):
-            return cached
+            return dict(cached, offline=offline)
     return {
         "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "total_scanned": len(repos_to_check),
         "total_compatible": len(evaluated),
         "models": evaluated,
+        "offline": offline,
     }
 
 
@@ -520,6 +525,15 @@ def render_history_diff(diff: dict) -> str:
     return "\n".join(lines)
 
 
+def _file_size(repo: str, fname: str, meta: dict | None = None) -> int:
+    """Size in bytes of one file of a repo, from its Hub listing; 0 when unknown (the size check is then skipped)."""
+    meta = meta or fetch_repo_details(repo) or {}
+    for s in meta.get("siblings") or []:
+        if s.get("rfilename") == fname:
+            return int(s.get("size") or (s.get("lfs") or {}).get("size") or 0)
+    return 0
+
+
 def download_model_cli(repo_or_url: str, custom_file: str | None = None) -> int:
     """Download a model directly from terminal with progress, updating .launchpad-state."""
     raw = repo_or_url.strip().rstrip("/")
@@ -544,16 +558,14 @@ def download_model_cli(repo_or_url: str, custom_file: str | None = None) -> int:
                 match = dict(m)
                 break
 
+    meta = None
     if not match:
         print(f"Fetching repository details from Hugging Face for {repo}...")
-        try:
-            info_url = f"{HF_API}/models/{repo}?blobs=true"
-            meta = model_setup.http_json(info_url)
-            sibs = meta.get("siblings") or []
-            match = evaluate_repo(meta, sibs, hw)
-        except Exception as e:
-            print(f"Error fetching metadata for {repo}: {e}")
-            match = None
+        meta = fetch_repo_details(repo)          # HF_API already ends in /api/models
+        if meta:
+            match = evaluate_repo(meta, meta.get("siblings") or [], hw)
+        else:
+            print(f"Could not fetch details for {repo} from Hugging Face.")
 
     if not match:
         print(f"Could not find or evaluate a compatible GGUF for {repo}.")
@@ -563,9 +575,17 @@ def download_model_cli(repo_or_url: str, custom_file: str | None = None) -> int:
     _normalize_model_entry(match)
     fname = custom_file or match["file"]
     size = match["size_bytes"]
-    files = match["files"] if not custom_file else [(custom_file, size)]
+    files = match["files"]
+    if custom_file and custom_file != match["file"]:
+        # The radar or the evaluation chose another file: check this one against its own size, not that one's.
+        size = _file_size(repo, custom_file, meta)
+        files = [(custom_file, size)]
+    elif custom_file:
+        files = [(custom_file, size)]
     dl_url = f"https://huggingface.co/{repo}/resolve/main/{fname}"
-    curl_cmd = f'curl -L -C - -o "models/{fname}" "{dl_url}"'
+    # Running this again continues the partial .part file; a curl command would start a different file from zero.
+    radar_launcher = "scripts\\win\\radar.bat" if sys.platform == "win32" else "./scripts/unix/radar.sh"
+    resume_cmd = f'{radar_launcher} --download "{repo}"' + (f' --file "{custom_file}"' if custom_file else "")
 
     print("=" * 80)
     print("  LLAMA-CPP LAUNCHPAD - TERMINAL DOWNLOAD")
@@ -576,7 +596,7 @@ def download_model_cli(repo_or_url: str, custom_file: str | None = None) -> int:
     print(f"  Quantization:    {match.get('quant', 'Unknown')}")
     print(f"  Execution Mode:  {match.get('fit_mode', 'cpu').upper()} (~{match.get('tps', 0)} tok/s)")
     print(f"  Direct Link:     {dl_url}")
-    print(f"  Resume Command:  {curl_cmd}")
+    print(f"  Resume Command:  {resume_cmd}")
     print("=" * 80)
     print("Starting download into models/ (live progress synchronized with setup UI)...")
 
@@ -606,10 +626,9 @@ def download_model_cli(repo_or_url: str, custom_file: str | None = None) -> int:
         path = model_setup.download(repo, f, part_size, on_chunk)
         if not path:
             model_setup.state_update({"dl_active": "0", "dl_state": "error"})
-            print("\nDownload failed or interrupted.")
-            print("To resume this download, execute:")
-            print(f"  {curl_cmd}")
-            print(f"  OR re-run: python3 utils/hf_radar.py --download \"{repo}\"")
+            print("\nDownload failed or interrupted. What was downloaded is kept.")
+            print("To continue where it stopped, run:")
+            print(f"  {resume_cmd}")
             return 1
         base += part_size
         paths.append(path)

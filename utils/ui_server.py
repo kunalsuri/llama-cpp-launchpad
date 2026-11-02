@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import platform
 import re
 import secrets
 import sys
@@ -32,13 +31,61 @@ PAGE = Path(__file__).resolve().parent.parent / "ui" / "setup" / "index.html"
 USES = ("chat", "coding", "translation", "fast")
 SEARCH_FOR_USE = {"coding": "coder"}            # extra Hub search text per use
 MAX_BODY = 4096
-# What to tell the user about each local-LLM tool. Plain text on purpose: the page never links elsewhere.
+LLAMA_RELEASES = "github.com/ggml-org/llama.cpp/releases"
+SHARD = re.compile(r"-\d{5}-of-\d{5}\.gguf$", re.I)      # one part of a split model (as in hf_discover)
+
+
+def _llama_cpp_install(probe) -> dict:
+    """Windows: winget. macOS: Homebrew. Linux: Homebrew if present, else the release download the README describes.
+    A command is only given when its package manager was found (rule 3); otherwise say what to do instead."""
+    if probe.system == "Windows":
+        if probe.which("winget"):
+            return {"install_cmd": "winget install ggml.llamacpp"}
+        return {"install": f"Download a Windows release from {LLAMA_RELEASES} and copy llama-server.exe into this "
+                           "project's bin folder. (winget, which installs it in one step, was not found.)"}
+    if probe.which("brew"):
+        return {"install_cmd": "brew install llama.cpp"}
+    if probe.system == "Darwin":
+        return {"install": "Install Homebrew (see brew.sh), then run: brew install llama.cpp"}
+    return {"install": f"Download a Linux release from {LLAMA_RELEASES} and copy llama-server into this project's "
+                       "bin folder, or build it from source."}
+
+
+def _unsloth_install(probe) -> dict:
+    pip = "pip" if probe.which("pip") else "pip3" if probe.which("pip3") else ""
+    if pip:
+        return {"install_cmd": f"{pip} install unsloth"}
+    return {"install": "Install it with pip: pip install unsloth (pip was not found on your PATH)."}
+
+
+# What to tell the user about each local-LLM tool: plain text (the page never links elsewhere), or a function of the
+# machine returning {"install": text} and/or {"install_cmd": a command whose program was found}.
 INSTALL_HINTS = {
     "ollama": "Download it from ollama.com/download",
-    "llama-cpp": {"Windows": "winget install ggml.llamacpp", "default": "brew install llama.cpp"},
+    "llama-cpp": _llama_cpp_install,
     "lmstudio": "Download it from lmstudio.ai",
-    "unsloth": "pip install unsloth",
+    "unsloth": _unsloth_install,
 }
+
+
+def install_hint(tool_id: str, probe) -> dict:
+    """-> {"install": always text to show, "install_cmd": only when it is a command that can run here}."""
+    hint = INSTALL_HINTS[tool_id]
+    try:
+        out = dict(hint(probe)) if callable(hint) else {"install": hint}
+    except Exception:                                       # noqa: BLE001 - a failed check must not take the page down
+        out = {"install": "Could not check this computer for a package manager. See the README for install steps."}
+    out.setdefault("install", out.get("install_cmd", ""))
+    return out
+
+
+def os_name(system: str) -> str:
+    return {"Windows": "windows", "Darwin": "mac"}.get(system, "linux")
+
+
+def launcher(system: str, name: str) -> str:
+    """The project's own launcher for this OS (it finds Python itself: `py -3` on Windows, never `python3` there)."""
+    return f"scripts\\win\\{name}.bat" if system == "Windows" else f"./scripts/unix/{name}.sh"
 # A start command is only offered when the program it runs was really found (not just an app bundle, a Python
 # package or a sibling program): tool id -> (program the command needs, what to say when it is missing).
 START_NEEDS = {
@@ -81,7 +128,15 @@ def find_program(tool: dict, program: str, probe) -> tuple:
 
 
 def serve_cmd(system: str) -> str:
-    return "scripts\\win\\serve.bat" if system == "Windows" else "./scripts/unix/serve.sh"
+    return launcher(system, "serve")
+
+
+def shown_path(path: Path) -> str:
+    """A path as the user should type it from the project folder: relative when inside it, else as is."""
+    try:
+        return str(Path(path).resolve().relative_to(detect_tools.ROOT.resolve()))
+    except ValueError:
+        return str(path)
 
 
 class App:
@@ -109,8 +164,10 @@ class App:
             "gpu_unused": hw.gpu_kind in ("nvidia", "gpu") and not hw.gpu_usable,
             "mode": "gpu" if gpu or hw.gpu_kind == "apple" else "cpu",
             "llama_server": bool(ms.find_llama_server()),
+            "llama_install": install_hint("llama-cpp", self.probe),
             "installed": ms.state_get("installed"),
-            "serve_cmd": serve_cmd(platform.system()),
+            "os": os_name(self.probe.system),
+            "serve_cmd": serve_cmd(self.probe.system),
         }
 
     def tools(self, ids=None, verbose: bool = False) -> dict:
@@ -120,8 +177,7 @@ class App:
         for tool in result["tools"]:
             if not verbose:
                 del tool["searched"]
-            install = INSTALL_HINTS[tool["id"]]
-            hint = {"install": install.get(system, install["default"]) if isinstance(install, dict) else install}
+            hint = install_hint(tool["id"], self.probe)
             if tool["status"] == "installed" and tool["id"] in START_NEEDS:
                 program, missing = START_NEEDS[tool["id"]]
                 where, runnable = find_program(tool, program, self.probe)
@@ -144,14 +200,49 @@ class App:
         if quant:
             title = re.sub(re.escape(quant), "", title, flags=re.I)
         title = re.sub(r"[-_.]+$", "", title) or stem
-        self.offered[mid] = {"repo": m["repo"], "files": files, "size": int(m["size"]),
-                             "name": m.get("name") or stem, "title": title}
+        offer = self.offered[mid] = {"repo": m["repo"], "files": files, "size": int(m["size"]),
+                                     "name": m.get("name") or stem, "title": title}
         tps = int(m["tps"])
         return {"id": mid, "title": title, "repo": m["repo"], "quant": quant, "size": int(m["size"]),
                 "size_h": ms.human_size(int(m["size"])), "tps": tps,
                 "verdict": "tight" if m.get("mode") == "tight" else ms.verdict(tps),
                 "where": m.get("mode", "cpu"), "gpu_share": m.get("gpu_share", 0), "note": m.get("note", ""),
-                "have": all(ms.local_path(m["repo"], f, sz)[1] for f, sz in files)}
+                "have": all(ms.local_path(m["repo"], f, sz)[1] for f, sz in files),
+                "commands": self.download_commands(offer)}
+
+    def download_commands(self, offer: dict) -> list:
+        """Terminal commands for one model, for this OS, built only from programs that were found (rule 3).
+          resume  the project's launcher: continues the app's own partial download (.part) and records the model
+          manual  plain curl into the exact file the app looks for. A fresh download (curl cannot continue the
+                  app's .part file), so it is labelled as such. Only when curl is on PATH; Windows needs curl.exe,
+                  because `curl` in Windows PowerShell 5 is an alias of Invoke-WebRequest and rejects -L / -o."""
+        system, repo, files = self.probe.system, offer["repo"], offer["files"]
+        # A split model is resumed whole. A download started in a terminal is only known by its first shard (and
+        # the whole size), so a shard name alone also means "split": never --file one shard, never curl one shard.
+        single = len(files) == 1 and not SHARD.search(files[0][0])
+        resume = f'{launcher(system, "radar")} --download "{repo}"' + (f' --file "{files[0][0]}"' if single else "")
+        out = [{"kind": "resume", "label": "Download or resume it from a terminal", "cmd": resume}]
+        if single and self.probe.which("curl"):
+            f, size = files[0]
+            dest, _ = self.ms.local_path(repo, f, size)
+            url = offer.get("download_url") or f"{self.ms.HF_BASE}/{repo}/resolve/main/{f}"
+            curl = "curl.exe" if system == "Windows" else "curl"
+            out.append({"kind": "manual", "label": "Or download it by hand with curl (starts from zero)",
+                        "cmd": f'{curl} -L -o "{shown_path(dest)}" "{url}"'})
+        return out
+
+    def _offer_hub_model(self, m: dict) -> None:
+        """Make a radar/history model downloadable by id, and attach its terminal commands."""
+        repo = m.get("repo", "")
+        name = m.get("name") or repo.split("/")[-1] or "model"
+        size = int(m.get("size_bytes") or m.get("size") or 0)
+        fname = m.get("file") or (m.get("files")[0][0] if m.get("files") else f"{name}.gguf")
+        files = m.get("files") or [(fname, size)]
+        dl_url = m.get("download_url") or f"https://huggingface.co/{repo}/resolve/main/{fname}"
+        mid = f"{repo}|{fname}"
+        offer = self.offered[mid] = {"repo": repo, "file": fname, "files": files, "size": size, "name": name,
+                                     "title": m.get("title") or name, "download_url": dl_url}
+        m.update(id=mid, file=fname, files=files, download_url=dl_url, commands=self.download_commands(offer))
 
     def recommend(self, use: str) -> dict:
         """The best catalog models for this machine (instant, no network)."""
@@ -188,27 +279,11 @@ class App:
         if cluster and cluster != "all":
             models = [m for m in models if cluster in m.get("clusters", [])]
         for m in models:
-            repo = m.get("repo", "")
-            name = m.get("name") or repo.split("/")[-1] or "model"
-            size = int(m.get("size_bytes") or m.get("size") or 0)
-            fname = m.get("file") or (m.get("files")[0][0] if m.get("files") else f"{name}.gguf")
-            files = m.get("files") or [(fname, size)]
-            dl_url = m.get("download_url") or f"https://huggingface.co/{repo}/resolve/main/{fname}"
-            mid = f"{repo}|{fname}"
-            self.offered[mid] = {
-                "repo": repo,
-                "file": fname,
-                "files": files,
-                "size": size,
-                "name": name,
-                "title": m.get("title") or name,
-                "download_url": dl_url,
-            }
-            m["id"] = mid
-            m["file"] = fname
-            m["files"] = files
-            m["download_url"] = dl_url
-        return {"updated_at": latest.get("updated_at"), "models": models}
+            self._offer_hub_model(m)
+        out = {"updated_at": latest.get("updated_at"), "models": models}
+        if latest.get("offline"):
+            out["offline"] = True           # the Hub could not be reached: these are the saved results
+        return out
 
     def radar_history(self, base: str | None = None) -> dict:
         """Historical snapshot diff showing what changed since last sync."""
@@ -216,26 +291,7 @@ class App:
         diff = hf_radar.compute_sync_diff(base_snap=base)
         for cat in ("new_models", "top_movers", "all_movers"):
             for m in diff.get(cat) or []:
-                repo = m.get("repo", "")
-                name = m.get("name") or repo.split("/")[-1] or "model"
-                size = int(m.get("size_bytes") or m.get("size") or 0)
-                fname = m.get("file") or (m.get("files")[0][0] if m.get("files") else f"{name}.gguf")
-                files = m.get("files") or [(fname, size)]
-                dl_url = m.get("download_url") or f"https://huggingface.co/{repo}/resolve/main/{fname}"
-                mid = f"{repo}|{fname}"
-                self.offered[mid] = {
-                    "repo": repo,
-                    "file": fname,
-                    "files": files,
-                    "size": size,
-                    "name": name,
-                    "title": m.get("title") or name,
-                    "download_url": dl_url,
-                }
-                m["id"] = mid
-                m["file"] = fname
-                m["files"] = files
-                m["download_url"] = dl_url
+                self._offer_hub_model(m)
         return diff
 
     # --- download job ------------------------------------------------------------------------------
@@ -245,14 +301,16 @@ class App:
                 return dict(self.job)
         ms = self.ms
         if ms.state_get("dl_active") == "1":
+            repo, file, total = ms.state_get("dl_repo"), ms.state_get("dl_file"), ms.state_int("dl_total")
             return {
                 "state": ms.state_get("dl_state") or "downloading",
-                "title": ms.state_get("dl_title") or ms.state_get("dl_repo") or "Terminal Download",
+                "title": ms.state_get("dl_title") or repo or "Terminal Download",
                 "done": ms.state_int("dl_done"),
-                "total": ms.state_int("dl_total"),
+                "total": total,
                 "source": "terminal",
-                "repo": ms.state_get("dl_repo"),
-                "file": ms.state_get("dl_file"),
+                "repo": repo,
+                "file": file,
+                "commands": self.download_commands({"repo": repo, "files": [(file, total)]}) if repo and file else [],
             }
         with self.lock:
             return dict(self.job)
@@ -276,7 +334,7 @@ class App:
                 "total": offer["size"],
                 "repo": offer["repo"],
                 "file": offer.get("file", ""),
-                "download_url": offer.get("download_url", ""),
+                "commands": self.download_commands(offer),
             }
         threading.Thread(target=self._install, args=(offer,), daemon=True).start()
         return 202, {"ok": True}
@@ -301,7 +359,6 @@ class App:
 
             for f, size in offer["files"]:                  # split models: every part, into the same folder
                 dest, have = ms.local_path(offer["repo"], f, size)
-                dl_url = offer.get("download_url") or f"https://huggingface.co/{offer['repo']}/resolve/main/{f}"
 
                 def on_chunk(done, b=base, sz=total_size, fn=f):
                     cur = b + done
@@ -319,17 +376,14 @@ class App:
 
                 path = dest if have else ms.download(offer["repo"], f, size, on_chunk)
                 if not path:
-                    curl_cmd = f'curl -L -C - -o "models/{f}" "{dl_url}"'
-                    cli_cmd = f'python3 utils/hf_radar.py --download "{offer["repo"]}"'
-                    sys.stderr.write(f"\n[LAUNCHPAD] Download failed. Resume via terminal with:\n  {curl_cmd}\n")
+                    resume = self.download_commands(offer)[0]["cmd"]
+                    sys.stderr.write(f"\n[LAUNCHPAD] Download stopped. It keeps what it has; to continue, run:\n  {resume}\n")
                     sys.stderr.flush()
                     ms.state_update({"dl_active": "0", "dl_state": "error"})
                     self._set(
                         state="error",
-                        error="The download did not finish (disk space or connection). Press Retry or resume via terminal.",
-                        curl_cmd=curl_cmd,
-                        cli_cmd=cli_cmd,
-                        download_url=dl_url,
+                        error="The download did not finish (disk space or connection). Press Try again to resume, "
+                              "or resume it from a terminal.",
                         file=f,
                         repo=offer["repo"],
                     )
@@ -347,7 +401,7 @@ class App:
             rc = ms.check_model_speed(paths[0], offer["size"], self.hw)
             tps = ms.state_int("measured_tps") if rc == 0 else 0
             ms.state_update({"dl_active": "0", "dl_state": "done"})
-            cmd = serve_cmd(platform.system())
+            cmd = serve_cmd(self.probe.system)
             sys.stderr.write(
                 f"[LAUNCHPAD] Ready! Speed: ~{tps} tokens/s. Start server with: {cmd}\n\n"
             )

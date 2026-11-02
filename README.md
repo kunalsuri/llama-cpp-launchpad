@@ -49,7 +49,7 @@ Everything it needs is Python 3 ([install](#troubleshooting) if the command says
 **1. Get llama.cpp**
 
 ```bash
-winget install llama.cpp        # Windows (then open a new terminal)
+winget install ggml.llamacpp    # Windows (then open a new terminal)
 brew install llama.cpp          # macOS
 ```
 
@@ -92,11 +92,21 @@ Use arrow keys to choose a model and an interface. The server starts at `http://
 
 ## Visual Setup & Tools Dashboard
 
-Run `ui` (e.g. `scripts\win\ui.bat` or `./scripts/unix/ui.sh`) to open the local browser setup interface:
+Run `ui` (e.g. `scripts\win\ui.bat` or `./scripts/unix/ui.sh`) to open the local browser setup interface. It prints
+its address (normally `http://127.0.0.1:8765/`) and opens your browser.
 
-- **1-Click Recommendations:** Answers *"What will you use it for?"*, picks the optimal model for your exact CPU/GPU/RAM, downloads with resume support, and runs a speed test.
-- **Installed tools Dashboard:** Click **Installed tools** (or visit `http://localhost:9000/#tools`) to see all detected local AI engines (Ollama, llama.cpp, LM Studio, Unsloth) with installation paths, versions, and copy-paste startup commands.
-- **Local & Private:** Listens only on `127.0.0.1` and requires zero npm or pip packages.
+- **Get a model:** answers *"What will you use it for?"*, picks the model that fits your CPU/GPU/RAM, downloads it
+  (resumable) and runs a speed test. Then it tells you the next step for *your* computer: the serve command, or, if
+  llama.cpp is missing, how to install it first.
+- **Model radar** (`/#radar`) and **What changed** (`/#history`): trending and new GGUF models on Hugging Face, checked
+  against your memory. Speeds are labelled as estimates until a model is downloaded and tested.
+- **Installed tools** (`/#tools`): Ollama, llama.cpp, LM Studio and Unsloth: found or not, version, location, and how
+  to start or install each one.
+- **Every command shown is for your OS** and only uses programs that were found: `scripts\win\...bat` and `curl.exe`
+  on Windows, `./scripts/unix/...sh` elsewhere, `winget` / `brew` / `pip` only when they are installed.
+- **Works on phones, tablets and desktops**, light and dark, keyboard and screen reader friendly; browser Back/Forward
+  work, and each view has its own address you can bookmark.
+- **Local & private:** listens only on `127.0.0.1`, loads nothing from the internet, needs no npm or pip packages.
 
 ---
 
@@ -247,6 +257,10 @@ PORT=9000 UI=translation ./scripts/unix/serve.sh
 | **Out of memory** | Pick a smaller model (a `Q4_K_M` quant is recommended for most setups). |
 | **model-setup says "GPU not used"** | Your llama.cpp binary is CPU-only. Install a CUDA, Vulkan, or Metal build. |
 | **model-setup needs Python** | Install Python 3 (`winget install Python.Python.3.12`, `brew install python`, or `sudo apt install python3`). |
+| **`Permission denied` running a `.sh` script** | Run it with bash (`bash scripts/unix/ui.sh`) or make it executable once: `chmod +x scripts/unix/*.sh scripts/mac/*.command`. |
+| **macOS won't open a `.command` file** | If you downloaded the project as a ZIP, macOS quarantines it. Right-click the file and choose **Open** once, or run `xattr -dr com.apple.quarantine .` in the project folder. |
+| **Setup page download stopped** | Press **Try again**, or run the command the page shows (`radar --download ...`): it continues the partial file instead of starting over. |
+| **Radar says it could not reach Hugging Face** | It shows your last saved scan. Check your connection or proxy, then press **Sync now**. |
 
 ---
 
@@ -256,6 +270,17 @@ PORT=9000 UI=translation ./scripts/unix/serve.sh
 
 ```bash
 python tests/run.py                    # same command on every OS and CI (-k NAME, --repeat 5, --cov)
+python tests/run.py --as mac           # pretend to be another machine (mac, mac-intel, linux, linux-arm)
+```
+
+The setup page has two layers of tests: `tests/page_harness.js` runs its script against a fake DOM (behaviour: screens,
+polling, Back), and `tests/browser_check.js` opens it in real Chromium (layout at phone/tablet/desktop widths, light
+and dark, clipboard, browser history). The browser check needs Node and Playwright, and is skipped with a reason
+without them:
+
+```bash
+npm ci && npx playwright install chromium   # once
+python tests/run.py -k TestBrowser
 ```
 
 ### Windows Dev Plumbing
