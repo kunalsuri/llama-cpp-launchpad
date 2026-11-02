@@ -246,8 +246,9 @@ class ChatServer:
             self.log.clear()
             self.job = {"state": "starting", "cmd": self.shown(argv), "port": port, "model": title,
                         "url": f"http://127.0.0.1:{port}/", "pid": proc.pid, "started": time.time()}
-        threading.Thread(target=self._read, args=(proc,), daemon=True).start()
-        threading.Thread(target=self._watch, args=(proc, port), daemon=True).start()
+        reader = threading.Thread(target=self._read, args=(proc,), daemon=True)
+        reader.start()
+        threading.Thread(target=self._watch, args=(proc, port, reader), daemon=True).start()
         return 202, self.status()
 
     def _read(self, proc) -> None:
@@ -256,7 +257,7 @@ class ChatServer:
                 with self.lock:
                     self.log.append(line.rstrip("\r\n"))
 
-    def _watch(self, proc, port: int) -> None:
+    def _watch(self, proc, port: int, reader=None) -> None:
         while True:
             code = proc.poll()
             with self.lock:
@@ -264,6 +265,8 @@ class ChatServer:
                     return
                 state = self.job.get("state")
             if code is not None:
+                if reader is not None:
+                    reader.join(10)                         # report the failure with llama-server's last words
                 if state in ("starting", "running"):
                     why = ("llama-server stopped unexpectedly" if state == "running"
                            else "llama-server stopped before it was ready")

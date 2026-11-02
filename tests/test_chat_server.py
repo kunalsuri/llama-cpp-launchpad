@@ -159,6 +159,19 @@ class TestLifecycle(Base):
         self.assertIn("failed to load model", "\n".join(s["log"]))
         self.assertIn("exit code 3", s["error"])
 
+    def test_failed_is_reported_only_with_the_whole_log(self):
+        """The output reader runs in its own thread: "failed" must wait for it, or the error line can be missing."""
+        real = self.cs._read
+
+        def slow_reader(proc):
+            time.sleep(0.5)
+            real(proc)
+        self.cs._read = slow_reader
+        with unittest.mock.patch.dict(os.environ, {"FAKE_LLAMA_EXIT": "3"}):
+            self.cs.start(self.model, "My Model")
+            s = self.wait("failed")
+        self.assertIn("failed to load model", "\n".join(s["log"]))
+
     def test_a_server_that_dies_while_running_is_failed_not_running(self):
         self.cs.start(self.model, "My Model")
         self.wait("running")

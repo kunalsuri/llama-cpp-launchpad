@@ -257,6 +257,24 @@ class TestInstall(InstallBase):
         self.assertFalse((self.bin / "llama-server").exists())
         self.assertFalse((self.bin / li.STAGING).exists())
 
+    def test_the_staging_folder_is_gone_before_the_result_is_reported(self):
+        """Regression (seen once in 3 runs): "failed" was reported before the staging folder was removed, so a page
+        polling at that moment saw the result while bin/.launchpad-install still existed. Cleanup comes first."""
+        real = li.shutil.rmtree
+
+        def slow(path, *a, **kw):
+            time.sleep(0.3)
+            return real(path, *a, **kw)
+        for digest in ("sha256:" + "0" * 64, "auto"):                  # a failed install, then a good one
+            with self.subTest(digest=digest[:10]), unittest.mock.patch.object(li.shutil, "rmtree", slow):
+                self.archives.clear()
+                self.release = json.loads(json.dumps(RELEASE))
+                self.serve("llama-b7777-bin-ubuntu-x64.tar.gz", tar_bytes("llama-b7777", {"llama-server": b"FAKE-OK"}), digest=digest)
+                self.inst = self.make()
+                self.inst.start()
+                self.wait("done", "failed")
+                self.assertFalse((self.bin / li.STAGING).exists(), "reported before cleaning up")
+
     def test_without_a_published_checksum_it_says_the_size_was_checked_only(self):
         self.serve("llama-b7777-bin-ubuntu-x64.tar.gz", tar_bytes("llama-b7777", {"llama-server": b"FAKE-OK"}), digest=None)
         self.inst.start()

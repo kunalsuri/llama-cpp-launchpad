@@ -338,7 +338,13 @@ class Installer:
 
     def _fail(self, error: str, **kw) -> None:
         self._say(error)
-        self._set(state="failed", error=error, **kw)
+        self._end(state="failed", error=error, **kw)
+
+    def _end(self, **final) -> None:
+        """Report the result, after removing the staging folder: a page that sees the result sees a clean bin/."""
+        if self.job.get("how") == "download":
+            shutil.rmtree(self.staging, ignore_errors=True)
+        self._set(**final)
 
     # macOS -----------------------------------------------------------------------------------------
     def _brew(self, _variant) -> None:
@@ -362,8 +368,6 @@ class Installer:
             self._fail(f"The download was refused as unsafe: {e}. Nothing was installed.")
         except Exception as e:                              # noqa: BLE001 - always end in a state the page can show
             self._fail(f"The install stopped: {e}. Nothing was installed.")
-        finally:
-            shutil.rmtree(self.staging, ignore_errors=True)
 
     def _download_and_install(self, variant) -> None:
         self._say(f"Looking up the latest release: {LATEST_RELEASE}")
@@ -449,4 +453,4 @@ class Installer:
         self._say(f"Installed: {found} ({version})")
         if self.on_done:
             self.on_done()
-        self._set(state="done", path=found, version=version, checksum=checksum, shadowed=shadowed)
+        self._end(state="done", path=found, version=version, checksum=checksum, shadowed=shadowed)
