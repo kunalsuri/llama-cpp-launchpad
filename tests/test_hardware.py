@@ -101,7 +101,8 @@ class TestDetection(unittest.TestCase):
 
     def commands(self, outputs):
         """Fake run_cmd: look the program up by its first argument."""
-        p = mock.patch.object(hwmod, "run_cmd", side_effect=lambda args, timeout=20: outputs.get(args[0], ""))
+        p = mock.patch.object(hwmod, "run_cmd", side_effect=lambda args, timeout=20:
+                              outputs.get(tuple(args), outputs.get(args[0], "")))     # exact command first, then program
         p.start()
         self.addCleanup(p.stop)
 
@@ -168,6 +169,107 @@ class TestDetection(unittest.TestCase):
             self.assertFalse(hwmod.detect_hw().gpu_usable)
         with mock.patch.object(hwmod, "find_llama_server", return_value=""):
             self.assertFalse(hwmod.gpu_usable())
+
+    NVIDIA_SMI_HEADER = ("+-----------------------------------------------------------------------------------------+\n"
+                         "| NVIDIA-SMI 550.54.15              Driver Version: 550.54.15      CUDA Version: 12.4     |\n"
+                         "|-----------------------------------------+------------------------+----------------------+\n")
+
+    def test_the_drivers_cuda_version_is_read_from_nvidia_smi(self):
+        """The installer must not pick a CUDA build newer than the driver supports. Plain `nvidia-smi` prints it."""
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "meminfo_16g"), LP_GPU_USABLE="0")
+        self.commands({("nvidia-smi",): self.NVIDIA_SMI_HEADER, "nvidia-smi": "NVIDIA GeForce RTX 3060, 12288\n"})
+        self.assertEqual(hwmod.detect_hw().cuda_version, "12.4")
+        self.commands({"nvidia-smi": "NVIDIA GeForce RTX 3060, 12288\n"})       # header without a CUDA version
+        self.assertEqual(hwmod.detect_hw().cuda_version, "")
+
+    def test_cuda_version_does_not_change_the_saved_hardware_signature(self):
+        """Existing users keep their .launchpad-state: the signature (and so the saved profile) is unchanged."""
+        a = hwmod.Hw(ram_mb=16000, cores=8, gpu_kind="nvidia", gpu_name="G", vram_mb=8192, gpu_usable=True)
+        b = hwmod.Hw(ram_mb=16000, cores=8, gpu_kind="nvidia", gpu_name="G", vram_mb=8192, gpu_usable=True)
+        b.cuda_version = "12.4"
+        self.assertEqual(a.sig(), b.sig())
+        self.assertEqual(a.sig(), "16000-8192-nvidia-1-8")
+
+    def drm(self, cards):
+        """A fake /sys/class/drm: {"card0": "0x1002", ...} -> card*/device/vendor files."""
+        import tempfile
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        for card, vendor in cards.items():
+            (root / card / "device").mkdir(parents=True)
+            (root / card / "device" / "vendor").write_text(vendor + "\n")
+        p = mock.patch.object(hwmod, "DRM_DIR", root)
+        p.start()
+        self.addCleanup(p.stop)
+        return root
+
+    def test_an_amd_gpu_on_linux_is_found_without_changing_the_saved_profile(self):
+        """AMD (and Intel Arc) cards run llama.cpp's Vulkan build. Finding one must not change recommendations or the
+        saved state for existing users: gpu_kind and the signature stay as they were; only other_gpu is set."""
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "meminfo_16g"))
+        self.commands({})
+        self.drm({"card0": "0x1002", "renderD128": "0x1002"})
+        with mock.patch.object(hwmod, "gpu_usable", return_value=False):
+            hw = hwmod.detect_hw()
+        self.assertEqual((hw.gpu_kind, hw.other_gpu, hw.other_gpu_usable), ("none", "AMD graphics", False))
+        self.assertEqual(hw.sig(), hwmod.Hw(ram_mb=hw.ram_mb, cores=hw.cores).sig())
+        self.assertTrue(any("card0" in line and "AMD" in line for line in hw.gpu_looked), hw.gpu_looked)
+
+    def test_integrated_intel_graphics_on_linux_keep_the_cpu_build_and_say_why(self):
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "meminfo_16g"))
+        self.commands({})
+        self.drm({"card0": "0x8086"})
+        hw = hwmod.detect_hw()
+        self.assertEqual(hw.other_gpu, "")
+        self.assertTrue(any("Intel" in line and "processor" in line for line in hw.gpu_looked), hw.gpu_looked)
+
+    def test_no_display_devices_is_logged_as_a_miss(self):
+        """Rule 5: a search that finds nothing says where it looked."""
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "meminfo_16g"))
+        self.commands({})
+        root = self.drm({})
+        hw = hwmod.detect_hw()
+        self.assertEqual(hw.other_gpu, "")
+        self.assertTrue(any(str(root) in line for line in hw.gpu_looked), hw.gpu_looked)
+
+    def test_windows_display_adapter_names_pick_amd_or_intel_arc_only(self):
+        pick = hwmod.pick_other_gpu
+        self.assertEqual(pick(["Intel(R) UHD Graphics 770", "AMD Radeon RX 7900 XTX"])[0], "AMD Radeon RX 7900 XTX")
+        self.assertEqual(pick(["Intel(R) Arc(TM) A770 Graphics"])[0], "Intel(R) Arc(TM) A770 Graphics")
+        name, why = pick(["Intel(R) UHD Graphics 770"])
+        self.assertEqual(name, "")
+        self.assertIn("processor", why)
+        self.assertEqual(pick(["Microsoft Basic Display Adapter"])[0], "")
+        self.assertEqual(pick([])[0], "")
+
+    def test_windows_adapters_are_read_from_the_registry(self):
+        self.system("Windows")
+        self.env()
+        self.commands({})
+        with mock.patch.object(hwmod, "windows_display_adapters", return_value=["AMD Radeon RX 6800"]), \
+                mock.patch.object(hwmod, "read_ram_mb", return_value=16384), \
+                mock.patch.object(hwmod, "gpu_usable", return_value=True):
+            hw = hwmod.detect_hw()
+        self.assertEqual((hw.gpu_kind, hw.other_gpu, hw.other_gpu_usable), ("none", "AMD Radeon RX 6800", True))
+
+    def test_reading_windows_adapters_never_raises(self):
+        """Runs for real on every OS: a list of names on Windows, [] elsewhere (no winreg)."""
+        names = hwmod.windows_display_adapters()
+        self.assertIsInstance(names, list)
+        self.assertTrue(all(isinstance(n, str) for n in names))
+        if sys.platform != "win32":                         # the real OS, not a --as persona
+            self.assertEqual(names, [])
+
+    def test_an_nvidia_gpu_skips_the_other_gpu_search(self):
+        self.system("Linux")
+        self.env(MEMINFO_FILE=str(FIXTURES / "meminfo_16g"), LP_GPU_USABLE="1")
+        self.commands({"nvidia-smi": "RTX 3060, 12288\n"})
+        self.drm({"card0": "0x1002"})
+        self.assertEqual(hwmod.detect_hw().other_gpu, "")
 
     def test_garbage_from_nvidia_smi_means_no_gpu(self):
         self.system("Linux")

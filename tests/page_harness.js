@@ -170,6 +170,33 @@ function routes(job) {
   };
 }
 
+// Start chatting: a finished download of model "o/M-GGUF|m.gguf", and the chat's states as the server reports them.
+const PREVIEW = { cmd: "llama-server -m /p/models/m.gguf --port 8080", port: 8080, busy: null };
+const IDLE_CHAT = { state: "idle", log: [] };
+const STARTING = { state: "starting", cmd: PREVIEW.cmd, port: 8080, url: "http://127.0.0.1:8080/", model: "M", log: ["loading"] };
+const RUNNING = { ...STARTING, state: "running" };
+const STOPPED = { ...STARTING, state: "stopped" };
+function chatRoutes({ state = STATE, progress, chats, preview = PREVIEW, posts = [], start = STARTING, stop = STOPPED }) {
+  let i = 0;
+  const done = progress || { state: "done", id: "o/M-GGUF|m.gguf", title: "M", bench: "ok", tps: 20 };
+  let polls = 0;
+  return (path, opts, full) => {
+    if (path === "/api/state") return state;
+    if (path === "/api/progress") return progress ? done : (++polls === 1 ? DOWNLOADING : done);
+    if (path === "/api/chat" && opts && opts.method === "POST") return {};
+    if (path === "/api/chat") {
+      const chat = chats[Math.min(i++, chats.length - 1)];
+      return full.includes("id=") ? { chat, preview } : { chat };
+    }
+    if (path === "/api/chat/start" || path === "/api/chat/stop") {
+      posts.push({ path, body: JSON.parse(opts.body) });
+      i = Math.max(i, 1);
+      return path === "/api/chat/start" ? start : stop;
+    }
+    return {};
+  };
+}
+
 const scenarios = {
   async "opening the tools view during a download is not undone by progress polling"() {
     const job = { current: DOWNLOADING };
@@ -650,7 +677,276 @@ const scenarios = {
     const sel = tabs.filter((t) => t.getAttribute("aria-selected") === "true").map((t) => t.getAttribute("data-tab"));
     if (sel.join() !== "gpu") return "aria-selected on: " + sel.join();
   },
+
+  // --- Start chatting ------------------------------------------------------------------------------------------
+  async "the done screen offers Start chatting and shows the exact command it will run"() {
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT] }) });
+    await p.start();
+    await p.advance(1000);
+    if (p.visible() !== "v-done") return "expected the done screen, got " + p.visible();
+    if (!p.button("done-next", "Start chatting")) return "no Start chatting button: " + p.text("done-next");
+    if (!p.text("done-next").includes(PREVIEW.cmd)) return "the command it runs is not shown: " + p.text("done-next");
+    if (/\b(null|undefined)\b/.test(p.text("done-next"))) return "null or undefined on screen (Linux has no double-click tip): " + p.text("done-next");
+    if (!p.state.calls.includes("/api/chat?id=" + encodeURIComponent("o/M-GGUF|m.gguf"))) return "did not ask about this model: " + p.state.calls.join(" ");
+  },
+
+  async "without llama-server there is no Start chatting button, only what is missing"() {
+    const st = { ...STATE, llama_server: false };
+    const p = makePage({ routes: chatRoutes({ state: st, chats: [IDLE_CHAT] }) });
+    await p.start();
+    await p.advance(1000);
+    if (p.button("done-next", "Start chatting")) return "a Start chatting button was shown without llama-server";
+    if (!/llama\.cpp is not installed/.test(p.text("done-next"))) return "missing piece not named: " + p.text("done-next");
+  },
+
+  async "Start chatting goes starting -> running, links to the chat, and Stop stops it"() {
+    const posts = [];
+    const p = makePage({ routes: chatRoutes({ posts, chats: [IDLE_CHAT, STARTING, STARTING, RUNNING, RUNNING, STOPPED],
+      start: STARTING, stop: STOPPED }) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    if (posts[0].path !== "/api/chat/start" || posts[0].body.id !== "o/M-GGUF|m.gguf") return "start request: " + JSON.stringify(posts);
+    if (!/Starting/.test(p.text("chat-box"))) return "no starting state: " + p.text("chat-box");
+    if (!p.button("chat-box", "Stop")) return "no Stop while starting";
+    await p.advance(3000);
+    const box = p.el("chat-box");
+    if (!/running/i.test(p.text("chat-box"))) return "never showed running: " + p.text("chat-box");
+    const link = findEl(box, (e) => e.getAttribute && e.getAttribute("href") === RUNNING.url);
+    if (!link || !/Open the chat/.test(link.text())) return "no link to the chat at " + RUNNING.url;
+    if (link.getAttribute("rel") !== "noopener noreferrer") return "chat link must not get access to this page";
+    p.button("chat-box", "Stop").click(); await p.settle();
+    if (posts[posts.length - 1].path !== "/api/chat/stop") return "Stop did not ask the server: " + JSON.stringify(posts);
+    if (!/stopped/i.test(p.text("chat-box"))) return "not shown as stopped: " + p.text("chat-box");
+    if (!p.button("chat-box", "Start chatting")) return "cannot start again after stopping";
+  },
+
+  async "a failed start shows why and llama-server's own output"() {
+    const failed = { state: "failed", error: "llama-server stopped before it was ready (exit code 1).", cmd: PREVIEW.cmd,
+      log: ["fake llama-server args", "error: failed to load model 'm.gguf'"], model: "M" };
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT, STARTING, failed], start: STARTING }) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    await p.advance(3000);
+    const t = p.text("chat-box");
+    if (!t.includes("exit code 1")) return "no reason: " + t;
+    if (!t.includes("failed to load model")) return "no log: " + t;
+    if (!p.button("chat-box", "Try again")) return "no way to try again";
+  },
+
+  async "a busy port says what is using it and offers the next free port"() {
+    const posts = [];
+    const busy = { ...PREVIEW, busy: { port: 8080, used_by: "Docker Desktop.exe (process 5150)", free_port: 8081,
+      looked: ["HTTP on 127.0.0.1:8080: no answer over HTTP", "netstat: process 5150 listens on 8080"] } };
+    const p = makePage({ routes: chatRoutes({ posts, preview: busy, chats: [IDLE_CHAT, STARTING], start: STARTING }) });
+    await p.start();
+    await p.advance(1000);
+    const t = p.text("done-next");
+    if (!t.includes("Port 8080 is in use by Docker Desktop.exe (process 5150)")) return "does not say who uses the port: " + t;
+    if (p.button("done-next", "Start chatting")) return "offered to start on the busy port";
+    const alt = p.button("done-next", "Start on port 8081");
+    if (!alt) return "next free port not offered: " + t;
+    alt.click(); await p.settle();
+    if (posts[0].body.port !== 8081) return "did not start on 8081: " + JSON.stringify(posts);
+  },
+
+  async "a start refused by the server shows its message instead of hanging"() {
+    const refused = { error: "Port 8080 is already in use by ollama (process 7). Port 8081 is free.",
+      port_busy: { port: 8080, used_by: "ollama (process 7)", free_port: 8081, looked: [] } };
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT], start: refused }) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    const t = p.text("chat-box");
+    if (!t.includes("already in use by ollama")) return "refusal not shown: " + t;
+    if (!p.button("chat-box", "Start on port 8081")) return "next free port not offered after refusal: " + t;
+  },
+
+  async "leaving the done screen stops asking about the chat"() {
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT, STARTING, RUNNING], start: STARTING }) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    await p.advance(2000);
+    await p.click("tools-btn");
+    const before = p.state.calls.filter((c) => c.startsWith("/api/chat")).length;
+    await p.advance(20000);
+    const after = p.state.calls.filter((c) => c.startsWith("/api/chat")).length;
+    if (after !== before) return `kept polling the chat from another view: ${after - before} requests`;
+  },
+
+  async "a chat started on the done screen is offered on the first screen after Get another model"() {
+    // Regression (review on #3): the done screen did not update S.chat, so the first screen showed no Open/Stop.
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT, STARTING, RUNNING], start: STARTING }) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    await p.advance(3000);
+    if (!/running/i.test(p.text("chat-box"))) return "chat never ran: " + p.text("chat-box");
+    await p.click("again");
+    if (p.visible() !== "v-use") return "expected the first screen, got " + p.visible();
+    const link = findEl(p.el("warn"), (e) => e.getAttribute && e.getAttribute("href") === RUNNING.url);
+    if (!link) return "the running chat is not offered on the first screen: " + p.text("warn");
+    if (!p.button("warn", "Stop")) return "no Stop on the first screen";
+  },
+
+  async "polling a running chat keeps its controls, an opened output panel, and does not repeat the announcement"() {
+    // Regression (review on #3): every poll rebuilt the panel, dropping keyboard focus on Open/Stop and closing the
+    // output the user had opened, and re-announced "running" to screen readers every 3 seconds.
+    const running = { ...RUNNING, log: ["line 1"] };
+    const later = { ...RUNNING, log: ["line 1", "line 2"] };
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT, STARTING, running, later, later, later], start: STARTING }) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    await p.advance(2000);
+    const stop = p.button("chat-box", "Stop");
+    const details = findEl(p.el("chat-box"), (e) => e.text && /output/.test(e.text()) && e.getAttribute && e.getAttribute("class") === null && e.children.some((c) => c.className === "log"));
+    if (!stop || !details) return "running panel incomplete: " + p.text("chat-box");
+    details.setAttribute("open", "");                 // the user opens llama-server's output
+    stop.focus();
+    const said = [];
+    const live = p.el("live");
+    let last = live.textContent;
+    for (let i = 0; i < 4; i++) { await p.advance(3000); if (live.textContent !== last) { said.push(live.textContent); last = live.textContent; } }
+    if (p.button("chat-box", "Stop") !== stop) return "the Stop button was rebuilt by polling (keyboard focus is lost)";
+    if (p.focused() !== stop) return "focus moved off Stop";
+    if (details.getAttribute("open") === null) return "the opened output was closed by polling";
+    if (!p.text("chat-box").includes("line 2")) return "new output was not shown: " + p.text("chat-box");
+    if (said.length) return "re-announced on polling: " + said.join(" | ");
+  },
+
+  async "a chat that is running when the page opens can be opened or stopped from the first screen"() {
+    const posts = [];
+    const st = { ...STATE, chat: RUNNING };
+    const p = makePage({ routes: chatRoutes({ state: st, progress: { state: "idle" }, posts, chats: [RUNNING], stop: STOPPED }) });
+    await p.start();
+    if (p.visible() !== "v-use") return "expected the first screen, got " + p.visible();
+    const warn = p.el("warn");
+    const link = findEl(warn, (e) => e.getAttribute && e.getAttribute("href") === RUNNING.url);
+    if (!link) return "no link to the running chat: " + p.text("warn");
+    p.button("warn", "Stop").click(); await p.settle();
+    if (!posts.some((x) => x.path === "/api/chat/stop")) return "Stop did not ask the server";
+    if (findEl(p.el("warn"), (e) => e.getAttribute && e.getAttribute("href") === RUNNING.url)) return "still offers the stopped chat";
+  },
 };
+
+// --- Installing llama.cpp ----------------------------------------------------------------------------------------
+const OFFER = { how: "download", kind: "cpu", label: "CPU build", into: "/p/proj/bin" };
+const NEED = { found: "", works: false, version: "", need: "missing", offer: OFFER, job: { state: "idle", log: [] } };
+function llamaRoutes({ infos, posts = [], state, start = { state: "checking", log: [] } }) {
+  let i = 0;
+  return (path, opts) => {
+    if (path === "/api/state") return state || { ...STATE, llama_server: false, llama: infos[0] };
+    if (path === "/api/progress") return { state: "idle" };
+    if (path === "/api/llama") return infos[Math.min(i++, infos.length - 1)];
+    if (path === "/api/llama/install") { posts.push(JSON.parse(opts.body)); i = Math.max(i, 1); return start; }
+    return {};
+  };
+}
+const job = (j) => ({ ...NEED, job: { log: [], ...j } });
+
+Object.assign(scenarios, {
+  async "the llama.cpp notice offers to install it, and the install view says from where and to where"() {
+    const p = makePage({ routes: llamaRoutes({ infos: [NEED] }) });
+    await p.start();
+    const b = p.button("warn", "Install llama.cpp");
+    if (!b) return "no install button in the notice: " + p.text("warn");
+    b.click(); await p.settle();
+    if (p.visible() !== "v-llama") return "install view did not open: " + p.visible();
+    if (p.location.hash !== "#llama") return "the install view has no address: " + p.location.hash;
+    const t = p.text("llama-body");
+    if (!t.includes("github.com/ggml-org/llama.cpp") || !t.includes("/p/proj/bin")) return "does not say from where and to where: " + t;
+    if (!/no admin/i.test(t)) return "does not say it needs no admin rights: " + t;
+    if (!p.button("llama-body", "Install llama.cpp (CPU build)")) return "no install button in the view: " + t;
+  },
+
+  async "installing shows progress, then the version, how it was checked, and a copy that shadows it"() {
+    const posts = [];
+    const done = job({ state: "done", path: "/usr/bin/llama-server", version: "version: 4242 (abc1234)", checksum: "verified",
+      shadowed: "Another llama-server comes first: /usr/bin/llama-server." });
+    const p = makePage({ hash: "#llama", routes: llamaRoutes({ posts, infos: [NEED,
+      job({ state: "downloading", done: 50, total: 100, kind: "cpu", why: "CPU build." }),
+      job({ state: "verifying", done: 100, total: 100 }), done, { ...done, found: "/usr/bin/llama-server", works: true, need: "" }] }) });
+    await p.start();
+    p.button("llama-body", "Install llama.cpp").click(); await p.settle();
+    if (JSON.stringify(posts) !== "[{\"variant\":\"auto\"}]") return "install request: " + JSON.stringify(posts);
+    const bar = findEl(p.el("llama-body"), (e) => e.getAttribute && e.getAttribute("role") === "progressbar");
+    if (!bar || bar.getAttribute("aria-valuenow") !== "50") return "no progress at 50%: " + p.text("llama-body");
+    await p.advance(3000);
+    const t = p.text("llama-body");
+    if (!t.includes("4242")) return "version not shown: " + t;
+    if (!/SHA-256/.test(t)) return "does not say it was checked against the published checksum: " + t;
+    if (!t.includes("Another llama-server comes first")) return "shadowing copy not named: " + t;
+  },
+
+  async "an install without a published checksum says only the size was checked"() {
+    const p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [job({ state: "done", path: "/p/proj/bin/llama-server",
+      version: "version: 1", checksum: "none-published", shadowed: "" })] }) });
+    await p.start();
+    if (!/no checksum/i.test(p.text("llama-body"))) return "no checksum note: " + p.text("llama-body");
+  },
+
+  async "a failed install shows why, llama-server's output, and offers the CPU build"() {
+    const posts = [];
+    const failed = job({ state: "failed", error: "The downloaded Vulkan build did not start.", cpu_fallback: true,
+      log: ["error while loading shared libraries: libvulkan.so.1"] });
+    const p = makePage({ hash: "#llama", routes: llamaRoutes({ posts, infos: [failed] }) });
+    await p.start();
+    const t = p.text("llama-body");
+    if (!t.includes("did not start") || !t.includes("libvulkan.so.1")) return "error or log missing: " + t;
+    const cpu = p.button("llama-body", "Install the CPU build instead");
+    if (!cpu) return "CPU build not offered: " + t;
+    cpu.click(); await p.settle();
+    if (posts[0].variant !== "cpu") return "did not ask for the CPU build: " + JSON.stringify(posts);
+  },
+
+  async "macOS with Homebrew shows the brew command; without it, only the instructions and no button"() {
+    const brew = { ...NEED, offer: { how: "brew", cmd: "brew install llama.cpp" } };
+    let p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [brew] }) });
+    await p.start();
+    if (!p.button("llama-body", "Install with Homebrew")) return "no Homebrew button: " + p.text("llama-body");
+    if (!p.text("llama-body").includes("brew install llama.cpp")) return "brew command not shown";
+    const manual = { ...NEED, offer: { how: "manual" } };
+    p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [manual], state: { ...STATE, llama_server: false, llama: manual,
+      llama_install: { install: "Install Homebrew (see brew.sh), then run: brew install llama.cpp" } } }) });
+    await p.start();
+    if (p.button("llama-body", "Install")) return "an install button without a way to install";
+    if (!p.text("llama-body").includes("Install Homebrew")) return "instructions missing: " + p.text("llama-body");
+  },
+
+  async "a build that cannot use the GPU is explained, with a way to get one that can"() {
+    const nogpu = { ...NEED, found: "/usr/bin/llama-server", works: true, version: "version: 1", need: "no-gpu",
+      offer: { how: "download", kind: "cuda", label: "CUDA build for your NVIDIA graphics card", into: "/p/proj/bin" } };
+    const st = { ...STATE, llama_server: true, gpu_unused: true, llama: nogpu };
+    const p = makePage({ routes: llamaRoutes({ infos: [nogpu], state: st }) });
+    await p.start();
+    const b = p.button("warn", "Get a build that uses it");
+    if (!b) return "no way to get a GPU build: " + p.text("warn");
+    b.click(); await p.settle();
+    const t = p.text("llama-body");
+    if (!t.includes("/usr/bin/llama-server") || !/cannot use your graphics card/.test(t)) return "the reason is not explained: " + t;
+    if (!p.button("llama-body", "Install llama.cpp (CUDA build")) return "no CUDA install button: " + t;
+  },
+
+  async "leaving the install view stops asking about the install"() {
+    const p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [job({ state: "downloading", done: 1, total: 100 })] }) });
+    await p.start();
+    await p.click("tools-btn");
+    const before = p.state.calls.filter((c) => c === "/api/llama").length;
+    await p.advance(20000);
+    const after = p.state.calls.filter((c) => c === "/api/llama").length;
+    if (after !== before) return `kept polling from another view: ${after - before} requests`;
+  },
+});
+
+function findEl(root, pred) {
+  if (!root) return null;
+  if (pred(root)) return root;
+  for (const c of root.children || []) { const f = findEl(c, pred); if (f) return f; }
+  return null;
+}
 
 (async () => {
   let failed = 0;

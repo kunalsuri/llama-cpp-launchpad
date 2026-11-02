@@ -20,12 +20,14 @@ import secrets
 import sys
 import threading
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import chat_server
 import detect_tools
 import hf_discover
+import llama_install
 
 PAGE = Path(__file__).resolve().parent.parent / "ui" / "setup" / "index.html"
 USES = ("chat", "coding", "translation", "fast")
@@ -103,6 +105,17 @@ OFF_PATH = {
                 "Add its folder to your PATH.",
 }
 START_CMD = {"ollama": "ollama serve", "lmstudio": "lms server start"}      # llama.cpp: the project's serve script
+CHAT_BUSY = ("reserved", "starting", "running", "stopping")             # chat_server.ChatServer states
+INSTALL_BUSY = ("checking", "downloading", "verifying", "installing")    # llama_install.Installer states
+# What the page says when model_setup.download() fails, by the reason it gives (model_setup.last_download_error).
+DOWNLOAD_ERRORS = {
+    "": "The download did not finish (disk space or connection). Press Try again to resume, or resume it from a terminal.",
+    "disk": "There is not enough free disk space for this model. Free some space, then press Try again.",
+    "network": "The connection to Hugging Face failed. Press Try again to resume, or resume it from a terminal.",
+    "size": "The download stopped before the whole file arrived. Press Try again to resume, or resume it from a terminal.",
+    "checksum": "The downloaded file does not match the SHA-256 checksum Hugging Face publishes, so it was not kept. "
+                "Press Try again to download it from the start.",
+}
 CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
        "img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
@@ -151,24 +164,115 @@ class App:
         self.offered = {}                       # id -> what may be downloaded; the browser can only pick from this
         self.lock = threading.Lock()
         self.job = {"state": "idle"}
+        # "Start chatting": the one llama-server this page runs. It follows self.probe, which tests replace.
+        self.chat = chat_server.ChatServer(
+            find_server=lambda: [p] if (p := ms.find_llama_server()) else [],
+            system=lambda: self.probe.system, which=lambda name: self.probe.which(name),
+            run=lambda args, timeout=20: self.probe.run(args, timeout))
+        # Installing llama.cpp: into the project's bin/ (Windows, Linux) or with Homebrew (macOS, if found).
+        self.bin_dir = detect_tools.ROOT / "bin"
+        self.llama_version = llama_install.server_version       # `llama-server --version`: does the copy found run?
+        self.installer = self.make_installer()
+        # Starting a chat and installing llama.cpp exclude each other: an install replaces the files a chat runs.
+        self.run_lock = threading.Lock()
+
+    def make_installer(self, **kw):
+        args = dict(bin_dir=lambda: self.bin_dir, system=lambda: self.probe.system, machine=lambda: self.probe.machine,
+                    gpu_kind=self._install_gpu_kind, cuda_max=lambda: getattr(self.hw, "cuda_version", ""),
+                    find=lambda: self.ms.find_llama_server(),
+                    which=lambda name: self.probe.which(name), version=lambda argv: self.llama_version(argv),
+                    on_done=self._after_install)
+        args.update(kw)
+        return llama_install.Installer(**args)
+
+    def _install_gpu_kind(self) -> str:
+        """Which build to install: an AMD / Intel Arc card (hw.other_gpu) wants the Vulkan build, like a GPU set by
+        hand. hw.gpu_kind itself is left alone, so recommendations do not change."""
+        kind = self.hw.gpu_kind
+        return "gpu" if kind == "none" and getattr(self.hw, "other_gpu", "") else kind
+
+    def _after_install(self) -> None:
+        """A new llama.cpp build may use the GPU where the old one could not: detect again, so picks follow."""
+        self.hw = self.ms.detect_hw()
+        self.ms.save_hw(self.hw)
+
+    def llama_info(self) -> dict:
+        """What llama-server the serve scripts would use, whether it runs, and why (and how) to install one."""
+        found = self.ms.find_llama_server()
+        works, out = self.llama_version([found]) if found else (False, "")
+        version = next((line.strip() for line in out.splitlines() if "version" in line.lower()), "") if works else ""
+        return {"found": found, "works": works, "version": version,
+                "need": llama_install.why_install(found, works, self.hw),
+                "offer": self.installer.offer(), "job": self.installer.status()}
+
+    def llama_install(self, body: dict):
+        variant = body.get("variant", "auto")
+        if variant not in ("auto", "cpu"):
+            return 400, {"error": "bad request"}
+        with self.run_lock:
+            if self.chat.status().get("state") in CHAT_BUSY:
+                return 409, {"error": "Stop the chat first, and wait until it has stopped: llama-server cannot be "
+                                      "replaced while it is running."}
+            if not self.llama_info()["need"]:
+                return 409, {"error": "A working llama-server that can use this computer is already installed."}
+            return self.installer.start(variant)
+
+    def close(self) -> None:
+        """The page server is stopping: stop the chat it started (and nothing else)."""
+        self.chat.stop()
 
     # --- read-only answers ------------------------------------------------------------------------
     def state(self) -> dict:
         ms, hw = self.ms, self.hw
         gpu = hw.gpu_kind in ("nvidia", "gpu") and hw.gpu_usable
+        llama = self.llama_info()
         return {
             "token": self.token,
             "ram_gb": (hw.ram_mb + 512) // 1024,
             "gpu": hw.gpu_name if hw.gpu_kind != "none" else "",
             "vram_gb": hw.vram_mb // 1024,
-            "gpu_unused": hw.gpu_kind in ("nvidia", "gpu") and not hw.gpu_usable,
+            "gpu_unused": (hw.gpu_kind in ("nvidia", "gpu") and not hw.gpu_usable)
+                          or bool(getattr(hw, "other_gpu", "") and not getattr(hw, "other_gpu_usable", False)),
             "mode": "gpu" if gpu or hw.gpu_kind == "apple" else "cpu",
-            "llama_server": bool(ms.find_llama_server()),
+            "llama_server": bool(llama["found"] and llama["works"]),     # found AND runs (rule 3)
+            "llama": llama,
             "llama_install": install_hint("llama-cpp", self.probe),
             "installed": ms.state_get("installed"),
             "os": os_name(self.probe.system),
             "serve_cmd": serve_cmd(self.probe.system),
+            "chat": self.chat.status(),
         }
+
+    # --- Start chatting ------------------------------------------------------------------------------
+    def _chat_model(self, mid):
+        """An offered, fully downloaded model -> (path of its first part, title), or (http status, error body)."""
+        offer = self.offered.get(mid) if isinstance(mid, str) else None
+        if not offer:
+            return None, (404, {"error": "Unknown model. Reload the page."})
+        paths = [self.ms.local_path(offer["repo"], f, size) for f, size in offer["files"]]
+        if not all(have for _, have in paths):
+            return None, (409, {"error": f"{offer['title']} is not downloaded yet. Get it first."})
+        return (paths[0][0], offer["title"]), None
+
+    def chat_status(self, mid=None) -> dict:
+        out = {"chat": self.chat.status()}
+        if mid:
+            found, _ = self._chat_model(mid)
+            if found:
+                out["preview"] = self.chat.preview(found[0])
+        return out
+
+    def chat_start(self, body: dict):
+        port = body.get("port")
+        if port is not None and (type(port) is not int or not 1024 <= port <= 65535):
+            return 400, {"error": "The port must be a number from 1024 to 65535."}
+        with self.run_lock:
+            if self.installer.status().get("state") in INSTALL_BUSY:
+                return 409, {"error": "llama.cpp is being installed. Start the chat when the install has finished."}
+            found, refused = self._chat_model(body.get("id"))
+            if refused:
+                return refused
+            return self.chat.start(found[0], found[1], port)
 
     def tools(self, ids=None, verbose: bool = False) -> dict:
         """Which of Ollama / llama.cpp / LM Studio / Unsloth are installed: detect_tools.py, plus next-step hints."""
@@ -329,6 +433,7 @@ class App:
                 return 409, {"error": "Another download is running."}
             self.job = {
                 "state": "downloading",
+                "id": mid,                      # the page starts the chat with this model when it is done
                 "title": offer["title"],
                 "done": 0,
                 "total": offer["size"],
@@ -382,8 +487,7 @@ class App:
                     ms.state_update({"dl_active": "0", "dl_state": "error"})
                     self._set(
                         state="error",
-                        error="The download did not finish (disk space or connection). Press Try again to resume, "
-                              "or resume it from a terminal.",
+                        error=DOWNLOAD_ERRORS.get(getattr(ms, "last_download_error", ""), DOWNLOAD_ERRORS[""]),
                         file=f,
                         repo=offer["repo"],
                     )
@@ -473,6 +577,10 @@ def make_handler(app: App):
                 return self.reply(200, app.radar_history(base=base))
             if url.path == "/api/progress":
                 return self.reply(200, app.snapshot())
+            if url.path == "/api/chat":
+                return self.reply(200, app.chat_status((q.get("id") or [None])[0]))
+            if url.path == "/api/llama":
+                return self.reply(200, app.llama_info())
             if url.path == "/api/tools":
                 ids = q.get("tool") or None
                 if ids and any(i not in detect_tools.SPECS for i in ids):
@@ -504,8 +612,19 @@ def make_handler(app: App):
                 body = json.loads(raw or b"{}")
             except (ValueError, OSError):
                 return self.reply(400, {"error": "bad request"})
-            if urlparse(self.path).path == "/api/install" and isinstance(body, dict) and isinstance(body.get("id"), str):
+            path = urlparse(self.path).path
+            if not isinstance(body, dict):
+                return self.reply(400, {"error": "bad request"})
+            if path == "/api/install" and isinstance(body.get("id"), str):
                 code, out = app.start_install(body["id"])
+                return self.reply(code, out)
+            if path == "/api/chat/start":
+                code, out = app.chat_start(body)
+                return self.reply(code, out)
+            if path == "/api/chat/stop":
+                return self.reply(200, app.chat.stop())
+            if path == "/api/llama/install":
+                code, out = app.llama_install(body)
                 return self.reply(code, out)
             self.reply(404, {"error": "not found"})
 
@@ -514,6 +633,11 @@ def make_handler(app: App):
 
 class Server(ThreadingHTTPServer):
     allow_reuse_address = False         # on Windows reuse would let another program share (and read) our port
+
+    def server_bind(self):
+        # Bind only: HTTPServer.server_bind also runs socket.getfqdn(), which can take seconds on macOS, per port tried.
+        super(HTTPServer, self).server_bind()
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
 
 
 def serve(ms, port: int = 8765, open_browser: bool = True, initial_hash: str = "") -> int:
@@ -540,4 +664,6 @@ def serve(ms, port: int = 8765, open_browser: bool = True, initial_hash: str = "
         pass
     finally:
         server.server_close()
+        if hasattr(app, "close"):
+            app.close()                 # stops the llama-server this page started, if any
     return 0

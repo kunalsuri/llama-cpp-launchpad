@@ -69,7 +69,7 @@ class TestLaunchers(unittest.TestCase):
     def test_every_unix_launcher_has_windows_and_mac_siblings(self):
         scripts = ROOT / "scripts"
         stems = {p.stem for p in (scripts / "unix").glob("*.sh")} - {"test"}      # test.sh is a developer tool
-        self.assertTrue({"model-setup", "serve", "ui", "detect-tools"} <= stems)
+        self.assertTrue({"model-setup", "serve", "ui", "detect-tools", "launchpad"} <= stems)
         for stem in stems:
             self.assertTrue((scripts / "mac" / f"{stem}.command").is_file(), f"mac/{stem}.command missing")
             self.assertTrue(any((scripts / "win" / f"{stem}{ext}").is_file() for ext in (".bat", ".ps1")),
@@ -193,16 +193,74 @@ class TestLauncherExitStatus(unittest.TestCase):
         """Run the launchers that exist for this OS with an option no tool accepts: argparse exits with 2."""
         scripts = ROOT / "scripts"
         if sys.platform == "win32":
-            runs = [[str(scripts / "win" / f"{stem}.bat")] for stem in ("detect-tools", "model-setup")]
+            runs = [[str(scripts / "win" / f"{stem}.bat")] for stem in ("detect-tools", "model-setup", "launchpad")]
         else:
             runs = [["bash", str(scripts / "unix" / "detect-tools.sh")], ["bash", str(scripts / "mac" / "detect-tools.command")],
-                    ["bash", str(scripts / "unix" / "model-setup.sh")]]
+                    ["bash", str(scripts / "unix" / "model-setup.sh")], ["bash", str(scripts / "unix" / "launchpad.sh")],
+                    ["bash", str(scripts / "mac" / "launchpad.command")]]
         self.assertTrue(runs)
         for cmd in runs:
             with self.subTest(cmd=Path(cmd[-1]).name):
                 done = subprocess.run(cmd + ["--definitely-not-an-option"], stdin=subprocess.DEVNULL,
                                       capture_output=True, text=True, timeout=120)
                 self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+
+
+class TestLaunchpadLauncher(unittest.TestCase):
+    """`launchpad` is the one launcher a new user needs: it opens the setup page, from which everything else
+    (getting llama.cpp, a model, and starting the chat) can be done without a terminal."""
+
+    def launch(self):
+        scripts = ROOT / "scripts"
+        if sys.platform == "win32":
+            cmd = [str(scripts / "win" / "launchpad.bat")]
+        else:
+            cmd = ["bash", str(scripts / "unix" / "launchpad.sh")]
+        env = dict(os.environ, PYTHONUNBUFFERED="1")
+        proc = subprocess.Popen(cmd + ["--no-browser", "--port", "0"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, env=env)
+
+        def stop():
+            if proc.poll() is None:
+                if sys.platform == "win32":     # the .bat's python child is not killed with cmd.exe: end the tree
+                    subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=60)
+                else:
+                    proc.terminate()
+            try:
+                proc.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+        self.addCleanup(stop)
+        return proc
+
+    def test_launchpad_opens_the_setup_page(self):
+        import http.client
+        import threading
+        proc = self.launch()
+        found, seen = {}, []
+
+        def read():
+            for line in proc.stdout:
+                seen.append(line)
+                m = re.search(r"http://127\.0\.0\.1:(\d+)/", line)
+                if m:
+                    found["port"] = int(m.group(1))
+                    return
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        reader.join(60)
+        self.assertIn("port", found, "the launcher never printed the page address: " + "".join(seen))
+        conn = http.client.HTTPConnection("127.0.0.1", found["port"], timeout=30)
+        conn.request("GET", "/")
+        page = conn.getresponse().read()
+        conn.close()
+        self.assertIn(b"What will you use it for?", page)
+
+    def test_existing_launchers_are_unchanged(self):
+        """Existing users keep every launcher: launchpad is added beside ui, not instead of it."""
+        self.assertIn('model-setup.sh" --ui', source(ROOT / "scripts" / "unix" / "ui.sh"))
+        self.assertIn("model-setup.bat\" --ui", source(ROOT / "scripts" / "win" / "ui.bat"))
 
 
 class TestPersonas(unittest.TestCase):
@@ -334,8 +392,10 @@ class TestRunnerAndWorkflow(unittest.TestCase):
 
     def test_readme_covers_every_launcher_and_the_test_command(self):
         readme = source(ROOT / "README.md")
-        for stem in ("model-setup", "serve", "ui", "detect-tools"):
+        for stem in ("model-setup", "serve", "ui", "detect-tools", "launchpad"):
             self.assertIn(stem, readme, f"README never mentions {stem}")
+        for path in ("scripts/unix/launchpad.sh", "scripts/mac/launchpad.command", "scripts\\win\\launchpad.bat"):
+            self.assertIn(path, readme, f"README never tells users about {path}")
         self.assertIn("python tests/run.py", readme)
         self.assertIn("Installed tools", readme, "the dashboard's tools view is documented")
         self.assertRegex(readme, r"(?s)## Start.*detect-tools.*\*\*1\. Get llama\.cpp", "quick start begins with a check")

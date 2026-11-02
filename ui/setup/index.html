@@ -221,6 +221,17 @@
   .next { margin-top: 24px; }
   .next > p { margin: 0 0 8px; font-size: 14px; color: var(--text-2); }
   .next > p + .cmd + p { margin-top: 16px; }
+  .next:empty { display: none; }
+  .next .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
+  .next .actions:empty { display: none; }
+  .next .notice { margin-bottom: 14px; }
+  .notice .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  a.btn { text-decoration: none; }
+  pre.log { margin: 8px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+    font-size: 12px; line-height: 1.5; padding: 10px 12px; border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); }
+  ul.looked { margin: 8px 0 0; padding-left: 18px; font-size: 13px; color: var(--text-2); }
+  #llama-body, #chat-box, #done-next, #warn { overflow-wrap: anywhere; }      /* long paths and URLs must wrap on phones */
+  #llama-body .btn, #chat-box .btn, #done-next .btn, #warn .btn { white-space: normal; text-align: center; padding-block: 8px; }
 
   /* --- Installed tools --- */
   .tool { margin-top: 12px; }
@@ -418,6 +429,7 @@
       <div class="badge-ok"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></div>
       <div class="center"><h1 id="done-title" tabindex="-1">Ready</h1><p class="sub" id="d-text"></p></div>
       <div class="next" id="done-next"></div>
+      <div class="next chat" id="chat-box" aria-live="polite"></div>
       <p class="center" style="margin:24px 0 0"><button class="link" id="again">Get another model</button></p>
     </div>
   </section>
@@ -501,6 +513,16 @@
     </div>
     <div class="filters"><div class="tabs" id="history-tabs" role="tablist" aria-label="Show"></div></div>
     <div id="history-content"></div>
+  </section>
+
+  <section class="view" id="v-llama" hidden>
+    <button class="back" id="llama-back"><svg viewBox="0 0 24 24"><path d="M19 12H5m7-7-7 7 7 7"/></svg>Back</button>
+    <div class="page-head">
+      <p class="eyebrow">llama.cpp</p>
+      <h1 id="llama-title" tabindex="-1">Get llama.cpp</h1>
+      <p class="sub">The program that runs the models on this computer.</p>
+    </div>
+    <div class="card" id="llama-body" aria-live="polite"></div>
   </section>
 
   <section class="view" id="v-error" hidden>
@@ -649,14 +671,14 @@ function terminalDetails(cmds, summary, open) {
 // --- Views and the URL: every top-level view has an address, so browser Back/Forward and bookmarks work -------
 const NAV = { "": "home-btn", "#radar": "radar-btn", "#history": "history-btn", "#tools": "tools-btn" };
 const WIZARD = { "v-use": 1, "v-wait": 1, "v-pick": 1, "v-install": 2, "v-done": 3, "v-error": 2 };
-const AWAY = ["v-tools", "v-radar", "v-history"];
+const AWAY = ["v-tools", "v-radar", "v-history", "v-llama"];
 let view = "", jobLive = false;
 
 function show(id) {
   const changed = id !== view;
   view = id;
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== id));
-  $("#main").className = AWAY.slice(1).includes(id) ? "wide" : "";
+  $("#main").className = ["v-radar", "v-history"].includes(id) ? "wide" : "";
   $("#warn").hidden = !["v-use", "v-pick"].includes(id);       // where it changes the decision; tools/done say it too
   renderSteps(WIZARD[id] || 0);
   if (!changed) return;
@@ -689,7 +711,7 @@ function navigate(hash) {
 
 function route() {
   const hash = location.hash || "";
-  const open = { "#tools": openTools, "#radar": openRadar, "#history": openHistory }[hash];
+  const open = { "#tools": openTools, "#radar": openRadar, "#history": openHistory, "#llama": openLlama }[hash];
   markNav(open ? hash : "");
   return open ? open() : goHome();
 }
@@ -869,19 +891,150 @@ async function done(j) {
   else text += " The speed test could not load it; the model may be too big for this computer.";
   $("#d-text").textContent = text;
   const next = $("#done-next");
-  const tip = { mac: "Or double-click scripts/mac/serve.command in Finder.", windows: "Or double-click scripts\\win\\serve.bat in File Explorer." }[S.os];
+  $("#chat-box").replaceChildren();
+  chatKey = ""; chatPre = null;
+  chatModel = j.id || lastId;
+  lastDone = j;
   if (!S.llama_server) {
     const li = S.llama_install || {};
+    const button = llamaButton("Install llama.cpp");
     next.replaceChildren(
-      h("p", {}, h("b", {}, "One more step: llama.cpp is not installed. "), "It is the program that runs the model. Install it:"),
-      li.install_cmd ? cmdRow(li.install_cmd) : h("p", { class: "note", style: "margin:0" }, li.install || "See the README for install steps."),
-      h("p", {}, "Then start chatting with:"), cmdRow(S.serve_cmd));
+      h("p", {}, h("b", {}, "One more step: llama.cpp is not installed. "), "It is the program that runs the model." + (button ? "" : " Install it:")),
+      button ? h("div", { class: "actions" }, button)
+        : li.install_cmd ? cmdRow(li.install_cmd) : h("p", { class: "note", style: "margin:0" }, li.install || "See the README for install steps."),
+      button ? null : h("p", {}, "Then start chatting with:"), button ? null : cmdRow(S.serve_cmd));
   } else {
-    next.replaceChildren(h("p", {}, "To start chatting, run this from the project folder:"), cmdRow(S.serve_cmd),
-      ...(tip ? [h("p", { class: "muted", style: "margin-top:10px" }, tip)] : []));     // replaceChildren(null) prints "null"
+    let d = null;
+    if (chatModel) try { d = await api("/api/chat?id=" + encodeURIComponent(chatModel)); } catch (e) {}
+    renderChatStart(next, d && d.preview);
+    if (d && d.chat && ["starting", "running"].includes(d.chat.state)) { renderChat(d.chat); pollChat(); }
   }
   show("v-done");
   say(text);
+}
+
+// --- Start chatting: the setup page runs llama-server for this model (utils/chat_server.py) ---------------------
+let chatModel = "", chatTimer = null, chatGen = 0;
+const SERVE_TIP = { mac: "Or double-click scripts/mac/serve.command in Finder.", windows: "Or double-click scripts\\win\\serve.bat in File Explorer." };
+
+function serveFromTerminal() {
+  return terminalDetails([{ label: "Or pick the model and interface from a menu in a terminal" + (SERVE_TIP[S.os] ? " (" + SERVE_TIP[S.os].replace(/^Or d/, "or d").replace(/\.$/, "") + ")" : "") + ":", cmd: S.serve_cmd }]);
+}
+
+function busyText(b) {
+  return "Port " + b.port + " is in use by " + (b.used_by || "another program (it could not be identified)") + ".";
+}
+function lookedDetails(b) {
+  if (!b.looked || !b.looked.length) return null;
+  return h("details", { class: "terminal" }, h("summary", {}, icon("info"), "Where it looked"),
+    h("ul", { class: "looked" }, b.looked.map((l) => h("li", {}, l))));
+}
+
+// The first view of the chat controls: what it will run, or why it cannot run yet. The server decides both (rule 3).
+function renderChatStart(next, pv) {
+  const kids = [];
+  if (!pv) {                                         // not a model this page offered (e.g. a terminal download)
+    kids.push(h("p", {}, "To start chatting, run this from the project folder:"), cmdRow(S.serve_cmd),
+      SERVE_TIP[S.os] ? h("p", { class: "muted", style: "margin-top:10px" }, SERVE_TIP[S.os]) : null);
+  } else if (pv.missing) {
+    kids.push(h("p", { class: "note" }, pv.missing));
+  } else {
+    if (pv.busy) {
+      kids.push(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" },
+        h("b", {}, busyText(pv.busy)), pv.busy.free_port ? " Port " + pv.busy.free_port + " is free." : " No free port was found near it.")),
+        h("div", { class: "actions" }, pv.busy.free_port ? h("button", { class: "btn", onclick: () => startChat(pv.busy.free_port) },
+          icon("chat"), "Start on port " + pv.busy.free_port) : null),
+        lookedDetails(pv.busy));
+    } else {
+      kids.push(h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => startChat() }, icon("chat"), "Start chatting")),
+        h("p", { class: "cmd-label" }, "It runs:"), cmdRow(pv.cmd),
+        h("p", { class: "muted", style: "margin-top:10px" }, "It runs while this setup page is open. You can stop it here."));
+    }
+    kids.push(serveFromTerminal());
+  }
+  next.replaceChildren(...kids.filter(Boolean));
+}
+
+async function startChat(port) {
+  const body = { id: chatModel };
+  if (port) body.port = port;
+  $("#done-next").replaceChildren(serveFromTerminal() || "");
+  let r;
+  try { r = await api("/api/chat/start", body); } catch (e) { r = { error: UNREACHABLE }; }
+  if (r.error) return renderChatRefused(r);
+  renderChat(r);
+  pollChat();
+}
+
+function renderChatRefused(r) {
+  const b = r.port_busy;
+  $("#chat-box").replaceChildren(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, r.error)),
+    h("div", { class: "actions" }, b && b.free_port ? h("button", { class: "btn", onclick: () => startChat(b.free_port) }, icon("chat"), "Start on port " + b.free_port)
+      : h("button", { class: "btn ghost", onclick: () => startChat() }, "Try again")),
+    b ? lookedDetails(b) : null);
+  say(r.error);
+}
+
+let chatKey = "", chatPre = null;       // the panel shown now, and its output element (updated in place by polls)
+const logText = (c) => (c.log || []).slice(-60).join("\n");
+function chatLog(c, open) {
+  chatPre = h("pre", { class: "log" }, logText(c));
+  if (!(c.log && c.log.length) && !["starting", "running"].includes(c.state)) return null;
+  return h("details", { class: "terminal", open: open ? "" : null }, h("summary", {}, icon("terminal"), "llama-server's output"), chatPre);
+}
+
+function stopButton(after) {
+  return h("button", { class: "btn ghost", onclick: async () => {
+    let r;
+    try { r = await api("/api/chat/stop", {}); } catch (e) { return; }
+    after(r);
+  } }, "Stop");
+}
+
+function renderChat(c) {
+  const box = $("#chat-box");
+  S.chat = c;                                       // the first screen offers Open / Stop from this too
+  const key = [c.state, c.port, c.cmd, c.error, c.model].join("|");
+  if (key === chatKey && chatPre) {                 // same state: keep the controls (focus) and the open output
+    chatPre.replaceChildren(logText(c));
+    return;
+  }
+  chatKey = key;
+  renderWarn();
+  const cmd = c.cmd ? [h("p", { class: "cmd-label" }, "Running:"), cmdRow(c.cmd)] : [];
+  const again = (label) => h("button", { class: "btn", onclick: () => startChat(c.port) }, icon("chat"), label);
+  const stopped = (r) => { chatGen++; renderChat(r); };
+  if (c.state === "starting") {
+    box.replaceChildren(h("p", {}, h("b", {}, "Starting llama-server with " + c.model + "… "), "Loading the model can take a minute."),
+      h("div", { class: "progress busy" }, h("i", {})), h("div", { class: "actions" }, stopButton(stopped)), ...cmd, chatLog(c, false));
+  } else if (c.state === "running") {
+    box.replaceChildren(h("p", {}, h("b", {}, "The chat is running. "), c.model + " answers at " + c.url),
+      h("div", { class: "actions" }, h("a", { class: "btn", href: c.url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open the chat"),
+        stopButton(stopped)), ...cmd, chatLog(c, false));
+  } else if (c.state === "failed") {
+    box.replaceChildren(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, c.error || "llama-server stopped.")),
+      h("div", { class: "actions" }, again("Try again")), ...cmd, chatLog(c, true));
+  } else if (c.state === "stopped") {
+    box.replaceChildren(h("p", {}, "The chat server is stopped."), h("div", { class: "actions" }, again("Start chatting")));
+  } else {
+    box.replaceChildren();
+  }
+  say({ starting: "Starting the chat", running: "The chat is running", failed: c.error || "The chat failed", stopped: "The chat is stopped" }[c.state] || "");
+}
+
+function pollChat() {
+  clearTimeout(chatTimer);
+  const g = ++chatGen;
+  const tick = async () => {
+    if (g !== chatGen || view !== "v-done") return;             // left the screen, or a newer poll took over
+    let d;
+    try { d = await api("/api/chat"); } catch (e) { chatTimer = setTimeout(tick, 2000); return; }
+    if (g !== chatGen || view !== "v-done") return;
+    const c = d.chat || {};
+    renderChat(c);
+    if (c.state === "starting" || c.state === "running") chatTimer = setTimeout(tick, c.state === "starting" ? 1000 : 3000);
+  };
+  chatTimer = setTimeout(tick, 1000);
 }
 
 function fail(msgOrJob) {
@@ -890,6 +1043,113 @@ function fail(msgOrJob) {
   renderTerminalBox($("#e-terminal-box"), (job && job.commands) || (activeModel && activeModel.commands) || [], true);
   show("v-error");
   say($("#e-text").textContent);
+}
+
+// --- Installing llama.cpp (utils/llama_install.py): what was found, why to install, how, and the install itself --
+let llamaTimer = null, llamaGen = 0, lastDone = null;
+const LLAMA_BUSY = ["checking", "downloading", "verifying", "installing"];
+
+function openLlama() {
+  show("v-llama");
+  $("#llama-body").replaceChildren(h("p", { class: "muted" }, "Checking…"));
+  return pollLlama(0);
+}
+
+function llamaWhy(L) {
+  if (L.need === "missing") return h("p", {}, h("b", {}, "llama.cpp is not installed. "), "Models can be downloaded, but not run or speed-tested, until it is.");
+  if (L.need === "broken") return h("p", {}, h("b", {}, "llama-server was found at " + L.found + ", but it does not start. "), "A working copy is needed to chat.");
+  if (L.need === "no-gpu") return h("p", {}, h("b", {}, "The llama.cpp found at " + L.found + " cannot use your graphics card, "), "so models run on the processor, which is slower.");
+  return h("p", {}, h("b", {}, "llama.cpp is installed: "), (L.version || "") + " at " + L.found);
+}
+
+function llamaOffer(L) {
+  const o = L.offer || {};
+  const go = (variant) => installLlama(variant);
+  if (o.how === "download") {
+    return [h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => go("auto") }, icon("download"), "Install llama.cpp (" + o.label + ")")),
+      h("p", { class: "muted" }, "Downloads the official release from github.com/ggml-org/llama.cpp and unpacks it into " + o.into +
+        ". No admin rights needed; nothing outside that folder changes.")];
+  }
+  if (o.how === "brew") {
+    return [h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => go("auto") }, icon("download"), "Install with Homebrew")),
+      h("p", { class: "cmd-label" }, "It runs:"), cmdRow(o.cmd)];
+  }
+  const li = S.llama_install || {};                       // nothing this page can run here: the instructions only
+  return [li.install_cmd ? cmdRow(li.install_cmd) : h("p", { class: "note" }, li.install || "See the README for install steps.")];
+}
+
+function llamaJob(L) {
+  const j = L.job || {};
+  const log = j.log && j.log.length ? h("details", { class: "terminal", open: j.state === "failed" ? "" : null },
+    h("summary", {}, icon("terminal"), "Details"), h("pre", { class: "log" }, j.log.join("\n"))) : null;
+  if (LLAMA_BUSY.includes(j.state)) {
+    const pct = j.total ? Math.min(100, Math.round((j.done || 0) * 100 / j.total)) : 0;
+    const label = { checking: "Finding the latest release…", downloading: "Downloading " + (j.why || "llama.cpp"),
+      verifying: "Checking and unpacking…", installing: j.how === "brew" ? "Homebrew is installing llama.cpp…" : "Installing into bin…" }[j.state];
+    const bar = h("div", { class: "progress" + (j.state === "downloading" && j.total ? "" : " busy"), role: "progressbar", "aria-label": label,
+      "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": j.state === "downloading" && j.total ? String(pct) : null }, h("i", { style: "width:" + pct + "%" }));
+    return [h("p", {}, h("b", {}, label)), bar, j.state === "downloading" && j.total ? h("p", { class: "muted" }, fmt(j.done || 0) + " of " + fmt(j.total)) : null, log];
+  }
+  if (j.state === "done") {
+    const check = j.checksum === "verified" ? "Checked against the SHA-256 checksum GitHub publishes."
+      : j.checksum === "none-published" ? "GitHub publishes no checksum for this download, so only its size was checked." : "";
+    return [h("div", { class: "notice info", role: "status" }, icon("check"), h("div", { class: "notice-body" },
+        h("b", {}, "llama.cpp is installed. "), (j.version || "") + " at " + (j.path || ""), check ? h("p", { class: "muted", style: "margin:6px 0 0" }, check) : null)),
+      j.shadowed ? h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, j.shadowed)) : null,
+      h("div", { class: "actions" }, h("button", { class: "btn", onclick: llamaContinue }, lastDone ? "Back to your model" : "Continue")), log];
+  }
+  if (j.state === "failed") {
+    return [h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, j.error || "The install failed.")),
+      h("div", { class: "actions" }, h("button", { class: "btn ghost", onclick: () => installLlama("auto") }, "Try again"),
+        j.cpu_fallback ? h("button", { class: "btn", onclick: () => installLlama("cpu") }, "Install the CPU build instead") : null), log];
+  }
+  return null;
+}
+
+function renderLlama(L) {
+  const j = L.job || {};
+  const parts = [llamaWhy(L)];
+  const active = LLAMA_BUSY.includes(j.state) || j.state === "done" || j.state === "failed";
+  if (active) parts.push(...[].concat(llamaJob(L)));
+  else if (L.need) parts.push(...llamaOffer(L));
+  $("#llama-body").replaceChildren(...parts.filter(Boolean));
+}
+
+async function installLlama(variant) {
+  let r;
+  try { r = await api("/api/llama/install", { variant }); } catch (e) { r = { error: UNREACHABLE }; }
+  if (r.error) {
+    $("#llama-body").append(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, r.error)));
+    return say(r.error);
+  }
+  pollLlama(0);
+}
+
+function pollLlama(delay) {
+  clearTimeout(llamaTimer);
+  const g = ++llamaGen;
+  const tick = async () => {
+    if (g !== llamaGen || view !== "v-llama") return;
+    let L;
+    try { L = await api("/api/llama"); } catch (e) { llamaTimer = setTimeout(tick, 2000); return; }
+    if (g !== llamaGen || view !== "v-llama") return;
+    renderLlama(L);
+    if (LLAMA_BUSY.includes((L.job || {}).state)) llamaTimer = setTimeout(tick, 700);
+    else if ((L.job || {}).state === "done") say("llama.cpp is installed");
+  };
+  if (delay) llamaTimer = setTimeout(tick, delay); else return tick();
+}
+
+async function llamaContinue() {
+  try { const fresh = await api("/api/state"); if (fresh && fresh.token) S = fresh; } catch (e) {}
+  renderMachine(); renderWarn();
+  if (lastDone) { try { history.pushState(null, "", location.pathname + location.search); } catch (e) {} markNav(""); view = ""; return done(lastDone); }
+  navigate("");
+}
+
+function llamaButton(label) {
+  const o = (S.llama && S.llama.offer) || {};
+  return o.how === "download" || o.how === "brew" ? h("button", { class: "btn small", onclick: () => navigate("#llama") }, icon("download"), label) : null;
 }
 
 // --- Installed tools -------------------------------------------------------------------------------------------
@@ -1275,22 +1535,39 @@ function renderMachine() {
 function renderWarn() {
   const warn = $("#warn");
   warn.replaceChildren();
+  const c = S.chat || {};
+  if (c.state === "starting" || c.state === "running") {          // started from this page earlier: Open / Stop
+    warn.append(h("div", { class: "notice info", role: "status" }, icon("chat"), h("div", { class: "notice-body" },
+      h("b", {}, c.state === "running" ? "A chat is running with " + c.model + ". " : "A chat is starting with " + c.model + ". "),
+      h("div", { class: "actions" },
+        c.state === "running" ? h("a", { class: "btn small", href: c.url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open the chat") : null,
+        h("button", { class: "btn small ghost", onclick: async () => {
+          try { S.chat = await api("/api/chat/stop", {}); } catch (e) { return; }
+          renderWarn();
+        } }, "Stop")))));
+  }
   if (!S.llama_server) {
     const li = S.llama_install || {};
+    const broken = S.llama && S.llama.need === "broken";
+    const button = llamaButton("Install llama.cpp");
     warn.append(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" },
-      h("b", {}, "llama.cpp is not installed yet. "), "You can download models now; running them and the speed test need llama.cpp. ",
-      li.install_cmd ? ["Install it with:", cmdRow(li.install_cmd)] : li.install)));
+      h("b", {}, broken ? "llama-server was found at " + S.llama.found + ", but it does not start. " : "llama.cpp is not installed yet. "),
+      "You can download models now; running them and the speed test need llama.cpp. ",
+      button ? h("div", { class: "actions" }, button) : li.install_cmd ? ["Install it with:", cmdRow(li.install_cmd)] : li.install)));
   } else if (S.gpu_unused) {
+    const button = llamaButton("Get a build that uses it");
     warn.append(h("div", { class: "notice info", role: "status" }, icon("info"), h("div", { class: "notice-body" },
-      "This llama.cpp build cannot use your graphics card, so models will run on the processor.")));
+      "This llama.cpp build cannot use your graphics card, so models will run on the processor.",
+      button ? h("div", { class: "actions" }, button) : null)));
   }
 }
+$("#llama-back").onclick = () => (lastDone && view === "v-llama" ? llamaContinue() : navigate(""));
 
 (async function init() {
   try { S = await api("/api/state"); } catch (e) { return fail(UNREACHABLE); }
   renderMachine();
   renderWarn();
-  if (NAV[location.hash || ""] && location.hash) await route();
+  if ((NAV[location.hash || ""] || location.hash === "#llama") && location.hash) await route();
   else { markNav(""); renderUse(); }          // one progress request below, not two: a lost one must not hide a download
   let j = { state: "idle" };
   try { j = await api("/api/progress"); } catch (e) {}

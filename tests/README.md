@@ -33,6 +33,11 @@ reason, and CI runs on all three OSes. `test_source_audit.py` guards what the co
 
 - `fakes.py`: `FakeProbe`, a whole fake computer (virtual files, PATH, program output, record of programs run) so
   Windows, macOS and Linux paths are tested on any host and nothing real is executed.
+- `fake_llama_server.py`: a stand-in llama-server, run as a real process: `--version`, `--list-devices`, and
+  `-m FILE --port N` with a `/health` that answers 503 while "loading", then 200. Start chatting is tested against it
+  on every OS (real ports, real start and stop). Failure knobs: `FAKE_LLAMA_EXIT`, `FAKE_LLAMA_VERSION_FAIL`.
+- `fixtures/llama_release_reconstructed.json`: a llama.cpp release listing for the installer's asset matching.
+  Asset names follow llama.cpp's `release-publish.yml`; sizes and digests are made up (see its `_provenance`).
 - `page_harness.js`: runs the setup page's real script under Node with a fake DOM, fetch, timers, clipboard and URL
   history, so page behaviour (screens, polling, Back/Forward, focus) is tested without a browser. The fake DOM follows
   the real one where it matters (`append(null)` shows "null"). Skipped, with a reason, if Node is not installed.

@@ -39,6 +39,11 @@ class Hw:
         self.ram_mb, self.cores = ram_mb, cores
         self.gpu_kind, self.gpu_name = gpu_kind, gpu_name        # none | nvidia | apple | gpu
         self.vram_mb, self.gpu_usable = vram_mb, gpu_usable
+        self.cuda_version = ""          # newest CUDA the NVIDIA driver runs ("12.4"); not part of sig() or the state
+        # A non-NVIDIA GPU that llama.cpp's Vulkan build can use (AMD, Intel Arc). It only decides which llama.cpp
+        # build to install; recommendations and the saved state ignore it, so they stay as they were.
+        self.other_gpu, self.other_gpu_usable = "", False
+        self.gpu_looked = []            # where the other-GPU search looked, hits and misses (rule 5)
 
     def sig(self) -> str:
         return f"{self.ram_mb}-{self.vram_mb}-{self.gpu_kind}-{int(self.gpu_usable)}-{self.cores}"
@@ -119,6 +124,76 @@ def read_cpu_name() -> str:
     return platform.processor()
 
 
+DRM_DIR = Path("/sys/class/drm")       # Linux: one card*/device/vendor file per display device
+PCI_AMD, PCI_INTEL = "0x1002", "0x8086"
+INTEL_IGPU = ("Integrated Intel graphics usually run models no faster than the processor, so the CPU build is used. "
+              "An Intel Arc card is recognised by name on Windows.")
+DISPLAY_CLASS = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"   # display adapters
+
+
+def pick_other_gpu(names: list) -> tuple:
+    """Display adapter names (Windows) -> (the one llama.cpp's Vulkan build is worth using on, or "", why)."""
+    for n in names:
+        if re.search(r"\b(AMD|Radeon)\b", n, re.I):
+            return n, f"found {n}"
+    for n in names:
+        if re.search(r"\bIntel\b", n, re.I) and re.search(r"\bArc\b", n, re.I):
+            return n, f"found {n}"
+    if any(re.search(r"\bIntel\b", n, re.I) for n in names):
+        return "", INTEL_IGPU
+    return "", "no AMD or Intel Arc display adapter among: " + (", ".join(names) or "none listed")
+
+
+def windows_display_adapters() -> list:
+    """Names of the display adapters Windows knows (DriverDesc under the display class key). [] elsewhere."""
+    try:
+        import winreg
+    except ImportError:
+        return []
+    names = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, DISPLAY_CLASS) as cls:
+            for i in range(winreg.QueryInfoKey(cls)[0]):
+                sub = winreg.EnumKey(cls, i)
+                if not sub.isdigit():
+                    continue
+                try:
+                    with winreg.OpenKey(cls, sub) as key:
+                        names.append(" ".join(str(winreg.QueryValueEx(key, "DriverDesc")[0]).split()))
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return names
+
+
+def find_other_gpu(hw: Hw) -> None:
+    """No NVIDIA GPU: is there an AMD or Intel Arc one for the Vulkan build? Sets hw.other_gpu, logs every look."""
+    if platform.system() == "Windows":
+        name, why = pick_other_gpu(windows_display_adapters())
+        hw.gpu_looked.append(f"Windows display adapters: {why}")
+    elif platform.system() == "Linux":
+        name, why, vendors = "", "", {}
+        for vendor in sorted(DRM_DIR.glob("card*/device/vendor")):
+            try:
+                vendors[vendor.parent.parent.name] = vendor.read_text().strip().lower()
+            except OSError:
+                continue
+        amd = [card for card, v in vendors.items() if v == PCI_AMD]
+        if amd:
+            name, why = "AMD graphics", f"AMD display device ({PCI_AMD}) at {DRM_DIR / amd[0]}"
+        elif PCI_INTEL in vendors.values():
+            why = INTEL_IGPU
+        else:
+            why = f"no AMD or Intel display device in {DRM_DIR}" + (f" (vendors: {', '.join(sorted(set(vendors.values())))})"
+                                                                      if vendors else "")
+        hw.gpu_looked.append(why)
+    else:
+        return
+    if name:
+        hw.other_gpu, hw.other_gpu_usable = name, gpu_usable()
+
+
 def detect_hw() -> Hw:
     hw = Hw(ram_mb=read_ram_mb(), cores=os.cpu_count() or 1)
     if platform.system() == "Darwin" and platform.machine() == "arm64":
@@ -129,8 +204,12 @@ def detect_hw() -> Hw:
         name, _, vram = line.rpartition(", ")
         if name and vram.strip().isdigit() and int(vram) > 0:
             hw.gpu_kind, hw.gpu_name, hw.vram_mb = "nvidia", name, int(vram)
+            m = re.search(r"CUDA Version:\s*(\d+\.\d+)", run_cmd(["nvidia-smi"]))     # in the plain banner only
+            hw.cuda_version = m.group(1) if m else ""
             forced = os.environ.get("LP_GPU_USABLE")
             hw.gpu_usable = (forced == "1") if forced is not None else gpu_usable()
+        else:
+            find_other_gpu(hw)
     if os.environ.get("LP_RAM_MB", "").isdigit():
         hw.ram_mb = int(os.environ["LP_RAM_MB"])
     if os.environ.get("LP_VRAM_MB", "").isdigit():

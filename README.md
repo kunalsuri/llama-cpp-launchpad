@@ -33,6 +33,18 @@ Pick a model. Pick an interface. Start chatting. Everything runs on your machine
 
 ## Start
 
+**No terminal: double-click `launchpad`.**
+
+| OS | Double-click | Or run |
+| --- | --- | --- |
+| Windows | `scripts\win\launchpad.bat` | `scripts\win\launchpad.bat` |
+| macOS | `scripts/mac/launchpad.command` | `./scripts/unix/launchpad.sh` |
+| Linux | | `./scripts/unix/launchpad.sh` |
+
+It opens the setup page in your browser. From there: get llama.cpp if it is missing (Windows and Linux download the
+official release into `bin/`; macOS uses Homebrew when it is installed), get a model that fits this computer, and press
+**Start chatting**. It needs Python 3 and nothing else. The steps below do the same from a terminal.
+
 **0. See what you already have** (optional, 2 seconds)
 
 ```bash
@@ -96,8 +108,32 @@ Run `ui` (e.g. `scripts\win\ui.bat` or `./scripts/unix/ui.sh`) to open the local
 its address (normally `http://127.0.0.1:8765/`) and opens your browser.
 
 - **Get a model:** answers *"What will you use it for?"*, picks the model that fits your CPU/GPU/RAM, downloads it
-  (resumable) and runs a speed test. Then it tells you the next step for *your* computer: the serve command, or, if
-  llama.cpp is missing, how to install it first.
+  (resumable) and runs a speed test. Every download (page, `model-setup`, `radar --download`) is checked against the
+  SHA-256 Hugging Face publishes for the file; a file that does not match is not kept. When Hugging Face gives no
+  checksum, only the size is checked, and it says so.
+- **Start chatting:** the done screen starts `llama-server` with that model and shows the exact command first
+  (`llama-server -m MODEL --port PORT`, plus `EXTRA_ARGS`, as the serve scripts do; `PORT` and `EXTRA_ARGS` come
+  from the environment the page was started in). It shows *starting*, *running* (with an **Open the chat** link),
+  *stopped*, or *failed* with llama-server's own output. **Stop** stops only the server this page started; closing
+  the page's window stops it too. If port 8080 is taken, the page says which program holds it and offers the next free
+  port.
+- **Get llama.cpp** (`/#llama`): offered when no working `llama-server` is found (looked for in `LLAMA_SERVER`, your
+  PATH, `bin/`, `~/llama.cpp/build/bin`), or when the one found cannot use your graphics card.
+  - *Windows, Linux:* downloads the official build for this machine:
+    - CUDA for NVIDIA, with its CUDA runtime archive, and never newer than the CUDA your driver runs (`nvidia-smi`
+      shows it); if the driver is too old for every CUDA build, Vulkan, with a note that a driver update gets CUDA;
+    - Vulkan for AMD graphics (Windows and Linux), Intel Arc (Windows, found by name) or a GPU you declared with
+      `LP_VRAM_MB`. Integrated Intel graphics keep the CPU build: they rarely run models faster than the processor;
+    - otherwise CPU;
+
+    from
+    [github.com/ggml-org/llama.cpp/releases](https://github.com/ggml-org/llama.cpp/releases) over HTTPS into `bin/`.
+    No admin rights; nothing outside `bin/` changes. It checks the size, the SHA-256 when GitHub publishes one
+    (and says so when it does not), and that `llama-server --version` runs before anything is moved into `bin/`.
+    If a GPU build does not start, it offers the CPU build.
+  - *macOS:* runs `brew install llama.cpp` if Homebrew is installed; otherwise it shows the steps.
+  - If another `llama-server` comes first in the lookup order (`LLAMA_SERVER` or your PATH), the page says so: the
+    serve scripts would use that one, not the copy in `bin/`.
 - **Model radar** (`/#radar`) and **What changed** (`/#history`): trending and new GGUF models on Hugging Face, checked
   against your memory. Speeds are labelled as estimates until a model is downloaded and tested.
 - **Installed tools** (`/#tools`): Ollama, llama.cpp, LM Studio and Unsloth: found or not, version, location, and how
@@ -107,6 +143,7 @@ its address (normally `http://127.0.0.1:8765/`) and opens your browser.
 - **Works on phones, tablets and desktops**, light and dark, keyboard and screen reader friendly; browser Back/Forward
   work, and each view has its own address you can bookmark.
 - **Local & private:** listens only on `127.0.0.1`, loads nothing from the internet, needs no npm or pip packages.
+  Everything that changes something (download, install, start, stop) is a POST that needs the page's own token.
 
 ---
 
@@ -261,6 +298,10 @@ PORT=9000 UI=translation ./scripts/unix/serve.sh
 | **macOS won't open a `.command` file** | If you downloaded the project as a ZIP, macOS quarantines it. Right-click the file and choose **Open** once, or run `xattr -dr com.apple.quarantine .` in the project folder. |
 | **Setup page download stopped** | Press **Try again**, or run the command the page shows (`radar --download ...`): it continues the partial file instead of starting over. |
 | **Radar says it could not reach Hugging Face** | It shows your last saved scan. Check your connection or proxy, then press **Sync now**. |
+| **Start chatting says the port is in use** | The page names the program holding it and offers the next free port. To always use another port, start the page with `PORT` set (e.g. `PORT=8081 ./scripts/unix/launchpad.sh`). |
+| **Start chatting failed** | The page shows llama-server's own output. "failed to load model" usually means the model is too big for this computer's memory. |
+| **"Another llama-server comes first"** after installing | A copy on your PATH (or in `LLAMA_SERVER`) is found before `bin/`. Remove it from PATH, or set `LLAMA_SERVER` to the `bin/` copy the page names. |
+| **The Vulkan or CUDA build "did not start"** | The page keeps nothing it could not start. Press **Install the CPU build instead**, or install your GPU driver (Linux Vulkan needs the system's Vulkan loader, e.g. `libvulkan1`). |
 
 ---
 

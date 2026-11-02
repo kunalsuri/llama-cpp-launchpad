@@ -94,6 +94,23 @@ class TestBrowser(tui.UiBase):
         self.assertEqual(failed, [], "\n".join(failed))
         self.assertEqual(done.returncode, 0, done.stderr)
 
+    def test_start_chatting_in_a_real_browser(self):
+        """With llama-server found (the fake one, on a free port): Start chatting, open the chat link, Stop."""
+        import test_chat_server as tcs
+        env = unittest.mock.patch.dict(os.environ, {"PORT": str(tcs.free_port()), "EXTRA_ARGS": ""})
+        found = unittest.mock.patch.object(ms, "find_llama_server", return_value=tcs.FAKE)
+        for p in (env, found):
+            p.start()
+            self.addCleanup(p.stop)
+        self.app.chat.find_server = lambda: list(tcs.SERVER)
+        self.addCleanup(self.app.chat.stop)
+        done = subprocess.run(["node", str(HERE / "browser_check.js"), str(self.port), "chat"], cwd=str(ROOT), env=node_env(),
+                              capture_output=True, text=True, timeout=600)
+        rows = [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")]
+        self.assertEqual(len(rows), 2, done.stdout + done.stderr)
+        failed = [f"{r['name']}: {r['detail']}" for r in rows if not r["ok"]]
+        self.assertEqual(failed, [], "\n".join(failed))
+
 
 
 class TestBrowserRequired(unittest.TestCase):

@@ -14,6 +14,7 @@ import time
 import unittest
 import unittest.mock
 import urllib.error
+import urllib.parse
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -26,18 +27,24 @@ import test_model_setup as tms  # noqa: E402
 import ui_server  # noqa: E402
 from fakes import FakeProbe  # noqa: E402
 
+REAL_DOWNLOAD = ms.download          # UiBase replaces it with a fake; the checksum test needs the real one
+
 
 class UiBase(tms.Base):
     def setUp(self):
         super().setUp()
         hw = ms.Hw(ram_mb=16384, cores=8, gpu_kind="nvidia", gpu_name="Test GPU", vram_mb=8192, gpu_usable=True)
-        for target, value in (("detect_hw", lambda: hw), ("download", self.fake_download),
-                              ("check_model_speed", self.fake_speed)):
+        self.hw = hw
+        # Rule 2: whether this machine has llama.cpp must not change the answers; tests say what is "found".
+        self.found_server = ""
+        for target, value in (("detect_hw", lambda: self.hw), ("download", self.fake_download),
+                              ("check_model_speed", self.fake_speed), ("find_llama_server", lambda: self.found_server)):
             p = unittest.mock.patch.object(ms, target, value)
             p.start()
             self.addCleanup(p.stop)
         self.app = ui_server.App(ms)
         self.app.probe = FakeProbe("Linux")     # rule 2: commands and hints must not depend on the host
+        self.app.llama_version = lambda argv: (True, "version: 4242 (abc1234)")
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), ui_server.make_handler(self.app))
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -479,6 +486,21 @@ class TestInstall(UiBase):
         self.wait_for("done")
         self.assertEqual(parts, ["Big-Q4_K_M-00001-of-00002.gguf", "Big-Q4_K_M-00002-of-00002.gguf"])
 
+    def test_a_checksum_mismatch_is_named_on_the_page_not_blamed_on_the_connection(self):
+        def fetch(url, part, size, *rest):
+            part.parent.mkdir(parents=True, exist_ok=True)
+            part.write_bytes(b"y" * size)
+        wrong = {"siblings": [{"rfilename": "m.gguf", "size": 4, "lfs": {"sha256": "0" * 64, "size": 4}}]}
+        for target, value in (("download", REAL_DOWNLOAD), ("fetch_file", fetch),
+                              ("http_get", lambda url, timeout=25: json.dumps(wrong))):
+            unittest.mock.patch.object(ms, target, value).start()
+        self.addCleanup(unittest.mock.patch.stopall)
+        card = self.app.card({"repo": "o/M-GGUF", "name": "M-Q4", "size": 4, "tps": 20, "mode": "gpu", "files": [("m.gguf", 4)]})
+        self.post("/api/install", {"id": card["id"]})
+        j = self.wait_for("error")
+        self.assertIn("checksum", j["error"])
+        self.assertNotIn("connection", j["error"])
+
     def test_missing_llama_bench_is_not_an_error(self):
         unittest.mock.patch.object(ms, "check_model_speed", lambda *a: 2).start()
         self.addCleanup(unittest.mock.patch.stopall)
@@ -609,6 +631,306 @@ class TestOsAwareHelp(UiBase):
         self.assertEqual(snap["commands"][0]["kind"], "resume")
 
 
+FAKE_SERVER = [sys.executable, str(HERE / "fake_llama_server.py")]
+
+
+class TestChatApi(UiBase):
+    """Start chatting: /api/chat (status and what it would run), /api/chat/start and /api/chat/stop.
+    llama-server is tests/fake_llama_server.py, a real process on a free localhost port."""
+
+    def setUp(self):
+        super().setUp()
+        import test_chat_server as tcs
+        self.tcs = tcs
+        self.chat_port = tcs.free_port()
+        p = unittest.mock.patch.dict("os.environ", {"PORT": str(self.chat_port), "EXTRA_ARGS": "-c 4096"})
+        p.start()
+        self.addCleanup(p.stop)
+        self.app.chat.find_server = lambda: list(FAKE_SERVER)
+        self.addCleanup(self.app.chat.stop)
+        self.top = self.get_json("/api/recommend?use=chat")["models"][0]
+
+    def download(self):
+        self.assertEqual(self.post("/api/install", {"id": self.top["id"]})[0], 202)
+        for _ in range(100):
+            if self.app.snapshot()["state"] == "done":
+                return self.app.snapshot()
+            time.sleep(0.05)
+        self.fail(self.app.snapshot())
+
+    def chat(self, path="/api/chat"):
+        return self.get_json(path)
+
+    def wait_chat(self, *states):
+        for _ in range(400):
+            s = self.chat()["chat"]
+            if s["state"] in states:
+                return s
+            time.sleep(0.05)
+        self.fail(f"chat never reached {states}: {self.chat()}")
+
+    def test_finished_download_names_the_model_to_chat_with(self):
+        self.assertEqual(self.download()["id"], self.top["id"])
+
+    def test_preview_shows_the_exact_command_with_port_and_extra_args_from_the_environment(self):
+        self.download()
+        offer = self.app.offered[self.top["id"]]
+        model, _ = ms.local_path(offer["repo"], *offer["files"][0])
+        p = self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]))["preview"]
+        self.assertTrue(p["cmd"].endswith(f"--port {self.chat_port} -c 4096"), p["cmd"])
+        self.assertIn(str(model), p["cmd"])
+        self.assertIsNone(p["busy"])
+
+    def test_start_runs_and_stop_stops(self):
+        self.download()
+        status, body = self.post("/api/chat/start", {"id": self.top["id"]})
+        self.assertEqual(status, 202, body)
+        s = self.wait_chat("running")
+        self.assertEqual(s["url"], f"http://127.0.0.1:{self.chat_port}/")
+        self.assertEqual(s["model"], self.top["title"])
+        self.assertEqual(self.get_json("/api/state")["chat"]["state"], "running")
+        status, body = self.post("/api/chat/stop", {})
+        self.assertEqual((status, body["state"]), (200, "stopped"))
+
+    def test_a_failed_start_is_reported_with_its_log(self):
+        self.download()
+        with unittest.mock.patch.dict("os.environ", {"FAKE_LLAMA_EXIT": "1"}):
+            self.post("/api/chat/start", {"id": self.top["id"]})
+            s = self.wait_chat("failed")
+        self.assertIn("failed to load model", "\n".join(s["log"]))
+
+    def test_busy_port_is_explained_and_the_next_free_port_can_be_used(self):
+        self.download()
+        occ = self.tcs.Occupied(self)
+        with unittest.mock.patch.dict("os.environ", {"PORT": str(occ.port)}):
+            preview = self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]))["preview"]
+            self.assertEqual(preview["busy"]["port"], occ.port)
+            status, body = self.post("/api/chat/start", {"id": self.top["id"]})
+            self.assertEqual(status, 409)
+            free = body["port_busy"]["free_port"]
+            self.assertIn("OtherApp/1.0", body["error"])
+            self.assertEqual(self.post("/api/chat/start", {"id": self.top["id"], "port": free})[0], 202)
+            self.assertEqual(self.wait_chat("running")["port"], free)
+
+    def test_only_downloaded_models_that_were_offered_can_be_started(self):
+        self.assertEqual(self.post("/api/chat/start", {"id": "evil/Repo|x.gguf"})[0], 404)
+        status, body = self.post("/api/chat/start", {"id": self.top["id"]})        # offered, not downloaded
+        self.assertEqual(status, 409)
+        self.assertIn("not downloaded", body["error"])
+        self.assertEqual(self.post("/api/chat/start", {"model": "/etc/passwd"})[0], 404)   # no raw paths
+        self.assertEqual(self.app.chat.status()["state"], "idle")
+
+    def test_port_from_the_page_must_be_a_real_unprivileged_port(self):
+        self.download()
+        for bad in (0, 80, 65536, "8081", 8081.5, True):
+            with self.subTest(port=bad):
+                self.assertEqual(self.post("/api/chat/start", {"id": self.top["id"], "port": bad})[0], 400)
+
+    def test_start_and_stop_are_post_only_behind_the_token_host_and_origin_checks(self):
+        self.download()
+        for path, body in (("/api/chat/start", {"id": self.top["id"]}), ("/api/chat/stop", {})):
+            with self.subTest(path=path):
+                self.assertEqual(self.post(path, body, token=False)[0], 403)
+                self.assertEqual(self.post(path, body, headers={"Origin": "https://evil.example"})[0], 403)
+                self.assertEqual(self.call("POST", path, body, {"X-LP-Token": self.app.token}, host="evil.example")[0], 403)
+                self.assertEqual(self.call("GET", path)[0], 404, "changing things is POST only")
+        self.assertEqual(self.app.chat.status()["state"], "idle")
+
+    def test_without_llama_server_there_is_no_command_and_no_start(self):
+        """Rule 3: say what is missing instead of showing a command."""
+        self.download()
+        self.app.chat.find_server = lambda: []
+        p = self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]))["preview"]
+        self.assertNotIn("cmd", p)
+        self.assertIn("llama-server was not found", p["missing"])
+        self.assertEqual(self.post("/api/chat/start", {"id": self.top["id"]})[0], 409)
+
+    def test_closing_the_page_server_stops_the_chat_it_started(self):
+        self.download()
+        self.post("/api/chat/start", {"id": self.top["id"]})
+        self.wait_chat("running")
+        self.app.close()
+        self.assertEqual(self.app.chat.status()["state"], "stopped")
+
+    def test_who_uses_the_port_is_asked_of_the_pinned_machine_not_the_host(self):
+        """Rule 2: the lookup programs come from the (fake) probe, and the OS rules from its system."""
+        self.download()
+        occ = self.tcs.Occupied(self)
+        self.app.probe = FakeProbe("Windows", path={"netstat": r"C:\Windows\System32\netstat.exe"},
+                                   output={r"C:\Windows\System32\netstat.exe": ""})
+        with unittest.mock.patch.dict("os.environ", {"PORT": str(occ.port)}):
+            busy = self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]))["preview"]["busy"]
+        self.assertTrue(any(line.startswith("netstat:") for line in busy["looked"]), busy["looked"])
+        self.assertEqual(self.app.probe.ran[0][0], r"C:\Windows\System32\netstat.exe")
+
+
+class TestLlamaApi(UiBase):
+    """Install llama.cpp from the page: /api/llama (what was found, why an install is offered, how) and
+    /api/llama/install. The installer's own behaviour is in test_llama_install.py; this is the wiring and the rules."""
+
+    def setUp(self):
+        super().setUp()
+        import test_llama_install as tli
+        self.tli = tli
+        self.bin = self.tmp / "proj" / "bin"
+        self.release = json.loads(json.dumps(tli.RELEASE))
+        data = tli.tar_bytes("llama-b7777", {"llama-server": b"FAKE-OK"})
+        for a in self.release["assets"]:
+            if a["name"] == "llama-b7777-bin-ubuntu-x64.tar.gz":
+                a.update(size=len(data), digest=None)
+                self.archives = {a["browser_download_url"]: data}
+        self.app.bin_dir = self.bin
+        # as hardware.find_llama_server: a copy found earlier in the lookup order wins, else the one in bin/
+        exe = self.bin / "llama-server"
+        p = unittest.mock.patch.object(ms, "find_llama_server", lambda: self.found_server or (str(exe) if exe.is_file() else ""))
+        p.start()
+        self.addCleanup(p.stop)
+        self.app.installer = self.app.make_installer(fetch_json=lambda url: self.release, fetch_file=self.fetch_file,
+                                                     version=tli.fake_version)
+        self.hw = ms.Hw(ram_mb=16384, cores=8)                  # no GPU unless a test says so
+        self.app.hw = self.hw
+
+    def fetch_file(self, url, dest, on_progress=None):
+        Path(dest).write_bytes(self.archives[url])
+
+    def llama(self):
+        return self.get_json("/api/llama")
+
+    def test_why_an_install_is_offered(self):
+        self.assertEqual(self.llama()["need"], "missing")
+        self.found_server = "/opt/llama/llama-server"
+        self.app.llama_version = lambda argv: (False, "error while loading shared libraries")
+        s = self.llama()
+        self.assertEqual((s["need"], s["found"], s["works"]), ("broken", "/opt/llama/llama-server", False))
+        self.assertFalse(self.get_json("/api/state")["llama_server"], "found but cannot run is not 'llama-server found'")
+        self.app.llama_version = lambda argv: (True, "version: 4242 (abc1234)")
+        self.app.hw = ms.Hw(ram_mb=16384, cores=8, gpu_kind="nvidia", gpu_name="G", vram_mb=8192, gpu_usable=False)
+        self.assertEqual(self.llama()["need"], "no-gpu")
+        self.app.hw.gpu_usable = True
+        s = self.llama()
+        self.assertEqual((s["need"], s["version"]), ("", "version: 4242 (abc1234)"))
+        self.assertTrue(self.get_json("/api/state")["llama_server"])
+
+    def test_offer_depends_on_the_os_and_on_brew_being_found(self):
+        self.assertEqual(self.llama()["offer"]["how"], "download")
+        self.app.probe = FakeProbe("Darwin")
+        self.assertEqual(self.llama()["offer"]["how"], "manual")
+        self.app.probe = FakeProbe("Darwin", path={"brew": "/opt/homebrew/bin/brew"})
+        self.assertEqual(self.llama()["offer"], {"how": "brew", "cmd": "brew install llama.cpp"})
+
+    def test_installs_into_bin_and_the_page_then_finds_it(self):
+        status, body = self.post("/api/llama/install", {})
+        self.assertEqual(status, 202, body)
+        for _ in range(200):
+            job = self.llama()["job"]
+            if job["state"] in ("done", "failed"):
+                break
+            time.sleep(0.02)
+        self.assertEqual(job["state"], "done", job)
+        self.assertTrue((self.bin / "llama-server").is_file())
+        self.found_server = str(self.bin / "llama-server")
+        self.assertEqual(self.llama()["need"], "")
+
+    def test_install_is_refused_when_a_working_llama_server_can_use_the_gpu(self):
+        self.found_server = "/opt/llama/llama-server"
+        status, body = self.post("/api/llama/install", {})
+        self.assertEqual(status, 409)
+        self.assertIn("already", body["error"])
+
+    def test_install_is_refused_while_the_chat_is_running(self):
+        """Windows cannot replace a running llama-server.exe; and a chat should not lose its server mid-answer."""
+        self.app.chat.job = {"state": "running"}
+        self.addCleanup(setattr, self.app.chat, "job", {"state": "idle"})
+        status, body = self.post("/api/llama/install", {})
+        self.assertEqual(status, 409)
+        self.assertIn("Stop the chat", body["error"])
+
+    def test_install_is_post_only_behind_the_token_host_and_origin_checks(self):
+        self.assertEqual(self.post("/api/llama/install", {}, token=False)[0], 403)
+        self.assertEqual(self.post("/api/llama/install", {}, headers={"Origin": "https://evil.example"})[0], 403)
+        self.assertEqual(self.call("POST", "/api/llama/install", {}, {"X-LP-Token": self.app.token}, host="evil.example")[0], 403)
+        self.assertEqual(self.call("GET", "/api/llama/install")[0], 404)
+        self.assertEqual(self.post("/api/llama/install", {"variant": "../../x"})[0], 400)
+        self.assertEqual(self.app.installer.status()["state"], "idle")
+
+    def test_an_amd_gpu_gets_the_vulkan_build_and_the_page_says_it_is_unused(self):
+        """AMD / Intel Arc: the installer picks Vulkan, and the page says the current build cannot use the card.
+        Recommendations stay CPU-based (gpu_kind is unchanged), as for existing users."""
+        self.app.hw = ms.Hw(ram_mb=16384, cores=8)
+        self.app.hw.other_gpu, self.app.hw.other_gpu_usable = "AMD Radeon RX 6800", False
+        self.found_server = "/opt/llama/llama-server"
+        offer = self.llama()["offer"]
+        self.assertEqual((offer["how"], offer["kind"]), ("download", "vulkan"))
+        self.assertEqual(self.llama()["need"], "no-gpu")
+        s = self.get_json("/api/state")
+        self.assertTrue(s["gpu_unused"])
+        self.assertEqual(s["mode"], "cpu")
+
+    def test_chat_and_install_exclude_each_other(self):
+        """Regression (review on #3): a chat could start (from another tab) while an install replaced the files it
+        runs, and an install could start while a chat was still stopping. One lock covers both, every busy state counts."""
+        self.found_server = ""
+        for state in ("checking", "downloading", "verifying", "installing"):
+            with self.subTest(install=state):
+                self.app.installer.job = {"state": state}
+                code, body = self.app.chat_start({"id": "anything"})
+                self.assertEqual(code, 409)
+                self.assertIn("being installed", body["error"])
+        self.app.installer.job = {"state": "idle"}
+        for state in ("reserved", "starting", "running", "stopping"):
+            with self.subTest(chat=state):
+                self.app.chat.job = {"state": state}
+                self.assertEqual(self.post("/api/llama/install", {})[0], 409)
+        self.app.chat.job = {"state": "idle"}
+
+    def test_a_chat_start_and_an_install_at_the_same_moment_do_not_both_run(self):
+        gate, entered = threading.Event(), threading.Event()
+
+        def slow_start(model, title, port=None):
+            entered.set()
+            gate.wait(5)
+            self.app.chat.job = {"state": "starting"}
+            return 202, {}
+        self.app.chat.start = slow_start
+        self.addCleanup(setattr, self.app.chat, "job", {"state": "idle"})
+        offer = {"repo": "o/M-GGUF", "files": [("m.gguf", 4)], "size": 4, "title": "M"}
+        self.app.offered["o/M-GGUF|m.gguf"] = offer
+        unittest.mock.patch.object(self.app, "_chat_model", return_value=((Path("m.gguf"), "M"), None)).start()
+        self.addCleanup(unittest.mock.patch.stopall)
+        out = {}
+        t = threading.Thread(target=lambda: out.setdefault("chat", self.app.chat_start({"id": "o/M-GGUF|m.gguf"})))
+        t.start()
+        entered.wait(5)
+        u = threading.Thread(target=lambda: out.setdefault("install", self.app.llama_install({})))
+        u.start()
+        time.sleep(0.3)
+        self.assertTrue(u.is_alive(), "the install did not wait for the chat start to finish")
+        gate.set()
+        t.join(10)
+        u.join(10)
+        self.assertEqual(out["chat"][0], 202)
+        self.assertEqual(out["install"][0], 409)
+        self.assertEqual(self.app.installer.status()["state"], "idle")
+
+    def test_the_installer_is_told_the_drivers_cuda_version(self):
+        self.app.hw = ms.Hw(ram_mb=16384, cores=8, gpu_kind="nvidia", gpu_name="G", vram_mb=8192, gpu_usable=False)
+        self.app.hw.cuda_version = "12.4"
+        self.assertEqual(self.app.installer.cuda_max(), "12.4")
+
+    def test_hardware_is_detected_again_after_an_install(self):
+        """A CUDA build makes the GPU usable: recommendations must follow."""
+        calls = []
+        unittest.mock.patch.object(ms, "detect_hw", lambda: calls.append(1) or self.hw).start()
+        self.addCleanup(unittest.mock.patch.stopall)
+        self.post("/api/llama/install", {})
+        for _ in range(200):
+            if self.llama()["job"]["state"] in ("done", "failed"):
+                break
+            time.sleep(0.02)
+        self.llama()
+        self.assertTrue(calls, "hardware was not detected again after the install")
+
+
 class TestRadarOffline(UiBase):
     def test_a_sync_that_cannot_reach_the_hub_says_so_and_keeps_the_saved_scan(self):
         saved = {"updated_at": "2026-10-30T00:00:00Z", "models": [{"repo": "t/saved-GGUF", "fit_mode": "gpu"}]}
@@ -618,6 +940,17 @@ class TestRadarOffline(UiBase):
         self.assertTrue(d["offline"])
         self.assertEqual([m["repo"] for m in d["models"]], ["t/saved-GGUF"])
         self.assertEqual(d["updated_at"], "2026-10-30T00:00:00Z")
+
+
+class TestServerBind(unittest.TestCase):
+    def test_the_page_server_binds_without_a_host_name_lookup(self):
+        """HTTPServer.server_bind calls socket.getfqdn(), which can take seconds on macOS (seen on the macOS CI
+        runner), and serve() may try 20 ports. The page server only needs to bind."""
+        import socket
+        with unittest.mock.patch.object(socket, "getfqdn", side_effect=AssertionError("getfqdn called")):
+            s = ui_server.Server(("127.0.0.1", 0), ui_server.BaseHTTPRequestHandler)
+        self.addCleanup(s.server_close)
+        self.assertEqual(s.server_address[0], "127.0.0.1")
 
 
 class TestServe(unittest.TestCase):

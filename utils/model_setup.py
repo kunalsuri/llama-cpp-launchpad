@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import hashlib
 import io
 import json
 import os
@@ -436,8 +437,34 @@ def local_path(repo: str, file: str, size: int):
     return prefixed, False
 
 
+last_download_error = ""        # why the last download() returned None: "disk", "network", "size" or "checksum"
+
+
+def published_sha256(repo: str, file: str) -> str:
+    """The SHA-256 Hugging Face publishes for a file: GET /api/models/REPO?blobs=true -> siblings[].lfs.sha256
+    (the key huggingface_hub's client reads). "" when there is none (not an LFS file) or the Hub cannot be reached."""
+    data = http_json(f"{HF_API}/models/{repo}?blobs=true")
+    siblings = (data.get("siblings") or []) if isinstance(data, dict) else []
+    for s in siblings:
+        if isinstance(s, dict) and s.get("rfilename") == file:
+            sha = str((s.get("lfs") or {}).get("sha256") or "").lower()
+            return sha if re.fullmatch(r"[0-9a-f]{64}", sha) else ""
+    return ""
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def download(repo: str, file: str, size: int, on_progress=None):
-    """Download into models/. Returns the final path, or None on failure (a partial file is kept for resume)."""
+    """Download into models/. Returns the final path, or None on failure (a partial file is kept for resume,
+    except one whose checksum is wrong: that one is emptied so the next try starts over)."""
+    global last_download_error
+    last_download_error = ""
     dest, _ = local_path(repo, file, size)
     part = dest.with_name(dest.name + ".part")
     models_dir().mkdir(parents=True, exist_ok=True)
@@ -445,6 +472,7 @@ def download(repo: str, file: str, size: int, on_progress=None):
     if size and free < size * 105 // 100:
         err(f"{Style.RED}Not enough free disk space{Style.R}: need about {human_size(size * 105 // 100)}, "
             f"have {human_size(free)}.")
+        last_download_error = "disk"
         return None
     err(f"{Style.ORANGE}●{Style.R} Downloading {dest.name} ({human_size(size)})")
     claim_file(dest, repo)                              # so a resume, or another repo, knows whose bytes these are
@@ -452,11 +480,25 @@ def download(repo: str, file: str, size: int, on_progress=None):
         fetch_file(f"{HF_BASE}/{repo}/resolve/main/{file}", part, size, *([on_progress] if on_progress else []))
     except (urllib.error.URLError, OSError) as e:
         err(f"{Style.RED}Download failed{Style.R} ({e}). Run the command again to resume.")
+        last_download_error = "network"
         return None
     got = part.stat().st_size if part.exists() else 0
     if size and got != size:
         err(f"{Style.RED}Downloaded size ({got}) does not match the expected size ({size}).{Style.R} Run again to resume.")
+        last_download_error = "size"
         return None
+    expected = published_sha256(repo, file)
+    if expected:
+        err("  Checking the file against the SHA-256 Hugging Face publishes...")
+        if sha256_file(part) != expected:
+            open(part, "wb").close()                    # emptied, not resumed: these bytes are not the published file
+            err(f"{Style.RED}The SHA-256 checksum does not match the one Hugging Face publishes.{Style.R} "
+                "The file was not kept; run the command again to download it from the start.")
+            last_download_error = "checksum"
+            return None
+        err(f"{Style.GREEN}✔{Style.R} SHA-256 matches the checksum Hugging Face publishes.")
+    else:
+        err("  Hugging Face gave no checksum for this file (or could not be reached): checked its size only.")
     os.replace(part, dest)
     return dest
 
