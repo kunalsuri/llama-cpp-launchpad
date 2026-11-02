@@ -475,6 +475,7 @@
       <h1 id="models-title" tabindex="-1">My models</h1>
       <p class="sub" id="models-sum">The models in this project's models folder.</p>
     </div>
+    <div id="router-box" aria-live="polite"></div>
     <div id="compare-box" aria-live="polite"></div>
     <div id="models-list" aria-live="polite"></div>
   </section>
@@ -1473,9 +1474,60 @@ async function deleteModel(id) {
   renderModels();
   say("Deleted " + id);
 }
+// --- All my models at one address (utils/router.py): llama-server's router mode over the models folder ----------
+let routerInfo = null, routerTimer = null, routerGen = 0;
+function renderRouter() {
+  const box = $("#router-box"), r = routerInfo, c = S.chat || {};
+  const kids = [];
+  if (c.router && ["starting", "running"].includes(c.state)) {
+    const api = "http://127.0.0.1:" + c.port + "/v1";
+    kids.push(c.state === "starting" ? h("p", {}, h("b", {}, "Starting… "), "llama-server is reading the model list.")
+      : h("p", {}, h("b", {}, "Serving " + c.router.length + " models at " + api + ". "),
+        "Programs that use the OpenAI API (Open WebUI, Continue, …) ask for one by name; llama.cpp loads it then, one at a time."),
+      h("ul", { class: "reasons" }, c.router.map((n) => h("li", {}, h("code", {}, n)))),
+      h("div", { class: "actions" }, c.state === "running" ? h("a", { class: "btn small", href: c.url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open the chat") : null,
+        h("button", { class: "btn small ghost", onclick: stopRouter }, "Stop")));
+  } else if (r && r.available) {
+    kids.push(h("p", {}, h("b", {}, "All my models at one address. "),
+      "One llama-server for every model here: a program asks for a model by name and llama.cpp loads it, one at a time, so only one is ever in memory."),
+      h("div", { class: "actions" }, h("button", { class: "btn small", onclick: startRouter }, icon("layers"), "Serve all my models")),
+      h("p", { class: "cmd-label" }, "It runs:"), cmdRow(r.cmd));
+  } else if (r && r.why && modelsData && modelsData.models.some((m) => m.kind === "model")) {
+    kids.push(h("p", { class: "muted" }, "All my models at one address: " + r.why));
+  }
+  box.replaceChildren(...kids.filter(Boolean));
+}
+async function startRouter() {
+  let r;
+  try { r = await api("/api/router/start", {}); } catch (e) { r = { error: UNREACHABLE }; }
+  if (r.error) { say(r.error); $("#router-box").prepend(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, r.error))); return; }
+  S.chat = r; renderRouter(); renderWarn(); pollRouter();
+}
+async function stopRouter() {
+  try { S.chat = await api("/api/chat/stop", {}); } catch (e) { return; }
+  routerGen++; renderRouter(); renderWarn();
+}
+function pollRouter() {
+  clearTimeout(routerTimer);
+  const g = ++routerGen;
+  const tick = async () => {
+    if (g !== routerGen || view !== "v-models") return;
+    let d;
+    try { d = await api("/api/chat"); } catch (e) { routerTimer = setTimeout(tick, 2000); return; }
+    if (g !== routerGen || view !== "v-models") return;
+    S.chat = d.chat || {};
+    renderRouter(); renderWarn();
+    if (S.chat.state === "starting") routerTimer = setTimeout(tick, 1000);
+  };
+  routerTimer = setTimeout(tick, 1000);
+}
+
 async function openModels() {
   show("v-models");
   await loadModels();
+  try { routerInfo = await api("/api/router"); } catch (e) { routerInfo = null; }
+  renderRouter();
+  if (S.chat && S.chat.router && S.chat.state === "starting") pollRouter();
   try { compareData = await api("/api/compare"); } catch (e) {}
   renderCompare();
   if (compareData && compareData.state === "running") pollCompare();

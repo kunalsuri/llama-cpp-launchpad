@@ -793,6 +793,36 @@ const scenarios = {
     if (p.state.calls.filter((c) => c === "/api/compare").length !== calls) return "kept polling after the comparison finished";
   },
 
+  async "All my models at one address: start the router, see the names to ask for, stop it"() {
+    const posts = [];
+    const two = { dir: "/p/models", total: 2, free: 9, models: ["alpha.gguf", "beta.gguf"].map((id) => ({ id, kind: "model", size: 1e9, repo: "", files: [id], header_error: "" })) };
+    const info = { available: true, why: "", models: ["alpha", "beta"], cmd: "llama-server --port 8080 --models-preset X --models-max 1", url: "http://127.0.0.1:8080/v1" };
+    let chat = { state: "idle", log: [] };
+    const p = makePage({ hash: "#models", routes: idle((path, opts) => {
+      if (path === "/api/models") return two;
+      if (path === "/api/router") return info;
+      if (path === "/api/compare") return { state: "idle", models: [], prompts: [] };
+      if (path === "/api/router/start") { posts.push(path); chat = { state: "starting", model: "All my models (2)", router: ["alpha", "beta"], url: "http://127.0.0.1:8080/", port: 8080, log: [] }; return chat; }
+      if (path === "/api/chat/stop") { posts.push(path); chat = { ...chat, state: "stopped" }; return chat; }
+      if (path === "/api/chat") return { chat };
+      return {};
+    }) });
+    await p.start();
+    const t0 = p.text("router-box");
+    if (!t0.includes("--models-max 1") || !t0.includes("one at a time")) return "the command or the memory rule is not shown: " + t0;
+    p.button("router-box", "Serve all my models").click(); await p.settle();
+    if (posts[0] !== "/api/router/start") return "not started: " + JSON.stringify(posts);
+    if (!/Starting/.test(p.text("router-box"))) return "no starting state: " + p.text("router-box");
+    chat = { ...chat, state: "running" };
+    await p.advance(1100);
+    const t = p.text("router-box");
+    for (const want of ["Serving 2 models", "http://127.0.0.1:8080/v1", "alpha", "beta"])
+      if (!t.includes(want)) return `missing "${want}": ` + t;
+    p.button("router-box", "Stop").click(); await p.settle();
+    if (posts[1] !== "/api/chat/stop") return "Stop did not stop: " + JSON.stringify(posts);
+    if (p.text("router-box").includes("Serving 2 models")) return "still shown as serving after Stop";
+  },
+
   async "a refused delete says why and keeps the model"() {
     const list = { dir: "/p/models", total: 1, free: 1, models: [{ id: "a.gguf", kind: "model", size: 1e9, repo: "", files: ["a.gguf"], header_error: "" }] };
     const p = makePage({ hash: "#models", routes: idle((path) => (path === "/api/models" ? list

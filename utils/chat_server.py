@@ -287,8 +287,8 @@ class ChatServer:
         user set in the environment keep winning, as in the serve scripts."""
         port = self.port(port)
         extra = str(self.environ.get("EXTRA_ARGS") or "").split()
-        return (list(self.find_server()) + ["-m", str(model), "--port", str(port)] + list(settings or []) + extra,
-                port)
+        model_args = ["-m", str(model)] if model is not None else []          # None: router mode (router.py)
+        return (list(self.find_server()) + model_args + ["--port", str(port)] + list(settings or []) + extra, port)
 
     def shown(self, argv: list) -> str:
         return subprocess.list2cmdline(argv) if self.system == "Windows" else shlex.join(argv)
@@ -319,7 +319,7 @@ class ChatServer:
             self.job.update(kw)
 
     # --- start / stop ---
-    def start(self, model: Path, title: str, port=None, settings=None) -> tuple:
+    def start(self, model: Path, title: str, port=None, settings=None, ready: str = "/health") -> tuple:
         """-> (http status, body). 202 when llama-server was started (it is then "starting" until it answers).
         The slot is reserved under the lock first, so two Start requests at once cannot both launch a server."""
         with self.lock:
@@ -358,11 +358,12 @@ class ChatServer:
         with self.lock:
             self.proc = proc
             self.log.clear()
-            self.job = {"state": "starting", "cmd": self.shown(argv), "port": port, "model": title, "model_path": str(model),
+            self.job = {"state": "starting", "cmd": self.shown(argv), "port": port, "model": title,
+                        "model_path": str(model) if model is not None else "",
                         "url": f"http://127.0.0.1:{port}/", "pid": proc.pid, "started": time.time()}
         reader = threading.Thread(target=self._read, args=(proc,), daemon=True)
         reader.start()
-        threading.Thread(target=self._watch, args=(proc, port, reader), daemon=True).start()
+        threading.Thread(target=self._watch, args=(proc, port, reader, ready), daemon=True).start()
         return 202, self.status()
 
     def _read(self, proc) -> None:
@@ -371,7 +372,7 @@ class ChatServer:
                 with self.lock:
                     self.log.append(line.rstrip("\r\n"))
 
-    def _watch(self, proc, port: int, reader=None) -> None:
+    def _watch(self, proc, port: int, reader=None, ready: str = "/health") -> None:
         while True:
             code = proc.poll()
             with self.lock:
@@ -387,7 +388,7 @@ class ChatServer:
                     self._set(state="failed", exit_code=code, error=f"{why} (exit code {code}). Its output is below.")
                 return
             if state == "starting":
-                answer = http_get(port, "/health")
+                answer = http_get(port, ready)
                 if answer and answer[0] == 200:
                     self._set(state="running")
             time.sleep(0.25)

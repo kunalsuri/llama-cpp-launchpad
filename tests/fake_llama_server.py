@@ -4,6 +4,7 @@ It behaves like the real program where the launchpad depends on it:
   --version           prints a version banner and exits 0
   --list-devices      prints FAKE_LLAMA_DEVICES (default: no GPU) and exits 0
   --help              prints tests/fixtures/llama_server_help.txt (or the file in FAKE_LLAMA_HELP) and exits 0
+  --models-preset INI (no -m) router mode: GET /models lists the INI's [sections]; otherwise as below
   -m FILE --port N    listens on 127.0.0.1:N; /health answers 503 "Loading model" for FAKE_LLAMA_LOAD_S seconds
                       (default 0.3), then 200 {"status": "ok"}; /props names the model. Prints its arguments first,
                       so tests can see exactly what it was started with. A busy port: prints an error, exits 1.
@@ -47,12 +48,18 @@ def main():
     port = int(arg("--port", "8080"))
     ready_at = time.monotonic() + float(os.environ.get("FAKE_LLAMA_LOAD_S", "0.3"))
     model = arg("-m")
+    router = []                                  # router mode (no -m): the model names of --models-preset's sections
+    if not model and arg("--models-preset"):
+        with open(arg("--models-preset"), encoding="utf-8") as f:
+            router = [ln.strip()[1:-1] for ln in f if ln.strip().startswith("[") and ln.strip() != "[*]"]
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_a):
             pass
 
         def do_GET(self):
+            if self.path == "/models" and router:          # router mode: the presets' sections are the models
+                return self.answer(200, {"data": [{"id": n, "status": {"value": "unloaded"}} for n in router]})
             if self.path == "/health":
                 ok = time.monotonic() >= ready_at
                 body = {"status": "ok"} if ok else {"error": {"code": 503, "message": "Loading model"}}

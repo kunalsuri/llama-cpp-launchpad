@@ -24,7 +24,7 @@ ALLOWED_IMPORTS = {"__future__", "argparse", "csv", "ctypes", "datetime", "io", 
                    "struct",                         # gguf.py: decoding a model file's binary header
                    "statistics",                     # compare.py: mean speed over the prompts
                    "hardware", "hf_discover", "ui_server", "detect_tools", "hf_radar", "model_setup",
-                   "chat_server", "llama_install", "gguf", "local_models", "compare"}      # local modules
+                   "chat_server", "llama_install", "gguf", "local_models", "compare", "router"}      # local modules
 LOCAL_MODULES = {p.stem for p in SOURCES}
 # 127.0.0.1 = the setup page itself (ui_server.py); api.github.com = the llama.cpp release listing (llama_install.py)
 ALLOWED_HOSTS = {"huggingface.co", "github.com", "api.github.com", "127.0.0.1"}
@@ -167,6 +167,14 @@ class TestSourceAudit(unittest.TestCase):
         self.assertNotRegex(text, r"(subprocess|urllib|run_cmd|write_text|write_bytes|open\(|unlink|shutil)")
         self.assertIn("chat_server.ChatServer(", text)
         self.assertIn('chat_server.http_post_json(port, "/v1/chat/completions"', text)
+
+    def test_router_writes_only_its_preset_file(self):
+        """router.py writes one file, the preset INI it is given, through a temporary file next to it."""
+        text = (UTILS / "router.py").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"(write_text|write_bytes|os\.replace|open\(|unlink|os\.remove|shutil|rmtree)", text),
+                         ["write_text", "os.replace"])
+        self.assertIn('PRESET_NAME = ".launchpad-models.ini"', text)
+        self.assertNotRegex(text, r"(subprocess|urllib|http\.client|run_cmd)")
 
     def test_gguf_reader_only_reads(self):
         """gguf.py decodes model headers. It opens files for reading only, writes nothing, runs nothing and has no

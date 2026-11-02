@@ -45,3 +45,7 @@ __pycache__/
 # Developer tools for the real-browser test (package.json)
 node_modules/
 test-results/
+
+# The model list llama-server router mode reads (written by the setup page: All my models)
+.launchpad-models.ini
+.launchpad-models.ini.tmp

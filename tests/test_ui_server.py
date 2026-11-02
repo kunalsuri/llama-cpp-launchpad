@@ -44,6 +44,7 @@ class UiBase(tms.Base):
             self.addCleanup(p.stop)
         self.app = ui_server.App(ms)
         self.app.probe = FakeProbe("Linux")     # rule 2: commands and hints must not depend on the host
+        self.app.router_preset = self.tmp / ".launchpad-models.ini"     # never the real project folder
         self.app.llama_version = lambda argv: (True, "version: 4242 (abc1234)")
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), ui_server.make_handler(self.app))
         self.port = self.server.server_address[1]
@@ -1062,6 +1063,63 @@ class TestCompareApi(UiBase):
             self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})
             status, body = self.post("/api/compare/stop", {})
         self.assertEqual((status, body["state"]), (200, "stopped"))
+
+
+class TestRouterApi(UiBase):
+    """All my models at one address: llama-server's router mode over the models folder."""
+
+    def setUp(self):
+        super().setUp()
+        import test_chat_server as tcs
+        p = unittest.mock.patch.dict("os.environ", {"PORT": str(tcs.free_port()), "EXTRA_ARGS": ""})
+        p.start()
+        self.addCleanup(p.stop)
+        self.app.chat.find_server = lambda: list(tcs.SERVER)
+        self.addCleanup(self.app.chat.stop)
+        self.dir = ms.models_dir()
+        self.dir.mkdir(parents=True, exist_ok=True)
+        for n, src in (("alpha.gguf", "o/A"), ("beta.gguf", "o/B"), ("mmproj-b.gguf", "o/B")):
+            (self.dir / n).write_bytes(b"x")
+            (self.dir / (n + ".source")).write_text(src, encoding="utf-8")
+
+    def test_offers_every_model_behind_one_address(self):
+        r = self.get_json("/api/router")
+        self.assertTrue(r["available"], r)
+        self.assertEqual(r["models"], ["alpha", "beta"])
+        self.assertIn("--models-preset", r["cmd"])
+        self.assertIn("--models-max 1", r["cmd"])
+        self.assertNotIn(" -m ", r["cmd"])
+
+    def test_start_writes_the_preset_and_runs_the_router(self):
+        status, body = self.post("/api/router/start", {})
+        self.assertEqual(status, 202, body)
+        for _ in range(200):
+            s = self.get_json("/api/chat")["chat"]
+            if s["state"] == "running":
+                break
+            time.sleep(0.05)
+        self.assertEqual(s["state"], "running", s)
+        self.assertEqual(s["router"], ["alpha", "beta"])
+        ini = self.app.router_preset.read_text(encoding="utf-8")
+        self.assertIn(f"[beta]\nmodel = {self.dir / 'beta.gguf'}\nmmproj = {self.dir / 'mmproj-b.gguf'}\n", ini)
+        self.assertIn("[*]\nc = 4096\n", ini, "each model gets a short context unless the user sets one")
+        self.assertEqual(self.post("/api/router/start", {})[0], 409, "one server at a time")
+
+    def test_an_old_llama_server_without_router_mode_is_told_so(self):
+        self.app.chat.help = lambda argv: "-m,    --model FNAME      model path\n"
+        self.app.chat._flags.clear()
+        r = self.get_json("/api/router")
+        self.assertFalse(r["available"])
+        self.assertIn("--models-preset", r["why"])
+        self.assertNotIn("cmd", r)
+        self.assertEqual(self.post("/api/router/start", {})[0], 409)
+
+    def test_needs_two_models_and_the_token(self):
+        self.assertEqual(self.post("/api/router/start", {}, token=False)[0], 403)
+        (self.dir / "beta.gguf").unlink()
+        r = self.get_json("/api/router")
+        self.assertFalse(r["available"])
+        self.assertIn("two", r["why"])
 
 
 class TestLlamaApi(UiBase):

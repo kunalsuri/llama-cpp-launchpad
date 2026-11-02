@@ -32,6 +32,7 @@ import gguf
 import hf_discover
 import llama_install
 import local_models
+import router
 
 PAGE = Path(__file__).resolve().parent.parent / "ui" / "setup" / "index.html"
 USES = ("chat", "coding", "translation", "fast")
@@ -456,6 +457,60 @@ class App:
             return 409, {"error": error}
         return 200, dict(self.local_models(), removed=removed, error=error)
 
+    # --- All my models at one address: llama-server's router mode (router.py) ---------------------------------
+    @property
+    def router_preset(self) -> Path:
+        return self.__dict__.get("_router_preset") or detect_tools.ROOT / router.PRESET_NAME
+
+    @router_preset.setter
+    def router_preset(self, path) -> None:
+        self.__dict__["_router_preset"] = Path(path)
+
+    def _router_plan(self) -> dict:
+        flags = self.chat.help_flags()
+        rows = router.entries(self.ms.models_dir())
+        out = {"available": False, "why": "", "models": [r["name"] for r in rows], "rows": rows}
+        if not self.chat.find_server():
+            out["why"] = chat_server.NOT_FOUND
+            return out
+        args, why = router.router_args(self.router_preset, flags)
+        if why:
+            out["why"] = why
+        elif len(rows) < 2:
+            out["why"] = "Serving several models at one address needs at least two downloaded models."
+        else:
+            out.update(available=True, args=args, shared={"c": 4096} if "--ctx-size" in flags else {})
+        return out
+
+    def router_info(self) -> dict:
+        plan = self._router_plan()
+        out = {k: plan[k] for k in ("available", "why", "models")}
+        if plan["available"]:
+            out["cmd"] = self.chat.shown(self.chat.command(None, settings=plan["args"])[0])
+            out["url"] = f"http://127.0.0.1:{self.chat.port()}/v1"
+        return out
+
+    def router_start(self) -> tuple:
+        with self.run_lock:
+            if self.installer.status().get("state") in INSTALL_BUSY:
+                return 409, {"error": "llama.cpp is being installed. Start when the install has finished."}
+            if self._comparing():
+                return 409, {"error": "A model comparison is running (My models). Start when it has finished."}
+            plan = self._router_plan()
+            if not plan["available"]:
+                return 409, {"error": plan["why"]}
+            if self.chat.status().get("state") in CHAT_BUSY:
+                return 409, {"error": "A chat server is already running. Stop it first."}
+            try:
+                router.write_preset(self.router_preset, router.preset_ini(plan["rows"], plan["shared"]))
+            except (OSError, ValueError) as e:
+                return 500, {"error": f"Could not write the model list for llama-server: {e}"}
+            code, body = self.chat.start(None, f"All my models ({len(plan['rows'])})", None, plan["args"], ready="/models")
+            if code == 202:
+                self.chat._set(router=plan["models"])
+                body = self.chat.status()
+            return code, body
+
     # --- Compare models (compare.py): the same prompts on 2-3 models, one in memory at a time ------------------
     compare = None
 
@@ -810,6 +865,8 @@ def make_handler(app: App):
                 return self.reply(200, app.local_models())
             if url.path == "/api/compare":
                 return self.reply(200, app.compare_status())
+            if url.path == "/api/router":
+                return self.reply(200, app.router_info())
             if url.path == "/api/vision":
                 code, out = app.vision((q.get("id") or [None])[0])
                 return self.reply(code, out)
@@ -857,6 +914,9 @@ def make_handler(app: App):
                 return self.reply(200, app.chat.stop())
             if path == "/api/llama/install":
                 code, out = app.llama_install(body)
+                return self.reply(code, out)
+            if path == "/api/router/start":
+                code, out = app.router_start()
                 return self.reply(code, out)
             if path == "/api/compare/start":
                 code, out = app.compare_start(body)

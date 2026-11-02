@@ -200,6 +200,26 @@ class TestSettings(Base):
         self.assertEqual(cs.help_flags(), set(), "no llama-server: no flags")
 
 
+class TestRouterMode(Base):
+    """Router mode: llama-server without -m; it is ready when its documented GET /models answers."""
+
+    def test_no_model_means_no_dash_m(self):
+        argv, _ = self.cs.command(None, settings=["--models-preset", "/p/x.ini"])
+        self.assertNotIn("-m", argv)
+        self.assertIn("--models-preset", argv)
+
+    def test_a_router_is_running_when_it_lists_its_models(self):
+        import tempfile
+        ini = Path(tempfile.mkdtemp()) / "x.ini"
+        ini.write_text("version = 1\n\n[*]\n\n[A]\nmodel = /m/a.gguf\n", encoding="utf-8")
+        with unittest.mock.patch.dict(os.environ, {"FAKE_LLAMA_LOAD_S": "600"}):   # /health never turns 200
+            code, body = self.cs.start(None, "All my models", settings=["--models-preset", str(ini)], ready="/models")
+            self.assertEqual(code, 202, body)
+            s = self.wait("running")
+        self.assertEqual(s["model_path"], "")
+        self.assertNotIn(" -m ", s["cmd"])
+
+
 class TestLifecycle(Base):
     def test_the_chosen_settings_reach_llama_server(self):
         code, body = self.cs.start(self.model, "My Model", settings=["-c", "2048", "-ngl", "99"])
