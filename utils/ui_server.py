@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, urlparse
 import chat_server
 import detect_tools
 import hf_discover
+import llama_install
 
 PAGE = Path(__file__).resolve().parent.parent / "ui" / "setup" / "index.html"
 USES = ("chat", "coding", "translation", "fast")
@@ -156,6 +157,42 @@ class App:
             find_server=lambda: [p] if (p := ms.find_llama_server()) else [],
             system=lambda: self.probe.system, which=lambda name: self.probe.which(name),
             run=lambda args, timeout=20: self.probe.run(args, timeout))
+        # Installing llama.cpp: into the project's bin/ (Windows, Linux) or with Homebrew (macOS, if found).
+        self.bin_dir = detect_tools.ROOT / "bin"
+        self.llama_version = llama_install.server_version       # `llama-server --version`: does the copy found run?
+        self.installer = self.make_installer()
+
+    def make_installer(self, **kw):
+        args = dict(bin_dir=lambda: self.bin_dir, system=lambda: self.probe.system, machine=lambda: self.probe.machine,
+                    gpu_kind=lambda: self.hw.gpu_kind, find=lambda: self.ms.find_llama_server(),
+                    which=lambda name: self.probe.which(name), version=lambda argv: self.llama_version(argv),
+                    on_done=self._after_install)
+        args.update(kw)
+        return llama_install.Installer(**args)
+
+    def _after_install(self) -> None:
+        """A new llama.cpp build may use the GPU where the old one could not: detect again, so picks follow."""
+        self.hw = self.ms.detect_hw()
+        self.ms.save_hw(self.hw)
+
+    def llama_info(self) -> dict:
+        """What llama-server the serve scripts would use, whether it runs, and why (and how) to install one."""
+        found = self.ms.find_llama_server()
+        works, out = self.llama_version([found]) if found else (False, "")
+        version = next((line.strip() for line in out.splitlines() if "version" in line.lower()), "") if works else ""
+        return {"found": found, "works": works, "version": version,
+                "need": llama_install.why_install(found, works, self.hw),
+                "offer": self.installer.offer(), "job": self.installer.status()}
+
+    def llama_install(self, body: dict):
+        variant = body.get("variant", "auto")
+        if variant not in ("auto", "cpu"):
+            return 400, {"error": "bad request"}
+        if self.chat.status().get("state") in ("starting", "running"):
+            return 409, {"error": "Stop the chat first: llama-server cannot be replaced while it is running."}
+        if not self.llama_info()["need"]:
+            return 409, {"error": "A working llama-server that can use this computer is already installed."}
+        return self.installer.start(variant)
 
     def close(self) -> None:
         """The page server is stopping: stop the chat it started (and nothing else)."""
@@ -165,6 +202,7 @@ class App:
     def state(self) -> dict:
         ms, hw = self.ms, self.hw
         gpu = hw.gpu_kind in ("nvidia", "gpu") and hw.gpu_usable
+        llama = self.llama_info()
         return {
             "token": self.token,
             "ram_gb": (hw.ram_mb + 512) // 1024,
@@ -172,7 +210,8 @@ class App:
             "vram_gb": hw.vram_mb // 1024,
             "gpu_unused": hw.gpu_kind in ("nvidia", "gpu") and not hw.gpu_usable,
             "mode": "gpu" if gpu or hw.gpu_kind == "apple" else "cpu",
-            "llama_server": bool(ms.find_llama_server()),
+            "llama_server": bool(llama["found"] and llama["works"]),     # found AND runs (rule 3)
+            "llama": llama,
             "llama_install": install_hint("llama-cpp", self.probe),
             "installed": ms.state_get("installed"),
             "os": os_name(self.probe.system),
@@ -512,6 +551,8 @@ def make_handler(app: App):
                 return self.reply(200, app.snapshot())
             if url.path == "/api/chat":
                 return self.reply(200, app.chat_status((q.get("id") or [None])[0]))
+            if url.path == "/api/llama":
+                return self.reply(200, app.llama_info())
             if url.path == "/api/tools":
                 ids = q.get("tool") or None
                 if ids and any(i not in detect_tools.SPECS for i in ids):
@@ -554,6 +595,9 @@ def make_handler(app: App):
                 return self.reply(code, out)
             if path == "/api/chat/stop":
                 return self.reply(200, app.chat.stop())
+            if path == "/api/llama/install":
+                code, out = app.llama_install(body)
+                return self.reply(code, out)
             self.reply(404, {"error": "not found"})
 
     return Handler

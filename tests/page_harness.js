@@ -766,6 +766,115 @@ const scenarios = {
   },
 };
 
+// --- Installing llama.cpp ----------------------------------------------------------------------------------------
+const OFFER = { how: "download", kind: "cpu", label: "CPU build", into: "/p/proj/bin" };
+const NEED = { found: "", works: false, version: "", need: "missing", offer: OFFER, job: { state: "idle", log: [] } };
+function llamaRoutes({ infos, posts = [], state, start = { state: "checking", log: [] } }) {
+  let i = 0;
+  return (path, opts) => {
+    if (path === "/api/state") return state || { ...STATE, llama_server: false, llama: infos[0] };
+    if (path === "/api/progress") return { state: "idle" };
+    if (path === "/api/llama") return infos[Math.min(i++, infos.length - 1)];
+    if (path === "/api/llama/install") { posts.push(JSON.parse(opts.body)); i = Math.max(i, 1); return start; }
+    return {};
+  };
+}
+const job = (j) => ({ ...NEED, job: { log: [], ...j } });
+
+Object.assign(scenarios, {
+  async "the llama.cpp notice offers to install it, and the install view says from where and to where"() {
+    const p = makePage({ routes: llamaRoutes({ infos: [NEED] }) });
+    await p.start();
+    const b = p.button("warn", "Install llama.cpp");
+    if (!b) return "no install button in the notice: " + p.text("warn");
+    b.click(); await p.settle();
+    if (p.visible() !== "v-llama") return "install view did not open: " + p.visible();
+    if (p.location.hash !== "#llama") return "the install view has no address: " + p.location.hash;
+    const t = p.text("llama-body");
+    if (!t.includes("github.com/ggml-org/llama.cpp") || !t.includes("/p/proj/bin")) return "does not say from where and to where: " + t;
+    if (!/no admin/i.test(t)) return "does not say it needs no admin rights: " + t;
+    if (!p.button("llama-body", "Install llama.cpp (CPU build)")) return "no install button in the view: " + t;
+  },
+
+  async "installing shows progress, then the version, how it was checked, and a copy that shadows it"() {
+    const posts = [];
+    const done = job({ state: "done", path: "/usr/bin/llama-server", version: "version: 4242 (abc1234)", checksum: "verified",
+      shadowed: "Another llama-server comes first: /usr/bin/llama-server." });
+    const p = makePage({ hash: "#llama", routes: llamaRoutes({ posts, infos: [NEED,
+      job({ state: "downloading", done: 50, total: 100, kind: "cpu", why: "CPU build." }),
+      job({ state: "verifying", done: 100, total: 100 }), done, { ...done, found: "/usr/bin/llama-server", works: true, need: "" }] }) });
+    await p.start();
+    p.button("llama-body", "Install llama.cpp").click(); await p.settle();
+    if (JSON.stringify(posts) !== "[{\"variant\":\"auto\"}]") return "install request: " + JSON.stringify(posts);
+    const bar = findEl(p.el("llama-body"), (e) => e.getAttribute && e.getAttribute("role") === "progressbar");
+    if (!bar || bar.getAttribute("aria-valuenow") !== "50") return "no progress at 50%: " + p.text("llama-body");
+    await p.advance(3000);
+    const t = p.text("llama-body");
+    if (!t.includes("4242")) return "version not shown: " + t;
+    if (!/SHA-256/.test(t)) return "does not say it was checked against the published checksum: " + t;
+    if (!t.includes("Another llama-server comes first")) return "shadowing copy not named: " + t;
+  },
+
+  async "an install without a published checksum says only the size was checked"() {
+    const p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [job({ state: "done", path: "/p/proj/bin/llama-server",
+      version: "version: 1", checksum: "none-published", shadowed: "" })] }) });
+    await p.start();
+    if (!/no checksum/i.test(p.text("llama-body"))) return "no checksum note: " + p.text("llama-body");
+  },
+
+  async "a failed install shows why, llama-server's output, and offers the CPU build"() {
+    const posts = [];
+    const failed = job({ state: "failed", error: "The downloaded Vulkan build did not start.", cpu_fallback: true,
+      log: ["error while loading shared libraries: libvulkan.so.1"] });
+    const p = makePage({ hash: "#llama", routes: llamaRoutes({ posts, infos: [failed] }) });
+    await p.start();
+    const t = p.text("llama-body");
+    if (!t.includes("did not start") || !t.includes("libvulkan.so.1")) return "error or log missing: " + t;
+    const cpu = p.button("llama-body", "Install the CPU build instead");
+    if (!cpu) return "CPU build not offered: " + t;
+    cpu.click(); await p.settle();
+    if (posts[0].variant !== "cpu") return "did not ask for the CPU build: " + JSON.stringify(posts);
+  },
+
+  async "macOS with Homebrew shows the brew command; without it, only the instructions and no button"() {
+    const brew = { ...NEED, offer: { how: "brew", cmd: "brew install llama.cpp" } };
+    let p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [brew] }) });
+    await p.start();
+    if (!p.button("llama-body", "Install with Homebrew")) return "no Homebrew button: " + p.text("llama-body");
+    if (!p.text("llama-body").includes("brew install llama.cpp")) return "brew command not shown";
+    const manual = { ...NEED, offer: { how: "manual" } };
+    p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [manual], state: { ...STATE, llama_server: false, llama: manual,
+      llama_install: { install: "Install Homebrew (see brew.sh), then run: brew install llama.cpp" } } }) });
+    await p.start();
+    if (p.button("llama-body", "Install")) return "an install button without a way to install";
+    if (!p.text("llama-body").includes("Install Homebrew")) return "instructions missing: " + p.text("llama-body");
+  },
+
+  async "a build that cannot use the GPU is explained, with a way to get one that can"() {
+    const nogpu = { ...NEED, found: "/usr/bin/llama-server", works: true, version: "version: 1", need: "no-gpu",
+      offer: { how: "download", kind: "cuda", label: "CUDA build for your NVIDIA graphics card", into: "/p/proj/bin" } };
+    const st = { ...STATE, llama_server: true, gpu_unused: true, llama: nogpu };
+    const p = makePage({ routes: llamaRoutes({ infos: [nogpu], state: st }) });
+    await p.start();
+    const b = p.button("warn", "Get a build that uses it");
+    if (!b) return "no way to get a GPU build: " + p.text("warn");
+    b.click(); await p.settle();
+    const t = p.text("llama-body");
+    if (!t.includes("/usr/bin/llama-server") || !/cannot use your graphics card/.test(t)) return "the reason is not explained: " + t;
+    if (!p.button("llama-body", "Install llama.cpp (CUDA build")) return "no CUDA install button: " + t;
+  },
+
+  async "leaving the install view stops asking about the install"() {
+    const p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [job({ state: "downloading", done: 1, total: 100 })] }) });
+    await p.start();
+    await p.click("tools-btn");
+    const before = p.state.calls.filter((c) => c === "/api/llama").length;
+    await p.advance(20000);
+    const after = p.state.calls.filter((c) => c === "/api/llama").length;
+    if (after !== before) return `kept polling from another view: ${after - before} requests`;
+  },
+});
+
 function findEl(root, pred) {
   if (!root) return null;
   if (pred(root)) return root;

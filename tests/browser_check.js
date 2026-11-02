@@ -10,7 +10,8 @@ const { chromium } = require("playwright");
 
 const BASE = `http://127.0.0.1:${process.argv[2]}/`;
 const WIDTHS = [[360, 740, "phone"], [768, 1024, "tablet"], [1280, 900, "desktop"]];
-const VIEWS = { "": "#tiles .tile", "#tools": "#tools-list .tool", "#radar": "#radar-list .m-card, #radar-list .empty", "#history": "#history-content .card, #history-content .empty" };
+const VIEWS = { "": "#tiles .tile", "#tools": "#tools-list .tool", "#radar": "#radar-list .m-card, #radar-list .empty", "#history": "#history-content .card, #history-content .empty",
+  "#llama": "#llama-body .btn, #llama-body .note" };
 const results = [];
 const check = (name, detail) => results.push({ name, ok: !detail, detail: detail || "" });
 
@@ -22,8 +23,14 @@ async function inspect(page, phone) {
     if (doc.scrollWidth > doc.clientWidth + 1) {
       const wide = [...document.querySelectorAll("body *")].filter((e) => e.getBoundingClientRect().right > doc.clientWidth + 1 && e.offsetParent !== null);
       const culprit = wide.find((e) => ![...e.children].some((c) => wide.includes(c))) || wide[0];
+      // Content that spills out of its own box (a label that cannot wrap) leaves the box narrow: name it too.
+      // Scrollers (the nav) are skipped: their overflow is meant to scroll.
+      const spill = [...document.querySelectorAll("body *")].filter((e) => e.offsetParent !== null && e.scrollWidth > e.clientWidth + 1
+        && e.clientWidth > 0 && !["auto", "scroll", "hidden"].includes(getComputedStyle(e).overflowX) && !e.closest("nav"));
+      const leaf = spill.find((e) => ![...e.children].some((c) => spill.includes(c)));
       problems.push(`page scrolls sideways: ${doc.scrollWidth}px wide in a ${doc.clientWidth}px window` +
-        (culprit ? ` (widest: <${culprit.tagName.toLowerCase()} class="${culprit.className}">)` : ""));
+        (culprit ? ` (widest: <${culprit.tagName.toLowerCase()} class="${culprit.className}">)` : "") +
+        (leaf ? ` (content spills out of <${leaf.tagName.toLowerCase()} class="${leaf.className}">: "${(leaf.innerText || "").slice(0, 40)}")` : ""));
     }
     const text = document.body.innerText;
     const leaked = text.match(/\b(null|undefined|NaN|\[object Object\])\b/);
@@ -106,9 +113,10 @@ async function chatFlow(browser) {
       }
     }
 
-    // The whole wizard, at the smallest and largest width: choose -> pick -> download -> done -> copy.
+    // The whole wizard, at the smallest and largest width: choose -> pick -> copy -> download -> done -> get llama.cpp.
+    // (This server has no llama.cpp, so the done screen offers to install it rather than a command to copy.)
     for (const [width, height, label] of [WIDTHS[0], WIDTHS[2]]) {
-      const name = `${label} ${width}px: choose, download and copy the serve command`;
+      const name = `${label} ${width}px: choose, copy a command, download, then go to install llama.cpp and back`;
       const context = await browser.newContext({ viewport: { width, height } });
       await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: BASE.slice(0, -1) });
       const page = await context.newPage();
@@ -119,15 +127,21 @@ async function chatFlow(browser) {
         await page.getByRole("button", { name: /General chat/ }).click();
         await page.waitForSelector("#v-pick:not([hidden]) .pick");
         let problems = await inspect(page, label === "phone");
+        await page.locator("#top details.terminal summary").click();
+        const copy = page.locator("#top .copy-btn").first();
+        await copy.click();
+        await page.waitForFunction(() => /Copied/.test(document.querySelector("#top .copy-btn").innerText));
+        const pasted = await page.evaluate(() => navigator.clipboard.readText());
+        const shown = await page.locator("#top code").first().innerText();
+        if (pasted !== shown) problems.push(`copied ${JSON.stringify(pasted)} but the page shows ${JSON.stringify(shown)}`);
         await page.getByRole("button", { name: /Get this model|Use this model/ }).click();
         await page.waitForSelector("#v-done:not([hidden])", { timeout: 15000 });
         problems = problems.concat(await inspect(page, label === "phone"));
-        const copy = page.locator("#done-next .copy-btn").first();
-        await copy.click();
-        await page.waitForFunction(() => /Copied/.test(document.querySelector("#done-next .copy-btn").innerText));
-        const pasted = await page.evaluate(() => navigator.clipboard.readText());
-        const shown = await page.locator("#done-next code").first().innerText();
-        if (pasted !== shown) problems.push(`copied ${JSON.stringify(pasted)} but the page shows ${JSON.stringify(shown)}`);
+        await page.locator("#done-next").getByRole("button", { name: "Install llama.cpp" }).click();
+        await page.waitForSelector("#v-llama:not([hidden]) #llama-body .btn", { timeout: 15000 });
+        problems = problems.concat(await inspect(page, label === "phone"));
+        await page.locator("#llama-back").click();
+        await page.waitForSelector("#v-done:not([hidden])", { timeout: 5000 });
         check(name, [...problems, ...errors].join("; "));
       } catch (e) { check(name, "flow broke: " + e.message.split("\n")[0]); }
       await context.close();

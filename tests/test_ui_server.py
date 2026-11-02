@@ -31,13 +31,17 @@ class UiBase(tms.Base):
     def setUp(self):
         super().setUp()
         hw = ms.Hw(ram_mb=16384, cores=8, gpu_kind="nvidia", gpu_name="Test GPU", vram_mb=8192, gpu_usable=True)
-        for target, value in (("detect_hw", lambda: hw), ("download", self.fake_download),
-                              ("check_model_speed", self.fake_speed)):
+        self.hw = hw
+        # Rule 2: whether this machine has llama.cpp must not change the answers; tests say what is "found".
+        self.found_server = ""
+        for target, value in (("detect_hw", lambda: self.hw), ("download", self.fake_download),
+                              ("check_model_speed", self.fake_speed), ("find_llama_server", lambda: self.found_server)):
             p = unittest.mock.patch.object(ms, target, value)
             p.start()
             self.addCleanup(p.stop)
         self.app = ui_server.App(ms)
         self.app.probe = FakeProbe("Linux")     # rule 2: commands and hints must not depend on the host
+        self.app.llama_version = lambda argv: (True, "version: 4242 (abc1234)")
         self.server =ThreadingHTTPServer(("127.0.0.1", 0), ui_server.make_handler(self.app))
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -728,6 +732,109 @@ class TestChatApi(UiBase):
             busy = self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]))["preview"]["busy"]
         self.assertTrue(any(line.startswith("netstat:") for line in busy["looked"]), busy["looked"])
         self.assertEqual(self.app.probe.ran[0][0], r"C:\Windows\System32\netstat.exe")
+
+
+class TestLlamaApi(UiBase):
+    """Install llama.cpp from the page: /api/llama (what was found, why an install is offered, how) and
+    /api/llama/install. The installer's own behaviour is in test_llama_install.py; this is the wiring and the rules."""
+
+    def setUp(self):
+        super().setUp()
+        import test_llama_install as tli
+        self.tli = tli
+        self.bin = self.tmp / "proj" / "bin"
+        self.release = json.loads(json.dumps(tli.RELEASE))
+        data = tli.tar_bytes("llama-b7777", {"llama-server": b"FAKE-OK"})
+        for a in self.release["assets"]:
+            if a["name"] == "llama-b7777-bin-ubuntu-x64.tar.gz":
+                a.update(size=len(data), digest=None)
+                self.archives = {a["browser_download_url"]: data}
+        self.app.bin_dir = self.bin
+        # as hardware.find_llama_server: a copy found earlier in the lookup order wins, else the one in bin/
+        exe = self.bin / "llama-server"
+        p = unittest.mock.patch.object(ms, "find_llama_server", lambda: self.found_server or (str(exe) if exe.is_file() else ""))
+        p.start()
+        self.addCleanup(p.stop)
+        self.app.installer = self.app.make_installer(fetch_json=lambda url: self.release, fetch_file=self.fetch_file,
+                                                     version=tli.fake_version)
+        self.hw = ms.Hw(ram_mb=16384, cores=8)                  # no GPU unless a test says so
+        self.app.hw = self.hw
+
+    def fetch_file(self, url, dest, on_progress=None):
+        Path(dest).write_bytes(self.archives[url])
+
+    def llama(self):
+        return self.get_json("/api/llama")
+
+    def test_why_an_install_is_offered(self):
+        self.assertEqual(self.llama()["need"], "missing")
+        self.found_server = "/opt/llama/llama-server"
+        self.app.llama_version = lambda argv: (False, "error while loading shared libraries")
+        s = self.llama()
+        self.assertEqual((s["need"], s["found"], s["works"]), ("broken", "/opt/llama/llama-server", False))
+        self.assertFalse(self.get_json("/api/state")["llama_server"], "found but cannot run is not 'llama-server found'")
+        self.app.llama_version = lambda argv: (True, "version: 4242 (abc1234)")
+        self.app.hw = ms.Hw(ram_mb=16384, cores=8, gpu_kind="nvidia", gpu_name="G", vram_mb=8192, gpu_usable=False)
+        self.assertEqual(self.llama()["need"], "no-gpu")
+        self.app.hw.gpu_usable = True
+        s = self.llama()
+        self.assertEqual((s["need"], s["version"]), ("", "version: 4242 (abc1234)"))
+        self.assertTrue(self.get_json("/api/state")["llama_server"])
+
+    def test_offer_depends_on_the_os_and_on_brew_being_found(self):
+        self.assertEqual(self.llama()["offer"]["how"], "download")
+        self.app.probe = FakeProbe("Darwin")
+        self.assertEqual(self.llama()["offer"]["how"], "manual")
+        self.app.probe = FakeProbe("Darwin", path={"brew": "/opt/homebrew/bin/brew"})
+        self.assertEqual(self.llama()["offer"], {"how": "brew", "cmd": "brew install llama.cpp"})
+
+    def test_installs_into_bin_and_the_page_then_finds_it(self):
+        status, body = self.post("/api/llama/install", {})
+        self.assertEqual(status, 202, body)
+        for _ in range(200):
+            job = self.llama()["job"]
+            if job["state"] in ("done", "failed"):
+                break
+            time.sleep(0.02)
+        self.assertEqual(job["state"], "done", job)
+        self.assertTrue((self.bin / "llama-server").is_file())
+        self.found_server = str(self.bin / "llama-server")
+        self.assertEqual(self.llama()["need"], "")
+
+    def test_install_is_refused_when_a_working_llama_server_can_use_the_gpu(self):
+        self.found_server = "/opt/llama/llama-server"
+        status, body = self.post("/api/llama/install", {})
+        self.assertEqual(status, 409)
+        self.assertIn("already", body["error"])
+
+    def test_install_is_refused_while_the_chat_is_running(self):
+        """Windows cannot replace a running llama-server.exe; and a chat should not lose its server mid-answer."""
+        self.app.chat.job = {"state": "running"}
+        self.addCleanup(setattr, self.app.chat, "job", {"state": "idle"})
+        status, body = self.post("/api/llama/install", {})
+        self.assertEqual(status, 409)
+        self.assertIn("Stop the chat", body["error"])
+
+    def test_install_is_post_only_behind_the_token_host_and_origin_checks(self):
+        self.assertEqual(self.post("/api/llama/install", {}, token=False)[0], 403)
+        self.assertEqual(self.post("/api/llama/install", {}, headers={"Origin": "https://evil.example"})[0], 403)
+        self.assertEqual(self.call("POST", "/api/llama/install", {}, {"X-LP-Token": self.app.token}, host="evil.example")[0], 403)
+        self.assertEqual(self.call("GET", "/api/llama/install")[0], 404)
+        self.assertEqual(self.post("/api/llama/install", {"variant": "../../x"})[0], 400)
+        self.assertEqual(self.app.installer.status()["state"], "idle")
+
+    def test_hardware_is_detected_again_after_an_install(self):
+        """A CUDA build makes the GPU usable: recommendations must follow."""
+        calls = []
+        unittest.mock.patch.object(ms, "detect_hw", lambda: calls.append(1) or self.hw).start()
+        self.addCleanup(unittest.mock.patch.stopall)
+        self.post("/api/llama/install", {})
+        for _ in range(200):
+            if self.llama()["job"]["state"] in ("done", "failed"):
+                break
+            time.sleep(0.02)
+        self.llama()
+        self.assertTrue(calls, "hardware was not detected again after the install")
 
 
 class TestRadarOffline(UiBase):

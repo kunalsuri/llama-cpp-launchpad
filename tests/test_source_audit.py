@@ -20,10 +20,12 @@ ALLOWED_IMPORTS = {"__future__", "argparse", "csv", "ctypes", "datetime", "io", 
                    "http", "secrets", "threading", "webbrowser",     # ui_server.py: the localhost-only setup page
                    "glob", "importlib",   # detect_tools.py: file-system globbing and installed-package metadata (read-only)
                    "collections", "shlex", "time",   # chat_server.py: in-memory log, quoting the shown command, polling
+                   "hashlib", "tarfile", "zipfile",  # llama_install.py: SHA-256 check, unpacking release archives
                    "hardware", "hf_discover", "ui_server", "detect_tools", "hf_radar", "model_setup",
-                   "chat_server"}      # local modules
+                   "chat_server", "llama_install"}      # local modules
 LOCAL_MODULES = {p.stem for p in SOURCES}
-ALLOWED_HOSTS = {"huggingface.co", "github.com", "127.0.0.1"}   # 127.0.0.1 = the setup page itself (ui_server.py)
+# 127.0.0.1 = the setup page itself (ui_server.py); api.github.com = the llama.cpp release listing (llama_install.py)
+ALLOWED_HOSTS = {"huggingface.co", "github.com", "api.github.com", "127.0.0.1"}
 # The only programs the script may start (always as an argument list, never through a shell).
 ALLOWED_PROGRAMS = {"nvidia-smi", "sysctl", "--list-devices", "llama-server", "llama-bench"}
 
@@ -128,6 +130,25 @@ class TestSourceAudit(unittest.TestCase):
         writes = re.findall(r"(write_text|write_bytes|\bopen\(|os\.replace|shutil\.(?:move|copy|rmtree)|unlink|os\.remove)", text)
         self.assertEqual(writes, [], "chat_server.py writes no files")
         self.assertNotRegex(text, r"https?://(?!127\.0\.0\.1)", "talks only to localhost")
+
+    def test_llama_install_talks_only_to_ggml_org_releases_and_writes_only_into_bin(self):
+        """llama_install.py is the one module that installs a program. It may: read the ggml-org/llama.cpp release
+        listing, download that release's archives (redirects only to GitHub hosts), unpack them into the project's
+        bin/ through a staging folder inside bin/, run `llama-server --version` and `brew install llama.cpp`."""
+        text = (UTILS / "llama_install.py").read_text(encoding="utf-8")
+        self.assertIn('REPO = "ggml-org/llama.cpp"', text)
+        self.assertIn('LATEST_RELEASE = f"https://api.github.com/repos/{REPO}/releases/latest"', text)
+        self.assertIn('DOWNLOAD_PREFIX = f"https://github.com/{REPO}/releases/download/"', text)
+        self.assertEqual(text.count("opener.open("), 1, "one place opens network connections")
+        self.assertNotIn("urlopen(", text)
+        self.assertIn("build_opener(_GitHubOnly)", text, "every request refuses redirects away from GitHub")
+        self.assertIn('BREW_CMD = ["install", "llama.cpp"]', text)
+        self.assertEqual(re.findall(r"shutil\.rmtree\(([^,)]*)", text), ["self.staging", "self.staging"],
+                         "the only folder ever deleted is the staging folder inside bin/")
+        self.assertIn("return self.bin / STAGING", text)
+        self.assertEqual(re.findall(r"os\.replace\(([^)]*)\)", text), ["src, target"])
+        self.assertIn("target = self.bin.joinpath(", text, "files are only moved into bin/")
+        self.assertNotRegex(text, r"(unlink|os\.remove|rmdir|sudo|runas|Program Files|/usr/local)")
 
     def test_no_obfuscation(self):
         for path in SOURCES:

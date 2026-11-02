@@ -230,6 +230,8 @@
   pre.log { margin: 8px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
     font-size: 12px; line-height: 1.5; padding: 10px 12px; border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); }
   ul.looked { margin: 8px 0 0; padding-left: 18px; font-size: 13px; color: var(--text-2); }
+  #llama-body, #chat-box, #done-next, #warn { overflow-wrap: anywhere; }      /* long paths and URLs must wrap on phones */
+  #llama-body .btn, #chat-box .btn, #done-next .btn, #warn .btn { white-space: normal; text-align: center; padding-block: 8px; }
 
   /* --- Installed tools --- */
   .tool { margin-top: 12px; }
@@ -513,6 +515,16 @@
     <div id="history-content"></div>
   </section>
 
+  <section class="view" id="v-llama" hidden>
+    <button class="back" id="llama-back"><svg viewBox="0 0 24 24"><path d="M19 12H5m7-7-7 7 7 7"/></svg>Back</button>
+    <div class="page-head">
+      <p class="eyebrow">llama.cpp</p>
+      <h1 id="llama-title" tabindex="-1">Get llama.cpp</h1>
+      <p class="sub">The program that runs the models on this computer.</p>
+    </div>
+    <div class="card" id="llama-body" aria-live="polite"></div>
+  </section>
+
   <section class="view" id="v-error" hidden>
     <div class="card">
       <div class="badge-bad"><svg viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></div>
@@ -659,14 +671,14 @@ function terminalDetails(cmds, summary, open) {
 // --- Views and the URL: every top-level view has an address, so browser Back/Forward and bookmarks work -------
 const NAV = { "": "home-btn", "#radar": "radar-btn", "#history": "history-btn", "#tools": "tools-btn" };
 const WIZARD = { "v-use": 1, "v-wait": 1, "v-pick": 1, "v-install": 2, "v-done": 3, "v-error": 2 };
-const AWAY = ["v-tools", "v-radar", "v-history"];
+const AWAY = ["v-tools", "v-radar", "v-history", "v-llama"];
 let view = "", jobLive = false;
 
 function show(id) {
   const changed = id !== view;
   view = id;
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== id));
-  $("#main").className = AWAY.slice(1).includes(id) ? "wide" : "";
+  $("#main").className = ["v-radar", "v-history"].includes(id) ? "wide" : "";
   $("#warn").hidden = !["v-use", "v-pick"].includes(id);       // where it changes the decision; tools/done say it too
   renderSteps(WIZARD[id] || 0);
   if (!changed) return;
@@ -699,7 +711,7 @@ function navigate(hash) {
 
 function route() {
   const hash = location.hash || "";
-  const open = { "#tools": openTools, "#radar": openRadar, "#history": openHistory }[hash];
+  const open = { "#tools": openTools, "#radar": openRadar, "#history": openHistory, "#llama": openLlama }[hash];
   markNav(open ? hash : "");
   return open ? open() : goHome();
 }
@@ -881,12 +893,15 @@ async function done(j) {
   const next = $("#done-next");
   $("#chat-box").replaceChildren();
   chatModel = j.id || lastId;
+  lastDone = j;
   if (!S.llama_server) {
     const li = S.llama_install || {};
+    const button = llamaButton("Install llama.cpp");
     next.replaceChildren(
-      h("p", {}, h("b", {}, "One more step: llama.cpp is not installed. "), "It is the program that runs the model. Install it:"),
-      li.install_cmd ? cmdRow(li.install_cmd) : h("p", { class: "note", style: "margin:0" }, li.install || "See the README for install steps."),
-      h("p", {}, "Then start chatting with:"), cmdRow(S.serve_cmd));
+      h("p", {}, h("b", {}, "One more step: llama.cpp is not installed. "), "It is the program that runs the model." + (button ? "" : " Install it:")),
+      button ? h("div", { class: "actions" }, button)
+        : li.install_cmd ? cmdRow(li.install_cmd) : h("p", { class: "note", style: "margin:0" }, li.install || "See the README for install steps."),
+      button ? null : h("p", {}, "Then start chatting with:"), button ? null : cmdRow(S.serve_cmd));
   } else {
     let d = null;
     if (chatModel) try { d = await api("/api/chat?id=" + encodeURIComponent(chatModel)); } catch (e) {}
@@ -1017,6 +1032,113 @@ function fail(msgOrJob) {
   renderTerminalBox($("#e-terminal-box"), (job && job.commands) || (activeModel && activeModel.commands) || [], true);
   show("v-error");
   say($("#e-text").textContent);
+}
+
+// --- Installing llama.cpp (utils/llama_install.py): what was found, why to install, how, and the install itself --
+let llamaTimer = null, llamaGen = 0, lastDone = null;
+const LLAMA_BUSY = ["checking", "downloading", "verifying", "installing"];
+
+function openLlama() {
+  show("v-llama");
+  $("#llama-body").replaceChildren(h("p", { class: "muted" }, "Checking…"));
+  return pollLlama(0);
+}
+
+function llamaWhy(L) {
+  if (L.need === "missing") return h("p", {}, h("b", {}, "llama.cpp is not installed. "), "Models can be downloaded, but not run or speed-tested, until it is.");
+  if (L.need === "broken") return h("p", {}, h("b", {}, "llama-server was found at " + L.found + ", but it does not start. "), "A working copy is needed to chat.");
+  if (L.need === "no-gpu") return h("p", {}, h("b", {}, "The llama.cpp found at " + L.found + " cannot use your graphics card, "), "so models run on the processor, which is slower.");
+  return h("p", {}, h("b", {}, "llama.cpp is installed: "), (L.version || "") + " at " + L.found);
+}
+
+function llamaOffer(L) {
+  const o = L.offer || {};
+  const go = (variant) => installLlama(variant);
+  if (o.how === "download") {
+    return [h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => go("auto") }, icon("download"), "Install llama.cpp (" + o.label + ")")),
+      h("p", { class: "muted" }, "Downloads the official release from github.com/ggml-org/llama.cpp and unpacks it into " + o.into +
+        ". No admin rights needed; nothing outside that folder changes.")];
+  }
+  if (o.how === "brew") {
+    return [h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => go("auto") }, icon("download"), "Install with Homebrew")),
+      h("p", { class: "cmd-label" }, "It runs:"), cmdRow(o.cmd)];
+  }
+  const li = S.llama_install || {};                       // nothing this page can run here: the instructions only
+  return [li.install_cmd ? cmdRow(li.install_cmd) : h("p", { class: "note" }, li.install || "See the README for install steps.")];
+}
+
+function llamaJob(L) {
+  const j = L.job || {};
+  const log = j.log && j.log.length ? h("details", { class: "terminal", open: j.state === "failed" ? "" : null },
+    h("summary", {}, icon("terminal"), "Details"), h("pre", { class: "log" }, j.log.join("\n"))) : null;
+  if (LLAMA_BUSY.includes(j.state)) {
+    const pct = j.total ? Math.min(100, Math.round((j.done || 0) * 100 / j.total)) : 0;
+    const label = { checking: "Finding the latest release…", downloading: "Downloading " + (j.why || "llama.cpp"),
+      verifying: "Checking and unpacking…", installing: j.how === "brew" ? "Homebrew is installing llama.cpp…" : "Installing into bin…" }[j.state];
+    const bar = h("div", { class: "progress" + (j.state === "downloading" && j.total ? "" : " busy"), role: "progressbar", "aria-label": label,
+      "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": j.state === "downloading" && j.total ? String(pct) : null }, h("i", { style: "width:" + pct + "%" }));
+    return [h("p", {}, h("b", {}, label)), bar, j.state === "downloading" && j.total ? h("p", { class: "muted" }, fmt(j.done || 0) + " of " + fmt(j.total)) : null, log];
+  }
+  if (j.state === "done") {
+    const check = j.checksum === "verified" ? "Checked against the SHA-256 checksum GitHub publishes."
+      : j.checksum === "none-published" ? "GitHub publishes no checksum for this download, so only its size was checked." : "";
+    return [h("div", { class: "notice info", role: "status" }, icon("check"), h("div", { class: "notice-body" },
+        h("b", {}, "llama.cpp is installed. "), (j.version || "") + " at " + (j.path || ""), check ? h("p", { class: "muted", style: "margin:6px 0 0" }, check) : null)),
+      j.shadowed ? h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, j.shadowed)) : null,
+      h("div", { class: "actions" }, h("button", { class: "btn", onclick: llamaContinue }, lastDone ? "Back to your model" : "Continue")), log];
+  }
+  if (j.state === "failed") {
+    return [h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, j.error || "The install failed.")),
+      h("div", { class: "actions" }, h("button", { class: "btn ghost", onclick: () => installLlama("auto") }, "Try again"),
+        j.cpu_fallback ? h("button", { class: "btn", onclick: () => installLlama("cpu") }, "Install the CPU build instead") : null), log];
+  }
+  return null;
+}
+
+function renderLlama(L) {
+  const j = L.job || {};
+  const parts = [llamaWhy(L)];
+  const active = LLAMA_BUSY.includes(j.state) || j.state === "done" || j.state === "failed";
+  if (active) parts.push(...[].concat(llamaJob(L)));
+  else if (L.need) parts.push(...llamaOffer(L));
+  $("#llama-body").replaceChildren(...parts.filter(Boolean));
+}
+
+async function installLlama(variant) {
+  let r;
+  try { r = await api("/api/llama/install", { variant }); } catch (e) { r = { error: UNREACHABLE }; }
+  if (r.error) {
+    $("#llama-body").append(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, r.error)));
+    return say(r.error);
+  }
+  pollLlama(0);
+}
+
+function pollLlama(delay) {
+  clearTimeout(llamaTimer);
+  const g = ++llamaGen;
+  const tick = async () => {
+    if (g !== llamaGen || view !== "v-llama") return;
+    let L;
+    try { L = await api("/api/llama"); } catch (e) { llamaTimer = setTimeout(tick, 2000); return; }
+    if (g !== llamaGen || view !== "v-llama") return;
+    renderLlama(L);
+    if (LLAMA_BUSY.includes((L.job || {}).state)) llamaTimer = setTimeout(tick, 700);
+    else if ((L.job || {}).state === "done") say("llama.cpp is installed");
+  };
+  if (delay) llamaTimer = setTimeout(tick, delay); else return tick();
+}
+
+async function llamaContinue() {
+  try { const fresh = await api("/api/state"); if (fresh && fresh.token) S = fresh; } catch (e) {}
+  renderMachine(); renderWarn();
+  if (lastDone) { try { history.pushState(null, "", location.pathname + location.search); } catch (e) {} markNav(""); view = ""; return done(lastDone); }
+  navigate("");
+}
+
+function llamaButton(label) {
+  const o = (S.llama && S.llama.offer) || {};
+  return o.how === "download" || o.how === "brew" ? h("button", { class: "btn small", onclick: () => navigate("#llama") }, icon("download"), label) : null;
 }
 
 // --- Installed tools -------------------------------------------------------------------------------------------
@@ -1412,20 +1534,26 @@ function renderWarn() {
   }
   if (!S.llama_server) {
     const li = S.llama_install || {};
+    const broken = S.llama && S.llama.need === "broken";
+    const button = llamaButton("Install llama.cpp");
     warn.append(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" },
-      h("b", {}, "llama.cpp is not installed yet. "), "You can download models now; running them and the speed test need llama.cpp. ",
-      li.install_cmd ? ["Install it with:", cmdRow(li.install_cmd)] : li.install)));
+      h("b", {}, broken ? "llama-server was found at " + S.llama.found + ", but it does not start. " : "llama.cpp is not installed yet. "),
+      "You can download models now; running them and the speed test need llama.cpp. ",
+      button ? h("div", { class: "actions" }, button) : li.install_cmd ? ["Install it with:", cmdRow(li.install_cmd)] : li.install)));
   } else if (S.gpu_unused) {
+    const button = llamaButton("Get a build that uses it");
     warn.append(h("div", { class: "notice info", role: "status" }, icon("info"), h("div", { class: "notice-body" },
-      "This llama.cpp build cannot use your graphics card, so models will run on the processor.")));
+      "This llama.cpp build cannot use your graphics card, so models will run on the processor.",
+      button ? h("div", { class: "actions" }, button) : null)));
   }
 }
+$("#llama-back").onclick = () => (lastDone && view === "v-llama" ? llamaContinue() : navigate(""));
 
 (async function init() {
   try { S = await api("/api/state"); } catch (e) { return fail(UNREACHABLE); }
   renderMachine();
   renderWarn();
-  if (NAV[location.hash || ""] && location.hash) await route();
+  if ((NAV[location.hash || ""] || location.hash === "#llama") && location.hash) await route();
   else { markNav(""); renderUse(); }          // one progress request below, not two: a lost one must not hide a download
   let j = { state: "idle" };
   try { j = await api("/api/progress"); } catch (e) {}
