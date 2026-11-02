@@ -684,6 +684,46 @@ const scenarios = {
     if (sel.join() !== "gpu") return "aria-selected on: " + sel.join();
   },
 
+  // --- My models: the models folder, and deleting with a second click -------------------------------------------
+  async "My models lists the folder and deletes only after a second, explicit click"() {
+    const posts = [];
+    const list = { dir: "/p/models", total: 3e9, free: 50e9, models: [
+      { id: "shape.gguf", kind: "model", size: 2.6e9, repo: "o/Shape-GGUF", files: ["shape.gguf"], arch: "llama", layers: 32, train_ctx: 131072, header_error: "" },
+      { id: "x.gguf.part", kind: "partial", size: 4e8, repo: "", files: ["x.gguf.part"], header_error: "" }] };
+    const after = { ...list, models: [list.models[1]], removed: ["shape.gguf"] };
+    const p = makePage({ hash: "#models", routes: idle((path, opts) => {
+      if (path === "/api/models") return list;
+      if (path === "/api/models/delete") { posts.push(JSON.parse(opts.body)); return after; }
+      return {};
+    }) });
+    await p.start();
+    if (p.visible() !== "v-models") return "the /#models link did not open My models: " + p.visible();
+    const t = p.text("models-list");
+    for (const want of ["shape.gguf", "o/Shape-GGUF", "2.4 GB", "llama", "32 layers", "Unfinished download"])
+      if (!t.includes(want)) return `missing "${want}": ` + t;
+    if (!p.text("models-sum").includes("46.6 GB free")) return "free space not shown: " + p.text("models-sum");
+    p.button("models-list", "Delete").click(); await p.settle();
+    if (posts.length) return "deleted on the first click";
+    if (!p.text("models-list").includes("Delete shape.gguf (2.4 GB)?")) return "no confirmation: " + p.text("models-list");
+    p.button("models-list", "Cancel").click(); await p.settle();
+    if (posts.length || p.text("models-list").includes("Delete shape.gguf (2.4 GB)?")) return "Cancel did not cancel";
+    p.button("models-list", "Delete").click(); await p.settle();
+    p.button("models-list", "Yes, delete").click(); await p.settle();
+    if (posts.length !== 1 || posts[0].id !== "shape.gguf") return "the delete was not sent once with the id: " + JSON.stringify(posts);
+    if (p.text("models-list").includes("o/Shape-GGUF")) return "the list was not refreshed: " + p.text("models-list");
+  },
+
+  async "a refused delete says why and keeps the model"() {
+    const list = { dir: "/p/models", total: 1, free: 1, models: [{ id: "a.gguf", kind: "model", size: 1e9, repo: "", files: ["a.gguf"], header_error: "" }] };
+    const p = makePage({ hash: "#models", routes: idle((path) => (path === "/api/models" ? list
+      : path === "/api/models/delete" ? { error: "The chat is using this model. Stop the chat first, then delete it." } : {})) });
+    await p.start();
+    p.button("models-list", "Delete").click(); await p.settle();
+    p.button("models-list", "Yes, delete").click(); await p.settle();
+    const t = p.text("models-list");
+    if (!t.includes("Stop the chat first") || !t.includes("a.gguf")) return "the reason is not shown: " + t;
+  },
+
   // --- Plain-language explanations next to the choice they affect ----------------------------------------------
   async "the recommended model explains its quantization, size and speed in plain words"() {
     const rec = (quant, tps) => ({ models: [{ id: "a|m.gguf", title: "Qwen3-4B", repo: "a/Qwen3-4B-GGUF", quant, verdict: "smooth",

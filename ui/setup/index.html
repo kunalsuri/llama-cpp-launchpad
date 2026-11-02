@@ -258,6 +258,8 @@
 
   /* --- Installed tools --- */
   .tool { margin-top: 12px; }
+  .tool-head b.wrap { min-width: 0; overflow-wrap: anywhere; }
+  .btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
   .tool-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .tool-head b { font-size: 17px; }
   .tool p { margin: 8px 0 0; font-size: 14px; color: var(--text-2); overflow-wrap: anywhere; }
@@ -404,6 +406,7 @@
     <button class="nav" id="home-btn"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Get a model</button>
     <button class="nav" id="radar-btn"><svg viewBox="0 0 24 24"><path d="M12 20a8 8 0 1 0-8-8m8 4a4 4 0 1 0-4-4m4 0V4m0 8 5.5-5.5"/></svg>Model radar</button>
     <button class="nav" id="history-btn"><svg viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>What changed</button>
+    <button class="nav" id="models-btn"><svg viewBox="0 0 24 24"><path d="M21 8v13H3V8 M1 3h22v5H1z M10 12h4"/></svg>My models</button>
     <button class="nav" id="tools-btn"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>Installed tools</button>
   </nav>
   <div class="header-end">
@@ -456,6 +459,15 @@
       <div class="next chat" id="chat-box" aria-live="polite"></div>
       <p class="center" style="margin:24px 0 0"><button class="link" id="again">Get another model</button></p>
     </div>
+  </section>
+
+  <section class="view" id="v-models" hidden>
+    <button class="back" id="models-back"><svg viewBox="0 0 24 24"><path d="M19 12H5m7-7-7 7 7 7"/></svg>Back</button>
+    <div class="page-head">
+      <h1 id="models-title" tabindex="-1">My models</h1>
+      <p class="sub" id="models-sum">The models in this project's models folder.</p>
+    </div>
+    <div id="models-list" aria-live="polite"></div>
   </section>
 
   <section class="view" id="v-tools" hidden>
@@ -693,9 +705,9 @@ function terminalDetails(cmds, summary, open) {
 }
 
 // --- Views and the URL: every top-level view has an address, so browser Back/Forward and bookmarks work -------
-const NAV = { "": "home-btn", "#radar": "radar-btn", "#history": "history-btn", "#tools": "tools-btn" };
+const NAV = { "": "home-btn", "#radar": "radar-btn", "#history": "history-btn", "#models": "models-btn", "#tools": "tools-btn" };
 const WIZARD = { "v-use": 1, "v-wait": 1, "v-pick": 1, "v-install": 2, "v-done": 3, "v-error": 2 };
-const AWAY = ["v-tools", "v-radar", "v-history", "v-llama"];
+const AWAY = ["v-tools", "v-radar", "v-history", "v-llama", "v-models"];
 let view = "", jobLive = false;
 
 function show(id) {
@@ -735,7 +747,7 @@ function navigate(hash) {
 
 function route() {
   const hash = location.hash || "";
-  const open = { "#tools": openTools, "#radar": openRadar, "#history": openHistory, "#llama": openLlama }[hash];
+  const open = { "#tools": openTools, "#radar": openRadar, "#history": openHistory, "#llama": openLlama, "#models": openModels }[hash];
   markNav(open ? hash : "");
   return open ? open() : goHome();
 }
@@ -1297,7 +1309,54 @@ async function loadTools() {
 }
 function openTools() { show("v-tools"); loadTools(); }
 
+// --- My models (utils/local_models.py): what is in the models folder; deleting needs a second, explicit click ----
+const KIND = { model: "", incomplete: "Split model with parts missing: it cannot load", projector: "Image support file (mmproj) for a model",
+  partial: "Unfinished download: Get the model again to continue it" };
+let modelsData = null, modelsAsk = "", modelsError = {};
+function modelCard(m) {
+  const asking = modelsAsk === m.id;
+  const shape = m.arch ? [m.arch, m.layers + " layers", m.train_ctx ? m.train_ctx.toLocaleString("en-US") + "-token context" : ""].filter(Boolean).join(" · ") : "";
+  const del = asking
+    ? h("div", { class: "notice warn", role: "alert" }, icon("alert"), h("div", { class: "notice-body" },
+        h("b", {}, "Delete " + m.id + " (" + fmt(m.size) + ")?"), " It is removed from this computer; you can download it again later.",
+        h("div", { class: "actions" }, h("button", { class: "btn small danger", onclick: () => deleteModel(m.id) }, "Yes, delete"),
+          h("button", { class: "btn small ghost", onclick: () => { modelsAsk = ""; renderModels(); } }, "Cancel"))))
+    : h("div", { class: "actions" }, h("button", { class: "btn small ghost", "aria-label": "Delete " + m.id, onclick: () => { modelsAsk = m.id; renderModels(); } }, "Delete"));
+  return h("div", { class: "card tool" },
+    h("div", { class: "tool-head" }, h("b", { class: "wrap" }, m.id), h("span", { class: "fact" }, fmt(m.size))),
+    m.repo ? h("p", {}, "From " + m.repo) : null,
+    KIND[m.kind] ? h("p", {}, KIND[m.kind]) : null,
+    shape ? h("p", {}, shape) : m.header_error && m.kind === "model" ? h("p", { class: "muted" }, "Could not read the model file: " + m.header_error) : null,
+    modelsError[m.id] ? h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, modelsError[m.id])) : null,
+    del);
+}
+function renderModels() {
+  const d = modelsData;
+  if (!d) return;
+  $("#models-sum").textContent = d.models.length
+    ? d.models.length + (d.models.length === 1 ? " file set" : " file sets") + ", " + fmt(d.total) + " in " + d.dir + " · " + fmt(d.free) + " free on that disk"
+    : "Nothing in " + d.dir + " yet. " + fmt(d.free) + " free on that disk.";
+  $("#models-list").replaceChildren(...d.models.map(modelCard));
+}
+async function loadModels() {
+  const box = $("#models-list"); box.replaceChildren(h("div", { class: "spin", "aria-label": "Loading" }));
+  try { modelsData = await api("/api/models"); modelsAsk = ""; modelsError = {}; renderModels(); }
+  catch (e) { box.replaceChildren(h("div", { class: "notice warn" }, icon("alert"), h("div", {}, UNREACHABLE))); }
+}
+async function deleteModel(id) {
+  let r;
+  try { r = await api("/api/models/delete", { id }); } catch (e) { r = { error: UNREACHABLE }; }
+  modelsAsk = "";
+  if (r.error && !r.models) { modelsError = { [id]: r.error }; renderModels(); say(r.error); return; }
+  modelsData = r; modelsError = r.error ? { [id]: r.error } : {};
+  renderModels();
+  say("Deleted " + id);
+}
+function openModels() { show("v-models"); return loadModels(); }
+
 $("#home-btn").onclick = () => navigate("");
+$("#models-btn").onclick = () => navigate("#models");
+$("#models-back").onclick = () => navigate("");
 $("#tools-btn").onclick = () => navigate("#tools");
 $("#radar-btn").onclick = () => navigate("#radar");
 $("#history-btn").onclick = () => navigate("#history");

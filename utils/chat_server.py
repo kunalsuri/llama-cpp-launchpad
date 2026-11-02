@@ -339,7 +339,7 @@ class ChatServer:
         with self.lock:
             self.proc = proc
             self.log.clear()
-            self.job = {"state": "starting", "cmd": self.shown(argv), "port": port, "model": title,
+            self.job = {"state": "starting", "cmd": self.shown(argv), "port": port, "model": title, "model_path": str(model),
                         "url": f"http://127.0.0.1:{port}/", "pid": proc.pid, "started": time.time()}
         reader = threading.Thread(target=self._read, args=(proc,), daemon=True)
         reader.start()

@@ -11,7 +11,7 @@ const { chromium } = require("playwright");
 const BASE = `http://127.0.0.1:${process.argv[2]}/`;
 const WIDTHS = [[360, 740, "phone"], [768, 1024, "tablet"], [1280, 900, "desktop"]];
 const VIEWS = { "": "#tiles .tile", "#tools": "#tools-list .tool", "#radar": "#radar-list .m-card, #radar-list .empty", "#history": "#history-content .card, #history-content .empty",
-  "#llama": "#llama-body .btn, #llama-body .note" };
+  "#llama": "#llama-body .btn, #llama-body .note", "#models": "#models-list .tool, #models-sum" };
 const results = [];
 const check = (name, detail) => results.push({ name, ok: !detail, detail: detail || "" });
 

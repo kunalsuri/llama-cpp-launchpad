@@ -205,6 +205,7 @@ class TestLifecycle(Base):
         code, body = self.cs.start(self.model, "My Model", settings=["-c", "2048", "-ngl", "99"])
         self.assertEqual(code, 202, body)
         self.assertIn("-c 2048 -ngl 99", body["cmd"])
+        self.assertEqual(body["model_path"], str(self.model), "My models must know which file the chat holds")
         s = self.wait("running")
         self.assertTrue(any('"-c", "2048", "-ngl", "99"' in line for line in s["log"]), s["log"])
 

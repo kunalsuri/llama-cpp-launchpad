@@ -864,6 +864,62 @@ class TestChatApi(UiBase):
         self.assertEqual(self.app.probe.ran[0][0], r"C:\Windows\System32\netstat.exe")
 
 
+class TestModelsApi(UiBase):
+    """My models: what is in the models folder (/api/models) and deleting one (/api/models/delete)."""
+
+    def setUp(self):
+        super().setUp()
+        self.dir = ms.models_dir()
+        self.dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy(HERE / "fixtures" / "llama-shape.gguf", self.dir / "shape.gguf")
+        (self.dir / "shape.gguf.source").write_text("o/Shape-GGUF", encoding="utf-8")
+        (self.dir / "other.gguf").write_bytes(b"x" * 10)
+
+    def test_lists_each_model_with_its_size_origin_and_shape(self):
+        d = self.get_json("/api/models")
+        by = {m["id"]: m for m in d["models"]}
+        self.assertEqual(sorted(by), ["other.gguf", "shape.gguf"])
+        self.assertEqual(by["shape.gguf"]["repo"], "o/Shape-GGUF")
+        self.assertEqual((by["shape.gguf"]["arch"], by["shape.gguf"]["layers"], by["shape.gguf"]["train_ctx"]), ("llama", 32, 131072))
+        self.assertIn("not a GGUF file", by["other.gguf"]["header_error"])
+        self.assertEqual(d["dir"], str(self.dir))
+        self.assertGreater(d["free"], 0)
+        self.assertEqual(d["total"], sum(m["size"] for m in d["models"]))
+
+    def test_delete_removes_the_model_and_needs_the_token(self):
+        self.assertEqual(self.post("/api/models/delete", {"id": "shape.gguf"}, token=False)[0], 403)
+        self.assertTrue((self.dir / "shape.gguf").exists())
+        status, body = self.post("/api/models/delete", {"id": "shape.gguf"})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(sorted(body["removed"]), ["shape.gguf", "shape.gguf.source"])
+        self.assertFalse((self.dir / "shape.gguf").exists())
+        self.assertEqual([m["id"] for m in body["models"]], ["other.gguf"], "the answer is the new list")
+
+    def test_delete_refuses_paths_and_unknown_names(self):
+        outside = self.tmp / "keep.gguf"
+        outside.write_bytes(b"x")
+        for bad in ("../keep.gguf", str(outside), "missing.gguf", 5, None):
+            with self.subTest(id=bad):
+                self.assertEqual(self.post("/api/models/delete", {"id": bad})[0], 404)
+        self.assertTrue(outside.exists())
+
+    def test_the_model_a_chat_is_running_cannot_be_deleted(self):
+        self.app.chat.job = {"state": "running", "model_path": str(self.dir / "shape.gguf")}
+        self.addCleanup(setattr, self.app.chat, "job", {"state": "idle"})
+        status, body = self.post("/api/models/delete", {"id": "shape.gguf"})
+        self.assertEqual(status, 409)
+        self.assertIn("Stop the chat", body["error"])
+        self.assertTrue((self.dir / "shape.gguf").exists())
+        self.assertEqual(self.post("/api/models/delete", {"id": "other.gguf"})[0], 200, "other models can go")
+
+    def test_nothing_is_deleted_while_a_download_runs(self):
+        self.app.job = {"state": "downloading", "title": "X"}
+        self.addCleanup(setattr, self.app, "job", {"state": "idle"})
+        status, body = self.post("/api/models/delete", {"id": "other.gguf"})
+        self.assertEqual(status, 409)
+        self.assertIn("download", body["error"])
+
+
 class TestLlamaApi(UiBase):
     """Install llama.cpp from the page: /api/llama (what was found, why an install is offered, how) and
     /api/llama/install. The installer's own behaviour is in test_llama_install.py; this is the wiring and the rules."""

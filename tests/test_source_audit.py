@@ -23,7 +23,7 @@ ALLOWED_IMPORTS = {"__future__", "argparse", "csv", "ctypes", "datetime", "io", 
                    "hashlib", "tarfile", "zipfile",  # llama_install.py: SHA-256 check, unpacking release archives
                    "struct",                         # gguf.py: decoding a model file's binary header
                    "hardware", "hf_discover", "ui_server", "detect_tools", "hf_radar", "model_setup",
-                   "chat_server", "llama_install", "gguf"}      # local modules
+                   "chat_server", "llama_install", "gguf", "local_models"}      # local modules
 LOCAL_MODULES = {p.stem for p in SOURCES}
 # 127.0.0.1 = the setup page itself (ui_server.py); api.github.com = the llama.cpp release listing (llama_install.py)
 ALLOWED_HOSTS = {"huggingface.co", "github.com", "api.github.com", "127.0.0.1"}
@@ -151,6 +151,15 @@ class TestSourceAudit(unittest.TestCase):
         self.assertEqual(re.findall(r"os\.replace\(([^)]*)\)", text), ["src, target"])
         self.assertIn("target = self.bin.joinpath(", text, "files are only moved into bin/")
         self.assertNotRegex(text, r"(unlink|os\.remove|rmdir|sudo|runas|Program Files|/usr/local)")
+
+    def test_local_models_deletes_only_listed_files_inside_the_models_folder(self):
+        """local_models.py is the one module that deletes models. One unlink, of a name scan() listed, after
+        _inside() checked it is a direct child of the folder. Nothing else is removed, nothing is run or fetched."""
+        text = (UTILS / "local_models.py").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"(\.unlink\(|os\.remove|os\.unlink|rmtree|rmdir|os\.replace|shutil)", text), [".unlink("])
+        self.assertIn("if entry is None or not all(_inside(d, f) for f in entry[\"files\"]):", text)
+        self.assertIn("(d / name).unlink()", text)
+        self.assertNotRegex(text, r"(subprocess|urllib|http\.client|run_cmd|write_text|write_bytes|open\()")
 
     def test_gguf_reader_only_reads(self):
         """gguf.py decodes model headers. It opens files for reading only, writes nothing, runs nothing and has no

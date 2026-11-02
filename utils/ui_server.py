@@ -17,6 +17,7 @@ import argparse
 import json
 import re
 import secrets
+import shutil
 import sys
 import threading
 import webbrowser
@@ -29,6 +30,7 @@ import detect_tools
 import gguf
 import hf_discover
 import llama_install
+import local_models
 
 PAGE = Path(__file__).resolve().parent.parent / "ui" / "setup" / "index.html"
 USES = ("chat", "coding", "translation", "fast")
@@ -342,6 +344,45 @@ class App:
             if why:
                 return 409, {"error": why}
             return self.chat.start(found[0], found[1], port, args)
+
+    # --- My models: the models folder, and deleting from it (local_models.py) ---------------------------------
+    def local_models(self) -> dict:
+        d = self.ms.models_dir()
+        rows = []
+        for e in local_models.scan(d):
+            row = dict(e, header_error="")
+            if e["kind"] == "model":
+                info = self._describe(d / e["files"][0])
+                if info.get("error"):
+                    row["header_error"] = info["error"]
+                else:
+                    s = info["shape"]
+                    row.update(arch=s["arch"], layers=s["n_layer"], train_ctx=s["train_ctx"], name=info.get("name", ""))
+            rows.append(row)
+        try:
+            free = shutil.disk_usage(d if d.is_dir() else d.parent).free
+        except OSError:
+            free = 0
+        return {"dir": str(d), "models": rows, "total": sum(r["size"] for r in rows), "free": free}
+
+    def delete_model(self, body: dict):
+        mid = body.get("id")
+        d = self.ms.models_dir()
+        entry = next((e for e in local_models.scan(d) if e["id"] == mid), None) if isinstance(mid, str) else None
+        if entry is None:
+            return 404, {"error": local_models.NOT_HERE}
+        with self.run_lock:
+            with self.lock:
+                if self.job.get("state") in ("downloading", "testing"):
+                    return 409, {"error": "A download is running. Delete models when it has finished."}
+            chat = self.chat.status()
+            in_use = {str(d / f) for f in entry["files"]}
+            if chat.get("state") in CHAT_BUSY and chat.get("model_path") in in_use:
+                return 409, {"error": "The chat is using this model. Stop the chat first, then delete it."}
+            removed, error = local_models.delete(d, mid)
+        if error and not removed:
+            return 409, {"error": error}
+        return 200, dict(self.local_models(), removed=removed, error=error)
 
     def tools(self, ids=None, verbose: bool = False) -> dict:
         """Which of Ollama / llama.cpp / LM Studio / Unsloth are installed: detect_tools.py, plus next-step hints."""
@@ -660,6 +701,8 @@ def make_handler(app: App):
                                                        int(ctx) if ctx.isdigit() and len(ctx) < 9 else None))
             if url.path == "/api/llama":
                 return self.reply(200, app.llama_info())
+            if url.path == "/api/models":
+                return self.reply(200, app.local_models())
             if url.path == "/api/tools":
                 ids = q.get("tool") or None
                 if ids and any(i not in detect_tools.SPECS for i in ids):
@@ -704,6 +747,9 @@ def make_handler(app: App):
                 return self.reply(200, app.chat.stop())
             if path == "/api/llama/install":
                 code, out = app.llama_install(body)
+                return self.reply(code, out)
+            if path == "/api/models/delete":
+                code, out = app.delete_model(body)
                 return self.reply(code, out)
             self.reply(404, {"error": "not found"})
 
