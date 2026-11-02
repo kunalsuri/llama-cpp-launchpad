@@ -81,7 +81,14 @@ async function chatFlow(browser) {
       await page.locator("#chat-box").getByRole("button", { name: "Stop" }).click();
       await page.locator("#chat-box").getByText("The chat server is stopped.").waitFor({ timeout: 15000 });
       problems = problems.concat(await inspect(page, label === "phone"));
-    } catch (e) { problems.push("flow broke: " + e.message.split("\n")[0]); }
+    } catch (e) {
+      // Say what the page showed when it broke: the chat panel's state and llama-server's output are in there.
+      const seen = await page.evaluate(() => ["#done-next", "#chat-box"].map((s) => {
+        const el = document.querySelector(s);
+        return s + ": " + (el ? el.innerText.replace(/\s+/g, " ").trim().slice(0, 600) : "(missing)");
+      }).join(" | ")).catch(() => "(page not readable)");
+      problems.push("flow broke: " + e.message.split("\n")[0] + " -- on screen: " + seen);
+    }
     check(name, [...problems, ...errors].join("; "));
     await page.close();
   }
