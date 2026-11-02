@@ -33,6 +33,18 @@ Pick a model. Pick an interface. Start chatting. Everything runs on your machine
 
 ## Start
 
+**No terminal: double-click `launchpad`.**
+
+| OS | Double-click | Or run |
+| --- | --- | --- |
+| Windows | `scripts\win\launchpad.bat` | `scripts\win\launchpad.bat` |
+| macOS | `scripts/mac/launchpad.command` | `./scripts/unix/launchpad.sh` |
+| Linux | | `./scripts/unix/launchpad.sh` |
+
+It opens the setup page in your browser. From there: get llama.cpp if it is missing (Windows and Linux download the
+official release into `bin/`; macOS uses Homebrew when it is installed), get a model that fits this computer, and press
+**Start chatting**. It needs Python 3 and nothing else. The steps below do the same from a terminal.
+
 **0. See what you already have** (optional, 2 seconds)
 
 ```bash
