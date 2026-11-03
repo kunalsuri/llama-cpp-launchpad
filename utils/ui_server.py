@@ -344,9 +344,13 @@ class App:
         found, refused = self._chat_model(mid)
         if refused:
             return refused
+        # The job first, then the file: a download that finishes in between must not read "done" but "not here"
+        # (seen on the macOS runner).
+        with self.lock:
+            job = dict(self.__dict__.get("vision_job") or {"state": "idle"})
         proj, flag = self._projector(found[0]), "--mmproj" in self.chat.help_flags()
         out = {"have": bool(proj), "file": proj.name if proj else "", "flag": flag, "available": None, "why": "",
-               "job": dict(self.__dict__.get("vision_job") or {"state": "idle"})}
+               "job": job}
         if proj and not flag:
             out["why"] = ("The image support file is here, but this llama-server does not list --mmproj in its --help "
                           "(it may be an old build), so it is not loaded.")
