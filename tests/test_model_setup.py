@@ -53,6 +53,10 @@ class Base(unittest.TestCase):
         patcher = mock.patch.object(ms, "http_get", self.fake_http_get)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Model headers (utils/gguf.py) are read over the network too: offline unless a test serves one.
+        patcher = mock.patch.object(ms, "http_open", self.fake_http_open)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         # Results must not depend on the machine running the tests: on an Apple Silicon Mac (the macOS CI
         # runner) real detection reports unified-memory "apple" hardware and changes which model is picked.
         chip = mock.patch.object(hwmod.platform, "machine", return_value="x86_64")
@@ -83,6 +87,14 @@ class Base(unittest.TestCase):
         if "/models/random/Hyped-7B" in url:
             return fixture(self.hyped)
         raise urllib.error.HTTPError(url, 404, "nf", None, None)
+
+    def fake_http_open(self, url, headers):
+        self.urls.append(url)
+        self.opened = getattr(self, "opened", []) + [(url, dict(headers))]
+        header = getattr(self, "header_file", None)
+        if header is None:
+            raise urllib.error.URLError("offline (no model header in this test)")
+        return io.BytesIO(Path(header).read_bytes())
 
     def hw(self, ram=16384, vram=0, kind="none", usable=False, cores=4):
         return ms.Hw(ram_mb=ram, cores=cores, gpu_kind=kind, gpu_name="Test", vram_mb=vram, gpu_usable=usable)
@@ -801,6 +813,103 @@ class TestBench(Base):
         self.assertIn("did not load", buf.getvalue())
         with mock.patch.object(ms, "run_bench", side_effect=FileNotFoundError), contextlib.redirect_stdout(buf):
             self.assertEqual(ms.check_model_speed(Path("m.gguf"), size, h), 2)
+
+
+class TestSpeedDiagnosis(Base):
+    """After a slow speed test: say why, from facts this computer can check, never a generic guess."""
+    GB = 1073741824
+
+    def codes(self, measured, size, hw):
+        return [d["code"] for d in ms.diagnose_speed(measured, size, hw)]
+
+    def test_a_graphics_card_that_llama_cpp_cannot_use(self):
+        h = self.hw(ram=32768, vram=8192, kind="nvidia", usable=False)
+        notes = ms.diagnose_speed(4, 4 * self.GB, h)
+        self.assertEqual([d["code"] for d in notes], ["gpu_unused"])
+        self.assertIn("cannot use your graphics card", notes[0]["text"])
+        self.assertIn("Get llama.cpp", notes[0]["fix"])
+        h = self.hw(ram=32768)
+        h.other_gpu = "AMD Radeon RX 7800 XT"
+        self.assertIn("gpu_unused", self.codes(4, 4 * self.GB, h), "an AMD card without the Vulkan build counts too")
+
+    def test_a_model_too_big_for_the_graphics_card_runs_on_the_processor(self):
+        h = self.hw(ram=65536, vram=4096, kind="nvidia", usable=True)
+        notes = ms.diagnose_speed(6, 6 * self.GB, h)
+        self.assertEqual([d["code"] for d in notes], ["not_on_gpu"])
+        self.assertIn("4 GB", notes[0]["text"])
+
+    def test_a_model_that_barely_fits_memory(self):
+        self.assertEqual(self.codes(2, 11 * self.GB, self.hw(ram=16384)), ["tight"])
+
+    def test_slower_than_this_kind_of_computer_usually_is(self):
+        h = self.hw(ram=16384)
+        expected = ms.default_tps(2 * self.GB, "cpu", h)
+        notes = ms.diagnose_speed(expected // 4, 2 * self.GB, h)
+        self.assertEqual([d["code"] for d in notes], ["below_estimate"])
+        self.assertIn(f"about {expected}", notes[0]["text"])
+
+    def test_nothing_to_say_when_it_runs_as_expected_or_smoothly(self):
+        h = self.hw(ram=16384)
+        self.assertEqual(ms.diagnose_speed(ms.default_tps(2 * self.GB, "cpu", h), 2 * self.GB, h), [])
+        self.assertEqual(ms.diagnose_speed(40, 2 * self.GB, self.hw(ram=32768, vram=8192, kind="nvidia", usable=False)),
+                         [], "40 tokens/s is smooth: no need to explain anything")
+
+    def test_the_estimate_ignores_the_speed_measured_last_time(self):
+        """The comparison is with what this kind of computer manages, not with the last (possibly slow) test."""
+        h = self.hw(ram=16384)
+        before = ms.default_tps(2 * self.GB, "cpu", h)
+        ms.state_update({"eff_bw": 1, "eff_mode": "cpu"})
+        self.assertEqual(ms.default_tps(2 * self.GB, "cpu", h), before)
+
+    def test_the_speed_test_prints_and_saves_the_reasons(self):
+        h = self.hw(ram=32768, vram=8192, kind="nvidia", usable=False)
+        buf = io.StringIO()
+        with mock.patch.object(ms, "run_bench", return_value=3), contextlib.redirect_stdout(buf):
+            ms.check_model_speed(Path("m.gguf"), 4 * self.GB, h)
+        self.assertIn("cannot use your graphics card", buf.getvalue())
+        self.assertEqual([d["code"] for d in json.loads(ms.state_get("speed_notes"))], ["gpu_unused"])
+        with mock.patch.object(ms, "run_bench", return_value=60), contextlib.redirect_stdout(io.StringIO()):
+            ms.check_model_speed(Path("m.gguf"), 4 * self.GB, h)
+        self.assertEqual(json.loads(ms.state_get("speed_notes")), [], "a new test replaces the old reasons")
+
+
+class TestProfiles(Base):
+    """Settings remembered per model (the setup page saves them when a chat starts); the serve scripts ask for them
+    with --profile-args, which re-checks them against the llama-server found now (rule 3)."""
+    HELP = (HERE / "fixtures" / "llama_server_help.txt").read_text(encoding="utf-8")
+
+    def args(self, name, help_text=None):
+        with mock.patch.object(ms, "find_llama_server", return_value="/x/llama-server"), \
+                mock.patch.object(ms, "run_cmd", return_value=self.HELP if help_text is None else help_text), \
+                mock.patch.object(ms, "detect_hw", return_value=self.hw()):
+            return ms.profile_args(name)
+
+    def test_save_and_load(self):
+        self.assertIsNone(ms.load_profile("m.gguf"))
+        ms.save_profile("m.gguf", "long", 6000)
+        ms.save_profile("other.gguf", "short", None)
+        self.assertEqual(ms.load_profile("m.gguf"), {"preset": "long", "ctx": 6000})
+        self.assertEqual(ms.load_profile("other.gguf"), {"preset": "short", "ctx": None})
+
+    def test_profile_args_are_the_presets_flags_for_this_llama_server(self):
+        ms.save_profile("m.gguf", "long", 6000)
+        self.assertEqual(self.args("m.gguf"), ["-c", "6000", "-ctk", "q8_0"])
+        self.assertEqual(self.args("unknown.gguf"), [])
+        self.assertEqual(self.args("m.gguf", help_text="--port PORT   port\n"), [], "an old build: nothing it would refuse")
+
+    def test_a_broken_record_is_ignored(self):
+        ms.state_set("chat_profiles", "{not json")
+        self.assertIsNone(ms.load_profile("m.gguf"))
+        ms.state_set("chat_profiles", '{"m.gguf": {"preset": "rm -rf", "ctx": "9"}}')
+        self.assertEqual(self.args("m.gguf"), [])
+
+    def test_command_line_prints_one_argument_per_line(self):
+        ms.save_profile("m.gguf", "short", None)
+        with mock.patch.object(ms, "find_llama_server", return_value="/x/llama-server"), \
+                mock.patch.object(ms, "run_cmd", return_value=self.HELP), \
+                mock.patch.object(ms, "detect_hw", return_value=self.hw()):
+            rc, out, _ = self.run_main(["--profile-args", "m.gguf"])
+        self.assertEqual((rc, out), (0, "-c\n4096\n"))
 
 
 class TestCli(Base):

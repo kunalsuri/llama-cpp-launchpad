@@ -155,12 +155,12 @@
   .copy-btn:hover { color: var(--text); border-color: var(--border-strong); }
   .copy-btn.ok { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); }
   .copy-btn.no { color: var(--warn); }
-  details.terminal { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
-  details.terminal > summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--text-2); list-style: none; display: inline-flex; align-items: center; gap: 8px; }
-  details.terminal > summary::-webkit-details-marker { display: none; }
-  details.terminal > summary::after { content: "+"; font-weight: 700; color: var(--text-3); }
-  details.terminal[open] > summary::after { content: "\2212"; }
-  details.terminal .terminal-body { margin-top: 12px; }
+  details.terminal, details.explain { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+  details.terminal > summary, details.explain > summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--text-2); list-style: none; display: inline-flex; align-items: center; gap: 8px; }
+  details.terminal > summary::-webkit-details-marker, details.explain > summary::-webkit-details-marker { display: none; }
+  details.terminal > summary::after, details.explain > summary::after { content: "+"; font-weight: 700; color: var(--text-3); }
+  details.terminal[open] > summary::after, details.explain[open] > summary::after { content: "\2212"; }
+  details.terminal .terminal-body, details.explain .terminal-body { margin-top: 12px; }
 
   /* --- Steps (choose / download / run) --- */
   .steps { display: flex; justify-content: center; gap: 6px; margin: 0 0 28px; padding: 0; list-style: none; font-size: 13px; color: var(--text-3); }
@@ -182,6 +182,29 @@
   .tile-icon svg { width: 22px; height: 22px; }
   .tile b { font-size: 16px; }
   .tile span { font-size: 14px; color: var(--text-2); }
+
+  .reasons { margin: 6px 0 10px; padding-left: 18px; }
+  .reasons li { margin: 4px 0; }
+  #speed-notes { margin: 18px 0 0; }
+
+  /* --- Settings presets (done screen) --- */
+  .settings { margin: 0 0 18px; }
+  .presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .preset { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 14px; min-width: 0;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); font: inherit; color: var(--text); }
+  button.preset { cursor: pointer; }
+  button.preset:hover { border-color: var(--accent); }
+  .preset[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: var(--ring); }
+  .preset b { font-size: 15px; }
+  .preset span { font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
+  .preset .mem { font-weight: 600; }
+  .preset .mem.gpu, .preset .mem.cpu { color: var(--good); }
+  .preset .mem.partial, .preset .mem.tight { color: var(--warn); }
+  .preset .mem.no, .preset .why { color: var(--bad); }
+  .preset.off { opacity: .75; background: var(--surface-2); }
+  .settings input[type=number] { width: 9em; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+    background: var(--surface); color: var(--text); font: inherit; }
+  @media (max-width: 560px) { .presets { grid-template-columns: 1fr; } }
 
   /* --- Wait --- */
   .spin { width: 34px; height: 34px; margin: 40px auto 18px; border-radius: 50%; border: 3px solid var(--surface-3); border-top-color: var(--accent); animation: rot .8s linear infinite; }
@@ -235,6 +258,18 @@
 
   /* --- Installed tools --- */
   .tool { margin-top: 12px; }
+  .tool-head b.wrap { min-width: 0; overflow-wrap: anywhere; }
+  .btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .cmd pre.snippet { flex: 1; min-width: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono);
+    font-size: 13px; color: var(--text); user-select: all; -webkit-user-select: all; }
+  .cmp-grid { display: grid; grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr)); gap: 10px; margin: 6px 0 14px; }
+  .cmp-col { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .cmp-col .log { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+  .cmp-col b.wrap, .cmp-col .why { overflow-wrap: anywhere; }
+  .cmp-col .why { color: var(--bad); margin: 0; }
+  #compare-box { margin-bottom: 8px; }
+  #models-sum, .tool p { overflow-wrap: anywhere; }      /* folder paths have no spaces to wrap at */
+  @media (max-width: 560px) { .cmp-grid { grid-template-columns: 1fr; } }
   .tool-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .tool-head b { font-size: 17px; }
   .tool p { margin: 8px 0 0; font-size: 14px; color: var(--text-2); overflow-wrap: anywhere; }
@@ -381,6 +416,7 @@
     <button class="nav" id="home-btn"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Get a model</button>
     <button class="nav" id="radar-btn"><svg viewBox="0 0 24 24"><path d="M12 20a8 8 0 1 0-8-8m8 4a4 4 0 1 0-4-4m4 0V4m0 8 5.5-5.5"/></svg>Model radar</button>
     <button class="nav" id="history-btn"><svg viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>What changed</button>
+    <button class="nav" id="models-btn"><svg viewBox="0 0 24 24"><path d="M21 8v13H3V8 M1 3h22v5H1z M10 12h4"/></svg>My models</button>
     <button class="nav" id="tools-btn"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>Installed tools</button>
   </nav>
   <div class="header-end">
@@ -428,10 +464,23 @@
     <div class="card">
       <div class="badge-ok"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></div>
       <div class="center"><h1 id="done-title" tabindex="-1">Ready</h1><p class="sub" id="d-text"></p></div>
+      <div id="speed-notes" hidden></div>
       <div class="next" id="done-next"></div>
       <div class="next chat" id="chat-box" aria-live="polite"></div>
+      <div class="next" id="vision-box" aria-live="polite" hidden></div>
       <p class="center" style="margin:24px 0 0"><button class="link" id="again">Get another model</button></p>
     </div>
+  </section>
+
+  <section class="view" id="v-models" hidden>
+    <button class="back" id="models-back"><svg viewBox="0 0 24 24"><path d="M19 12H5m7-7-7 7 7 7"/></svg>Back</button>
+    <div class="page-head">
+      <h1 id="models-title" tabindex="-1">My models</h1>
+      <p class="sub" id="models-sum">The models in this project's models folder.</p>
+    </div>
+    <div id="router-box" aria-live="polite"></div>
+    <div id="compare-box" aria-live="polite"></div>
+    <div id="models-list" aria-live="polite"></div>
   </section>
 
   <section class="view" id="v-tools" hidden>
@@ -669,9 +718,9 @@ function terminalDetails(cmds, summary, open) {
 }
 
 // --- Views and the URL: every top-level view has an address, so browser Back/Forward and bookmarks work -------
-const NAV = { "": "home-btn", "#radar": "radar-btn", "#history": "history-btn", "#tools": "tools-btn" };
+const NAV = { "": "home-btn", "#radar": "radar-btn", "#history": "history-btn", "#models": "models-btn", "#tools": "tools-btn" };
 const WIZARD = { "v-use": 1, "v-wait": 1, "v-pick": 1, "v-install": 2, "v-done": 3, "v-error": 2 };
-const AWAY = ["v-tools", "v-radar", "v-history", "v-llama"];
+const AWAY = ["v-tools", "v-radar", "v-history", "v-llama", "v-models"];
 let view = "", jobLive = false;
 
 function show(id) {
@@ -711,7 +760,7 @@ function navigate(hash) {
 
 function route() {
   const hash = location.hash || "";
-  const open = { "#tools": openTools, "#radar": openRadar, "#history": openHistory, "#llama": openLlama }[hash];
+  const open = { "#tools": openTools, "#radar": openRadar, "#history": openHistory, "#llama": openLlama, "#models": openModels }[hash];
   markNav(open ? hash : "");
   return open ? open() : goHome();
 }
@@ -780,6 +829,7 @@ async function pick(u) {
         h("li", { class: "fact" }, icon("download"), m.size_h),
         m.tps ? h("li", { class: "fact" }, icon("fast"), "~" + m.tps + " tokens/s est.") : null),
       m.note ? h("p", { class: "note" }, m.note) : null,
+      explainCard(m),
       h("div", { class: "actions" },
         h("button", { class: "btn", onclick: () => install(m) }, icon(m.have ? "check" : "download"), m.have ? "Use this model" : "Get this model"),
         m.have ? h("span", { class: "muted" }, "Already downloaded") : h("span", { class: "muted" }, "Downloads into the models folder")),
@@ -791,6 +841,35 @@ async function pick(u) {
   }
   show("v-pick");
   if (!ms.length) more(false);
+}
+
+// --- Plain words for the numbers on a card, next to the choice they affect -------------------------------------
+function quantText(q) {
+  q = (q || "").toUpperCase();
+  const bits = /^(F32|F16|BF16)$/.test(q) ? 16 : parseInt((/^(?:IQ|TQ|Q)(\d)/.exec(q) || [])[1] || "0", 10);
+  if (!q) return "The file name does not say how the model was compressed.";
+  if (bits >= 16) return q + " is full precision: the original weights, nothing lost, but the largest file.";
+  if (bits === 8) return q + " is 8-bit: practically as good as the original at about half its size, and twice the size of a 4-bit file.";
+  if (bits >= 5) return q + " is " + bits + "-bit: very close to the original, a little larger than 4-bit.";
+  if (bits === 4) return q + " is 4-bit: about a quarter of the original size, with a small loss in quality. It is the usual balance of size and quality.";
+  if (bits === 3) return q + " is 3-bit: smaller again, with a loss in quality you may notice.";
+  return q + " is " + (bits || "under 3") + "-bit: answers are noticeably worse. Use it only when nothing larger fits.";
+}
+function speedText(tps) {
+  if (!tps) return "";
+  const w = tps * 0.75, words = w < 10 ? Math.max(1, Math.round(w)) : Math.round(w / 5) * 5;   // a token is about 3/4 of a word
+  return "~" + tps + " tokens a second is about " + words + " words a second. People read about 4 words a second, so this is " +
+    (w >= 4 ? "faster than most people read." : "slower than you read: you will wait for each answer.");
+}
+function explainCard(m) {
+  const rows = [quantText(m.quant),
+    "Quantization is how much the model's numbers were rounded to make the file smaller. Fewer bits: a smaller, faster model that answers a little worse.",
+    m.need_mb ? "It downloads " + m.size_h + " once and needs " + (m.memory_bound === "at_most" ? "at most " : "about ") +
+      (m.need_mb / 1024).toFixed(1) + " GB of memory to run (" + (m.memory_from === "header" ? "worked out from the model file itself" : "an estimate") + ")."
+      : m.size_h ? "It downloads " + m.size_h + " once, and needs a bit more than that in memory while it runs." : "",
+    speedText(m.tps), m.tps ? "Speeds are estimates until the model is downloaded and tested on this computer." : ""].filter(Boolean);
+  return h("details", { class: "explain" }, h("summary", {}, icon("info"), "What do these mean?"),
+    h("ul", { class: "reasons" }, rows.map((r) => h("li", {}, r))));
 }
 
 function list(title, ms) {
@@ -890,9 +969,10 @@ async function done(j) {
   else if (j.bench === "skipped") text += " The speed test was skipped because llama.cpp is not installed yet.";
   else text += " The speed test could not load it; the model may be too big for this computer.";
   $("#d-text").textContent = text;
+  renderSpeedNotes(j.bench === "ok" ? j.speed_notes : []);
   const next = $("#done-next");
   $("#chat-box").replaceChildren();
-  chatKey = ""; chatPre = null;
+  chatKey = ""; chatPre = null; chatPreset = ""; chatCtx = null;
   chatModel = j.id || lastId;
   lastDone = j;
   if (!S.llama_server) {
@@ -908,6 +988,7 @@ async function done(j) {
     if (chatModel) try { d = await api("/api/chat?id=" + encodeURIComponent(chatModel)); } catch (e) {}
     renderChatStart(next, d && d.preview);
     if (d && d.chat && ["starting", "running"].includes(d.chat.state)) { renderChat(d.chat); pollChat(); }
+    if (d && d.preview && !d.preview.missing) loadVision();
   }
   show("v-done");
   say(text);
@@ -930,15 +1011,123 @@ function lookedDetails(b) {
     h("ul", { class: "looked" }, b.looked.map((l) => h("li", {}, l))));
 }
 
+// --- Image support: the model's vision projector (mmproj), offered when its repository has one -----------------
+let visionTimer = null, visionGen = 0;
+function renderVision(v) {
+  const box = $("#vision-box");
+  const job = v.job || {};
+  let kids = [];
+  if (job.state === "downloading") {
+    const pct = job.total ? Math.floor((job.done * 100) / job.total) : 0;
+    kids = [h("p", {}, h("b", {}, "Downloading image support… "), pct + "% of " + fmt(job.total)),
+      h("div", { class: "progress" }, h("i", { style: "width:" + pct + "%" }))];
+  } else if (v.have && v.flag) {
+    kids = [h("p", {}, h("b", {}, "Image support is on. "), "The chat can read pictures you attach (" + v.file + ")."),
+      h("p", { class: "muted" }, "If a chat is running, stop it and start it again to load image support.")];
+  } else if (v.have) {
+    kids = [h("p", { class: "note" }, v.why)];
+  } else if (v.available) {
+    kids = [h("p", {}, h("b", {}, "This model can also read images. "), "It needs one more file from the same repository."),
+      job.state === "error" ? h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, job.error)) : null,
+      h("div", { class: "actions" }, h("button", { class: "btn small ghost", onclick: getVision }, icon("download"),
+        "Add image support (" + fmt(v.available.size) + ")"))];
+  } else if (job.state === "error") {
+    kids = [h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, job.error))];
+  }
+  box.hidden = !kids.length;
+  box.replaceChildren(...kids.filter(Boolean));
+}
+async function loadVision(wasDownloading) {
+  clearTimeout(visionTimer);
+  const g = ++visionGen;
+  let v = null;
+  try { v = await api("/api/vision?id=" + encodeURIComponent(chatModel)); } catch (e) {}
+  if (g !== visionGen || view !== "v-done" || !v || v.error) return;
+  renderVision(v);
+  const state = (v.job || {}).state;
+  if (state === "downloading") visionTimer = setTimeout(() => loadVision(true), 1000);
+  else if (wasDownloading && state === "done") {        // the command now loads the projector: show it
+    let d = null;
+    try { d = await api("/api/chat?id=" + encodeURIComponent(chatModel) + (chatPreset ? "&preset=" + chatPreset : "") + (chatCtx ? "&ctx=" + chatCtx : "")); } catch (e) {}
+    if (d && d.preview && !(S.chat && ["starting", "running"].includes(S.chat.state))) renderChatStart($("#done-next"), d.preview);
+  }
+}
+async function getVision() {
+  let r;
+  try { r = await api("/api/vision/get", { id: chatModel }); } catch (e) { r = { error: UNREACHABLE }; }
+  if (r.error) { say(r.error); renderVision({ available: null, job: { state: "error", error: r.error } }); return; }
+  loadVision(true);
+}
+
+// A slow speed test: the reasons model_setup.diagnose_speed found on this computer, each with what to do.
+function renderSpeedNotes(notes) {
+  const box = $("#speed-notes");
+  notes = notes || [];
+  box.hidden = !notes.length;
+  box.replaceChildren(...(notes.length ? [h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" },
+    h("b", {}, "Why it is slow"),
+    h("ul", { class: "reasons" }, notes.map((n) => h("li", {}, n.text + " ", h("span", { class: "muted" }, n.fix)))),
+    notes.some((n) => n.code === "gpu_unused") ? llamaButton("Get a build that uses it") : null))] : []));
+}
+
+// --- Settings presets: the server says which ones this llama-server can run, their exact command and memory -----
+let chatPreset = "", chatCtx = null, chatPv = null;
+const WHERE_FITS = { gpu: "fits your graphics card", partial: "split between graphics card and main memory",
+  cpu: "runs from main memory", tight: "a tight fit: it may not load", no: "too big for this computer" };
+function memText(m) {
+  if (!m) return "";
+  return "Needs " + ({ at_most: "at most ", at_least: "at least " }[m.bound] || "about ") + (m.need_mb / 1024).toFixed(1) + " GB · " +
+    (WHERE_FITS[m.where] || "") + " · " + m.ctx.toLocaleString("en-US") + " tokens of context";
+}
+function presetPicked(pv) {
+  const list = (pv && pv.presets) || [];
+  return list.find((x) => x.id === chatPreset && x.available) || list.find((x) => x.id === pv.preset) || null;
+}
+function settingsPanel(pv) {
+  if (!pv.presets || !pv.presets.length) return null;
+  const picked = presetPicked(pv);
+  const rows = pv.presets.map((x) => {
+    const on = picked && picked.id === x.id;
+    const body = [h("b", {}, x.label), h("span", {}, x.text),
+      x.memory ? h("span", { class: "mem " + x.memory.where }, memText(x.memory)) : null,
+      x.memory && x.memory.note ? h("span", { class: "muted" }, x.memory.note) : null,
+      x.available ? null : h("span", { class: "why" }, x.why)];
+    return x.available
+      ? h("button", { class: "preset", "aria-pressed": on ? "true" : "false", onclick: () => { chatPreset = x.id; renderChatStart($("#done-next"), pv); } }, ...body)
+      : h("div", { class: "preset off", "aria-disabled": "true" }, ...body);
+  });
+  const first = pv.presets.find((x) => x.memory_error);
+  const ctxIn = h("input", { type: "number", min: "256", max: "1048576", step: "256", inputmode: "numeric", "aria-label": "Context length in tokens", value: chatCtx || "" });
+  return h("div", { class: "settings" },
+    h("p", { class: "rows-title" }, "How will you use it?"),
+    h("div", { class: "presets", role: "group", "aria-label": "Settings" }, ...rows),
+    first && !pv.presets.some((x) => x.memory) ? h("p", { class: "muted" }, "Memory needed: could not read the model file (" + first.memory_error + ").") : null,
+    h("details", { class: "explain" }, h("summary", {}, icon("info"), "Set the context length yourself"),
+      h("div", { class: "terminal-body" },
+        h("p", { class: "muted", style: "margin:0 0 8px" }, "The context is how much of the conversation the model can see at once, in tokens (a token is about 3/4 of a word). More context needs more memory."),
+        h("div", { class: "actions" }, ctxIn, h("button", { class: "btn small ghost", onclick: () => applyCtx(ctxIn.value) }, "Use this length")))));
+}
+async function applyCtx(value) {
+  const n = parseInt(value, 10);
+  chatCtx = n >= 256 && n <= 1048576 ? n : null;
+  let d = null;
+  try { d = await api("/api/chat?id=" + encodeURIComponent(chatModel) + (chatPreset ? "&preset=" + chatPreset : "") + (chatCtx ? "&ctx=" + chatCtx : "")); } catch (e) {}
+  if (d && d.preview) renderChatStart($("#done-next"), d.preview);
+}
+
 // The first view of the chat controls: what it will run, or why it cannot run yet. The server decides both (rule 3).
 function renderChatStart(next, pv) {
   const kids = [];
+  chatPv = pv;
+  if (pv && pv.ctx && chatCtx == null) chatCtx = pv.ctx;     // the context this model last ran with
   if (!pv) {                                         // not a model this page offered (e.g. a terminal download)
     kids.push(h("p", {}, "To start chatting, run this from the project folder:"), cmdRow(S.serve_cmd),
       SERVE_TIP[S.os] ? h("p", { class: "muted", style: "margin-top:10px" }, SERVE_TIP[S.os]) : null);
   } else if (pv.missing) {
     kids.push(h("p", { class: "note" }, pv.missing));
   } else {
+    kids.push(settingsPanel(pv));
+    const picked = presetPicked(pv);
     if (pv.busy) {
       kids.push(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" },
         h("b", {}, busyText(pv.busy)), pv.busy.free_port ? " Port " + pv.busy.free_port + " is free." : " No free port was found near it.")),
@@ -947,7 +1136,7 @@ function renderChatStart(next, pv) {
         lookedDetails(pv.busy));
     } else {
       kids.push(h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => startChat() }, icon("chat"), "Start chatting")),
-        h("p", { class: "cmd-label" }, "It runs:"), cmdRow(pv.cmd),
+        h("p", { class: "cmd-label" }, "It runs:"), cmdRow((picked && picked.cmd) || pv.cmd),
         h("p", { class: "muted", style: "margin-top:10px" }, "It runs while this setup page is open. You can stop it here."));
     }
     kids.push(serveFromTerminal());
@@ -958,6 +1147,9 @@ function renderChatStart(next, pv) {
 async function startChat(port) {
   const body = { id: chatModel };
   if (port) body.port = port;
+  const picked = presetPicked(chatPv);
+  if (picked) body.preset = picked.id;
+  if (chatCtx) body.ctx = chatCtx;
   $("#done-next").replaceChildren(serveFromTerminal() || "");
   let r;
   try { r = await api("/api/chat/start", body); } catch (e) { r = { error: UNREACHABLE }; }
@@ -1010,7 +1202,7 @@ function renderChat(c) {
   } else if (c.state === "running") {
     box.replaceChildren(h("p", {}, h("b", {}, "The chat is running. "), c.model + " answers at " + c.url),
       h("div", { class: "actions" }, h("a", { class: "btn", href: c.url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open the chat"),
-        stopButton(stopped)), ...cmd, chatLog(c, false));
+        stopButton(stopped)), ...cmd, clientsPanel(), chatLog(c, false));
   } else if (c.state === "failed") {
     box.replaceChildren(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, c.error || "llama-server stopped.")),
       h("div", { class: "actions" }, again("Try again")), ...cmd, chatLog(c, true));
@@ -1180,7 +1372,196 @@ async function loadTools() {
 }
 function openTools() { show("v-tools"); loadTools(); }
 
+// --- My models (utils/local_models.py): what is in the models folder; deleting needs a second, explicit click ----
+const KIND = { model: "", incomplete: "Split model with parts missing: it cannot load", projector: "Image support file (mmproj) for a model",
+  partial: "Unfinished download: Get the model again to continue it" };
+let modelsData = null, modelsAsk = "", modelsError = {};
+function modelCard(m) {
+  const asking = modelsAsk === m.id;
+  const shape = m.arch ? [m.arch, m.layers + " layers", m.train_ctx ? m.train_ctx.toLocaleString("en-US") + "-token context" : ""].filter(Boolean).join(" · ") : "";
+  const del = asking
+    ? h("div", { class: "notice warn", role: "alert" }, icon("alert"), h("div", { class: "notice-body" },
+        h("b", {}, "Delete " + m.id + " (" + fmt(m.size) + ")?"), " It is removed from this computer; you can download it again later.",
+        h("div", { class: "actions" }, h("button", { class: "btn small danger", onclick: () => deleteModel(m.id) }, "Yes, delete"),
+          h("button", { class: "btn small ghost", onclick: () => { modelsAsk = ""; renderModels(); } }, "Cancel"))))
+    : h("div", { class: "actions" }, h("button", { class: "btn small ghost", "aria-label": "Delete " + m.id, onclick: () => { modelsAsk = m.id; renderModels(); } }, "Delete"),
+        m.kind === "model" ? h("button", { class: "btn small ghost", "aria-pressed": comparePicked.includes(m.id) ? "true" : "false",
+          onclick: () => togglePick(m.id) }, comparePicked.includes(m.id) ? "Picked" : "Pick to compare") : null);
+  return h("div", { class: "card tool" },
+    h("div", { class: "tool-head" }, h("b", { class: "wrap" }, m.id), h("span", { class: "fact" }, fmt(m.size))),
+    m.repo ? h("p", {}, "From " + m.repo) : null,
+    KIND[m.kind] ? h("p", {}, KIND[m.kind]) : null,
+    shape ? h("p", {}, shape) : m.header_error && m.kind === "model" ? h("p", { class: "muted" }, "Could not read the model file: " + m.header_error) : null,
+    modelsError[m.id] ? h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, modelsError[m.id])) : null,
+    del);
+}
+function renderModels() {
+  const d = modelsData;
+  if (!d) return;
+  $("#models-sum").textContent = d.models.length
+    ? d.models.length + (d.models.length === 1 ? " file set" : " file sets") + ", " + fmt(d.total) + " in " + d.dir + " · " + fmt(d.free) + " free on that disk"
+    : "Nothing in " + d.dir + " yet. " + fmt(d.free) + " free on that disk.";
+  $("#models-list").replaceChildren(...d.models.map(modelCard));
+  renderCompare();
+}
+
+// --- Compare (utils/compare.py): the same prompts on 2-3 models, one after another; answers side by side ---------
+let comparePicked = [], compareData = null, compareTimer = null, compareGen = 0;
+function togglePick(id) {
+  comparePicked = comparePicked.includes(id) ? comparePicked.filter((x) => x !== id) : comparePicked.concat(id).slice(-3);
+  renderModels();
+}
+const CMP_STATE = { waiting: "Waiting", loading: "Loading", asking: "Asking", done: "Done", failed: "Failed", stopped: "Stopped" };
+function renderCompare() {
+  const box = $("#compare-box");
+  const c = compareData && Array.isArray(compareData.models) && Array.isArray(compareData.prompts) ? compareData : null;
+  const models = (modelsData && modelsData.models.filter((m) => m.kind === "model")) || [];
+  const kids = [];
+  if (c && c.state === "running") {
+    kids.push(h("p", {}, h("b", {}, "Comparing… "), "Each model is loaded in turn, so only one is in memory at a time."),
+      h("ul", { class: "reasons" }, c.models.map((m) => h("li", {}, (CMP_STATE[m.state] || m.state) + " " + m.file +
+        (m.state === "asking" ? " (" + m.results.length + " of " + c.prompts.length + " answers)" : "")))),
+      h("div", { class: "actions" }, h("button", { class: "btn small ghost", onclick: stopCompare }, "Stop")));
+  } else if (c && c.models.length && ["done", "stopped"].includes(c.state)) {
+    kids.push(h("p", {}, h("b", {}, c.state === "done" ? "Comparison finished. " : "Comparison stopped. "),
+      "Speeds are measured by llama-server on this computer. Judge the answers yourself: a few prompts cannot rank models."));
+    kids.push(h("div", { class: "cmp-grid", style: "--cols:" + c.models.length }, c.models.map((m) => h("div", { class: "cmp-col" },
+      h("b", { class: "wrap" }, m.file),
+      m.state === "failed" ? h("p", { class: "why" }, "Failed: " + (m.error || "it did not load")) :
+        h("p", { class: "muted" }, (m.tps || 0).toFixed(1) + " tokens/s · loaded in " + (m.load_s || 0).toFixed(1) + " s")))));
+    c.prompts.forEach((name, k) => kids.push(h("p", { class: "rows-title" }, name),
+      h("div", { class: "cmp-grid", style: "--cols:" + c.models.length }, c.models.map((m) => {
+        const r = m.results[k];
+        return h("div", { class: "cmp-col" }, h("pre", { class: "log" }, r ? (r.error || r.text) : "(no answer)"),
+          r && !r.error ? h("span", { class: "muted" }, r.tps.toFixed(1) + " tokens/s · first token after " + Math.round(r.first_ms) + " ms") : null);
+      }))));
+  }
+  if (!(c && c.state === "running") && models.length >= 2) {
+    kids.push(h("p", { class: "muted" }, "Compare: pick two or three models below (" + comparePicked.length + " picked). They answer the same prompts one after another."),
+      comparePicked.length >= 2 ? h("div", { class: "actions" }, h("button", { class: "btn small", onclick: startCompare }, "Compare these")) : null);
+  }
+  box.replaceChildren(...kids.filter(Boolean));
+}
+async function startCompare() {
+  let r;
+  try { r = await api("/api/compare/start", { ids: comparePicked }); } catch (e) { r = { error: UNREACHABLE }; }
+  if (r.error) { say(r.error); $("#compare-box").prepend(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, r.error))); return; }
+  compareData = r; renderCompare(); pollCompare();
+}
+async function stopCompare() {
+  try { compareData = await api("/api/compare/stop", {}); } catch (e) {}
+  renderCompare();
+}
+function pollCompare() {
+  clearTimeout(compareTimer);
+  const g = ++compareGen;
+  const tick = async () => {
+    if (g !== compareGen || view !== "v-models") return;
+    try { compareData = await api("/api/compare"); } catch (e) { compareTimer = setTimeout(tick, 2000); return; }
+    if (g !== compareGen || view !== "v-models") return;
+    renderCompare();
+    if (compareData.state === "running") compareTimer = setTimeout(tick, 1000);
+  };
+  compareTimer = setTimeout(tick, 1000);
+}
+async function loadModels() {
+  const box = $("#models-list"); box.replaceChildren(h("div", { class: "spin", "aria-label": "Loading" }));
+  try { modelsData = await api("/api/models"); modelsAsk = ""; modelsError = {}; renderModels(); }
+  catch (e) { box.replaceChildren(h("div", { class: "notice warn" }, icon("alert"), h("div", {}, UNREACHABLE))); }
+}
+async function deleteModel(id) {
+  let r;
+  try { r = await api("/api/models/delete", { id }); } catch (e) { r = { error: UNREACHABLE }; }
+  modelsAsk = "";
+  if (r.error && !r.models) { modelsError = { [id]: r.error }; renderModels(); say(r.error); return; }
+  modelsData = r; modelsError = r.error ? { [id]: r.error } : {};
+  renderModels();
+  say(r.error ? r.error : "Deleted " + id);            // a partial delete says what went wrong
+}
+// --- What to type into other programs to use the running llama-server (utils/clients.py) -----------------------
+function clientsPanel() {
+  const body = h("div", { class: "terminal-body" }, h("p", { class: "muted" }, "Loading…"));
+  loadClients(body);
+  return h("details", { class: "explain" }, h("summary", {}, icon("layers"), "Use it from other programs"), body);
+}
+async function loadClients(body) {
+  let d = null;
+  try { d = await api("/api/clients"); } catch (e) {}
+  if (!d || !Array.isArray(d.clients)) { body.replaceChildren(h("p", { class: "muted" }, (d && d.error) || "Could not get the details.")); return; }
+  body.replaceChildren(...d.clients.flatMap((c) => [
+    h("p", { class: "cmd-label" }, c.label),
+    c.kind === "missing" ? h("p", { class: "note" }, c.text)
+      : c.kind === "cmd" ? cmdRow(c.text)
+      : h("div", { class: "cmd" }, h("pre", { class: "snippet" }, c.text), copyButton(c.text)),
+    c.note ? h("p", { class: "muted" }, c.note) : null].filter(Boolean)));
+}
+
+// --- All my models at one address (utils/router.py): llama-server's router mode over the models folder ----------
+let routerInfo = null, routerTimer = null, routerGen = 0;
+function renderRouter() {
+  const box = $("#router-box"), r = routerInfo, c = S.chat || {};
+  const kids = [];
+  if (c.router && ["starting", "running"].includes(c.state)) {
+    const api = "http://127.0.0.1:" + c.port + "/v1";
+    kids.push(c.state === "starting" ? h("p", {}, h("b", {}, "Starting… "), "llama-server is reading the model list.")
+      : h("p", {}, h("b", {}, "Serving " + c.router.length + " models at " + api + ". "),
+        "Programs that use the OpenAI API (Open WebUI, Continue, …) ask for one by name; llama.cpp loads it then, one at a time."),
+      h("ul", { class: "reasons" }, c.router.map((n) => h("li", {}, h("code", {}, n)))),
+      c.state === "running" ? clientsPanel() : null,
+      h("div", { class: "actions" }, c.state === "running" ? h("a", { class: "btn small", href: c.url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open the chat") : null,
+        h("button", { class: "btn small ghost", onclick: stopRouter }, "Stop")));
+  } else if (r && r.available) {
+    if (c.router && c.state === "failed")                 // the last try did not start: say why, with its output
+      kids.push(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, c.error || "llama-server stopped.")),
+        h("pre", { class: "log" }, (c.log || []).slice(-30).join("\n")));
+    kids.push(h("p", {}, h("b", {}, "All my models at one address. "),
+      "One llama-server for every model here: a program asks for a model by name and llama.cpp loads it, one at a time, so only one is ever in memory."),
+      h("div", { class: "actions" }, h("button", { class: "btn small", onclick: startRouter }, icon("layers"), "Serve all my models")),
+      h("p", { class: "cmd-label" }, "It runs:"), cmdRow(r.cmd));
+  } else if (r && r.why && modelsData && modelsData.models.some((m) => m.kind === "model")) {
+    kids.push(h("p", { class: "muted" }, "All my models at one address: " + r.why));
+  }
+  box.replaceChildren(...kids.filter(Boolean));
+}
+async function startRouter() {
+  let r;
+  try { r = await api("/api/router/start", {}); } catch (e) { r = { error: UNREACHABLE }; }
+  if (r.error) { say(r.error); $("#router-box").prepend(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, r.error))); return; }
+  S.chat = r; renderRouter(); renderWarn(); pollRouter();
+}
+async function stopRouter() {
+  try { S.chat = await api("/api/chat/stop", {}); } catch (e) { return; }
+  routerGen++; renderRouter(); renderWarn();
+}
+function pollRouter() {
+  clearTimeout(routerTimer);
+  const g = ++routerGen;
+  const tick = async () => {
+    if (g !== routerGen || view !== "v-models") return;
+    let d;
+    try { d = await api("/api/chat"); } catch (e) { routerTimer = setTimeout(tick, 2000); return; }
+    if (g !== routerGen || view !== "v-models") return;
+    S.chat = d.chat || {};
+    renderRouter(); renderWarn();
+    if (S.chat.state === "starting") routerTimer = setTimeout(tick, 1000);
+  };
+  routerTimer = setTimeout(tick, 1000);
+}
+
+async function openModels() {
+  show("v-models");
+  await loadModels();
+  try { routerInfo = await api("/api/router"); } catch (e) { routerInfo = null; }
+  renderRouter();
+  if (S.chat && S.chat.router && S.chat.state === "starting") pollRouter();
+  try { compareData = await api("/api/compare"); } catch (e) {}
+  renderCompare();
+  if (compareData && compareData.state === "running") pollCompare();
+}
+
 $("#home-btn").onclick = () => navigate("");
+$("#models-btn").onclick = () => navigate("#models");
+$("#models-back").onclick = () => navigate("");
 $("#tools-btn").onclick = () => navigate("#tools");
 $("#radar-btn").onclick = () => navigate("#radar");
 $("#history-btn").onclick = () => navigate("#history");

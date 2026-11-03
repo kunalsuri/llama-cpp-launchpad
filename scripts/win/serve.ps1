@@ -7,7 +7,7 @@
 #   PORT            port to serve on                      (default: 8080)
 #   KILL_EXISTING   1 = stop running llama-server first   (default: 1, set 0 to disable)
 #   OPEN_BROWSER    1 = open the web UI when ready        (default: 1, set 0 to disable)
-#   UI              default | translation: skip the interface menu and use this one
+#   UI              default | translation | tasks: skip the interface menu and use this one
 #   EXTRA_ARGS      extra flags passed to llama-server    (e.g. "-t 8 -c 8192")
 
 $ErrorActionPreference = 'Stop'
@@ -70,7 +70,8 @@ foreach ($name in 'py', 'python') {
     if ($c -and $c.Source -notlike '*WindowsApps*') { $Py = $c.Source; break }   # skip the Microsoft Store stub
 }
 function Invoke-ModelSetup([string[]]$Arguments) {
-    if ((Split-Path -Leaf $Py) -like 'py*') { & $Py -3 $SetupScript @Arguments } else { & $Py $SetupScript @Arguments }
+    # Only the py launcher takes -3 (python.exe also matches 'py*', and Python 3 rejects -3)
+    if ((Split-Path -Leaf $Py) -in @('py.exe', 'py')) { & $Py -3 $SetupScript @Arguments } else { & $Py $SetupScript @Arguments }
 }
 
 # Weekly nudge: offer to check for new models that fit this machine (silent unless it is due)
@@ -80,7 +81,7 @@ if ($Py -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirect
 # A split model (name-00001-of-00003.gguf ...) is one model: list its first part once, sized as the whole set,
 # and leave out the other parts and any set that is missing a part (llama-server must start from part 1).
 $allGguf = @(Get-ChildItem -Path $ModelsDir -Filter '*.gguf' -File -ErrorAction SilentlyContinue |
-             Where-Object { $_.Name -notlike 'mmproj*' } | Sort-Object Name)
+             Where-Object { $_.Name -notlike '*mmproj*' } | Sort-Object Name)   # projectors, also repo-prefixed ones
 $models = @()
 foreach ($f in $allGguf) {
     if ($f.Name -match '^(?<stem>.+)-(?<n>\d{5})-of-(?<total>\d{5})\.gguf$') {
@@ -201,13 +202,13 @@ $model = $models[$modelIdx]
 if ($interactive) { Write-Choice 'Model' $model.Name }
 
 # --- Step 2: interface -------------------------------------------------------
-$uiNames = @('llama.cpp Default', 'Translation')
-$uiKeys  = @('default', 'translation')
+$uiNames = @('llama.cpp Default', 'Translation', 'Tasks')
+$uiKeys  = @('default', 'translation', 'tasks')
 $uiIdx = [Array]::IndexOf($uiKeys, $UiChoice)
 if ($uiIdx -lt 0) {
     if ($interactive) {
         Write-Host ''
-        $uiIdx = Select-Menu 'Choose an interface' $uiNames @('built-in chat', 'translator')
+        $uiIdx = Select-Menu 'Choose an interface' $uiNames @('built-in chat', 'translator', 'summarize, explain code, rewrite')
     } else {
         $u = $null
         try { $u = Read-Host } catch { }
@@ -244,12 +245,49 @@ if ($OpenBrowser -eq '1') {
 }
 
 $serverArgs = @('-m', $model.FullName, '--port', $Port)
-if ($UiMode -eq 'translation') {
-    $uiDir = Join-Path (Join-Path $RootDir 'ui') 'translation'
+if ($UiMode -ne 'default') {      # translation, tasks: a page of this project, served with --path
+    $uiDir = Join-Path (Join-Path $RootDir 'ui') $UiMode
     if (Test-Path (Join-Path $uiDir 'index.html')) {
         $serverArgs += @('--path', $uiDir)
     } else {
-        Write-Host "Translation UI not found at $uiDir, using the default." -ForegroundColor Red
+        Write-Host "$($uiNames[$uiIdx]) UI not found at $uiDir, using the default." -ForegroundColor Red
+    }
+}
+# Image support: the projector downloaded from the same repo as the model (both carry a .source record), passed
+# only when this llama-server lists --mmproj in its --help (an old build would refuse to start).
+$sourceFile = "$($model.FullName).source"
+if (Test-Path -LiteralPath $sourceFile) {
+    $repo = (Get-Content -LiteralPath $sourceFile -Raw).Trim()
+    $proj = Get-ChildItem -Path $ModelsDir -Filter '*.gguf' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like '*mmproj*' } | Sort-Object Name |
+        Where-Object { (Test-Path -LiteralPath "$($_.FullName).source") -and
+                       ((Get-Content -LiteralPath "$($_.FullName).source" -Raw).Trim() -eq $repo) } |
+        Select-Object -First 1
+    if ($proj) {
+        # Windows PowerShell 5.1 turns a program's stderr lines (llama.cpp's backend log) into errors, and 'Stop'
+        # would end the script: read --help with errors allowed.
+        $savedPref = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try { $helpText = (& $Server --help 2>&1 | Out-String) } catch { $helpText = '' }
+        finally { $ErrorActionPreference = $savedPref }
+        if ($helpText -match '(^|[\s,])--mmproj([\s,]|$)') {
+            $serverArgs += @('--mmproj', $proj.FullName)
+            Write-Host "  Image support $($proj.Name)" -ForegroundColor DarkGray
+        } else {
+            Write-Host '  Image support file found, but this llama-server has no --mmproj: not loaded' -ForegroundColor DarkGray
+        }
+    }
+}
+# Settings saved for this model on the setup page (model_setup.py --profile-args: one argument per line, already
+# checked against this llama-server's --help). They go before EXTRA_ARGS, so flags set there still win.
+if ($Py) {
+    $savedPref = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $savedServer = $env:LLAMA_SERVER; $env:LLAMA_SERVER = $Server       # check against the server run below
+    try { $profileArgs = @(Invoke-ModelSetup @('--profile-args', $model.Name) 2>$null | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) }
+    catch { $profileArgs = @() }
+    finally { $ErrorActionPreference = $savedPref; $env:LLAMA_SERVER = $savedServer }
+    if ($profileArgs.Count -gt 0) {
+        Write-Host "  Settings saved on the setup page: $($profileArgs -join ' ')" -ForegroundColor DarkGray
+        $serverArgs += $profileArgs
     }
 }
 if ($ExtraArgs) { $serverArgs += @($ExtraArgs -split '\s+' | Where-Object { $_ }) }

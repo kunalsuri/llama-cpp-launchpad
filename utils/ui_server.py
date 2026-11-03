@@ -17,6 +17,7 @@ import argparse
 import json
 import re
 import secrets
+import shutil
 import sys
 import threading
 import webbrowser
@@ -25,9 +26,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import chat_server
+import clients
+import compare
 import detect_tools
+import gguf
 import hf_discover
 import llama_install
+import local_models
+import router
 
 PAGE = Path(__file__).resolve().parent.parent / "ui" / "setup" / "index.html"
 USES = ("chat", "coding", "translation", "fast")
@@ -213,6 +219,8 @@ class App:
             if self.chat.status().get("state") in CHAT_BUSY:
                 return 409, {"error": "Stop the chat first, and wait until it has stopped: llama-server cannot be "
                                       "replaced while it is running."}
+            if self._comparing():
+                return 409, {"error": "A model comparison is running llama-server. Install when it has finished."}
             if not self.llama_info()["need"]:
                 return 409, {"error": "A working llama-server that can use this computer is already installed."}
             return self.installer.start(variant)
@@ -254,25 +262,322 @@ class App:
             return None, (409, {"error": f"{offer['title']} is not downloaded yet. Get it first."})
         return (paths[0][0], offer["title"]), None
 
-    def chat_status(self, mid=None) -> dict:
+    # --- settings presets (chat_server.PRESETS) and the memory each needs (gguf.py) -----------------------------
+    def _gpu(self) -> bool:
+        hw = self.hw
+        return (hw.gpu_kind in ("nvidia", "gpu") and hw.gpu_usable) or hw.gpu_kind == "apple"
+
+    def _describe(self, path: Path) -> dict:
+        """The model's header (gguf.describe), remembered while the file is unchanged."""
+        try:
+            st = Path(path).stat()
+            key = (str(path), st.st_mtime_ns, st.st_size)
+        except OSError:
+            return gguf.describe(path)
+        cache = self.__dict__.setdefault("_described", {})
+        if key not in cache:
+            cache[key] = gguf.describe(path)
+        return cache[key]
+
+    def _memory(self, d: dict, preset: str, ctx, flags: set) -> dict:
+        s, p = d["shape"], chat_server.PRESETS[preset]
+        want = ctx if ctx is not None else p["ctx"]
+        want = min(want, s["train_ctx"]) if want and s["train_ctx"] else want
+        e = gguf.estimate(s, d["weights_bytes"], want, p.get("type_k", "f16"), "f16")
+        where, share = hf_discover.place(e["need_mb"], self.hw)
+        notes = [gguf.NOTE_TEXT[n] for n in e["notes"]]
+        if not want:
+            notes.insert(0, "This is at the model's whole trained context. "
+                            + ("This llama-server has --fit, so it shrinks the context until the model fits your memory."
+                               if "--fit" in flags else
+                               "This llama-server has no --fit: it really asks for all of it, which may not load."))
+        return dict(e, where=where, gpu_share=round(share, 2), note=" ".join(notes))
+
+    def chat_settings(self, path: Path, ctx=None) -> list:
+        """Every preset for this model: its flags (or why it cannot run here), exact command and memory."""
+        flags, d = self.chat.help_flags(), self._describe(path)
+        train = d["shape"]["train_ctx"] if "shape" in d else 0
+        vision = self._projector_args(path)
+        if "shape" in d and vision:                         # the projector is loaded too: count it
+            d = dict(d, weights_bytes=d["weights_bytes"] + local_models.file_size(vision[1]))
+        out = []
+        for pid in chat_server.PRESET_ORDER:
+            p = chat_server.PRESETS[pid]
+            args, why = chat_server.settings_args(pid, flags, ctx, self._gpu(), train)
+            args = args + vision if not why else args
+            row = {"id": pid, "label": p["label"], "text": p["text"], "available": not why, "why": why,
+                   "args": args, "memory": None, "memory_error": d.get("error", "")}
+            if not why:
+                row["cmd"] = self.chat.shown(self.chat.command(path, settings=args)[0])
+            if "shape" in d:
+                row["memory"] = self._memory(d, pid, ctx, flags)
+            out.append(row)
+        return out
+
+    def _settings_for(self, path: Path, preset, ctx) -> tuple:
+        """-> (preset id, llama-server arguments, "") or (preset id, [], why not). A vision projector downloaded for
+        this model is passed with --mmproj when this llama-server lists that flag."""
+        flags = self.chat.help_flags()
+        preset = preset or chat_server.default_preset(flags)
+        d = self._describe(path)
+        args, why = chat_server.settings_args(preset, flags, ctx, self._gpu(),
+                                              d["shape"]["train_ctx"] if "shape" in d else 0)
+        return preset, (args + self._projector_args(path) if not why else args), why
+
+    # --- image support: the model's vision projector (mmproj) -------------------------------------------------
+    def _projector(self, path: Path):
+        name = local_models.projector_for(Path(path).parent, Path(path).name)
+        return Path(path).parent / name if name else None
+
+    def _projector_args(self, path: Path) -> list:
+        proj = self._projector(path)
+        return ["--mmproj", str(proj)] if proj and "--mmproj" in self.chat.help_flags() else []
+
+    def _projector_offer(self, repo: str) -> tuple:
+        """(file, size) of the repo's projector, or None, and why not: asked of the Hub once per repo."""
+        cache = self.__dict__.setdefault("_projectors", {})
+        if repo not in cache or cache[repo][0] is None and "reach" in cache[repo][1]:
+            cache[repo] = self.ms.find_projector(repo)
+        return cache[repo]
+
+    def vision(self, mid) -> tuple:
+        found, refused = self._chat_model(mid)
+        if refused:
+            return refused
+        # The job first, then the file: a download that finishes in between must not read "done" but "not here"
+        # (seen on the macOS runner).
+        with self.lock:
+            job = dict(self.__dict__.get("vision_job") or {"state": "idle"})
+        proj, flag = self._projector(found[0]), "--mmproj" in self.chat.help_flags()
+        out = {"have": bool(proj), "file": proj.name if proj else "", "flag": flag, "available": None, "why": "",
+               "job": job}
+        if proj and not flag:
+            out["why"] = ("The image support file is here, but this llama-server does not list --mmproj in its --help "
+                          "(it may be an old build), so it is not loaded.")
+        if not proj:
+            offer, why = self._projector_offer(self.offered[mid]["repo"])
+            out["available"] = {"file": offer[0], "size": offer[1]} if offer else None
+            out["why"] = why
+        return 200, out
+
+    def vision_get(self, body: dict) -> tuple:
+        mid = body.get("id")
+        found, refused = self._chat_model(mid)
+        if refused:
+            return refused
+        repo = self.offered[mid]["repo"]
+        offer, why = self._projector_offer(repo)
+        if not offer:
+            return 409, {"error": why}
+        with self.lock:
+            if (self.__dict__.get("vision_job") or {}).get("state") == "downloading":
+                return 409, {"error": "Image support is already downloading."}
+            if self.job.get("state") in ("downloading", "testing"):     # one download at a time: they share
+                return 409, {"error": "A model download is running. Add image support when it has finished."}
+            self.vision_job = {"state": "downloading", "done": 0, "total": offer[1], "file": offer[0]}
+
+        def run():
+            def progress(done):
+                with self.lock:
+                    self.vision_job["done"] = done
+            try:
+                path = self.ms.download(repo, offer[0], offer[1], progress)
+            except Exception as e:                          # noqa: BLE001 - report, never take the page down
+                path, err = None, str(e)
+            else:
+                err = DOWNLOAD_ERRORS.get(getattr(self.ms, "last_download_error", ""), DOWNLOAD_ERRORS[""])
+            with self.lock:
+                self.vision_job = ({"state": "done", "file": Path(path).name} if path
+                                   else {"state": "error", "error": err})
+        threading.Thread(target=run, daemon=True).start()
+        return 202, {"ok": True}
+
+    def chat_status(self, mid=None, preset=None, ctx=None) -> dict:
         out = {"chat": self.chat.status()}
         if mid:
             found, _ = self._chat_model(mid)
             if found:
-                out["preview"] = self.chat.preview(found[0])
+                preset = preset if preset in chat_server.PRESETS else None
+                if preset is None and ctx is None:          # the settings this model last ran with, if any
+                    saved = self.ms.load_profile(Path(found[0]).name)
+                    if saved and saved["preset"] in chat_server.PRESETS:
+                        preset, ctx = saved["preset"], saved["ctx"]
+                preset, args, why = self._settings_for(found[0], preset, ctx)
+                out["preview"] = self.chat.preview(found[0], settings=args)
+                out["preview"].update(preset=preset, ctx=ctx, presets=self.chat_settings(found[0], ctx), why=why)
         return out
 
+    def clients(self) -> tuple:
+        """What to type into other programs to use the running llama-server (clients.py)."""
+        c = self.chat.status()
+        if c.get("state") != "running":
+            return {"error": "Start a chat (or All my models) first: other programs connect to the running llama-server."}
+        names = c.get("router") or [Path(c.get("model_path") or "local").stem]
+        return {"clients": clients.snippets(c["port"], names, self.probe.system, self.probe.which)}
+
     def chat_start(self, body: dict):
-        port = body.get("port")
+        port, preset, ctx = body.get("port"), body.get("preset"), body.get("ctx")
         if port is not None and (type(port) is not int or not 1024 <= port <= 65535):
             return 400, {"error": "The port must be a number from 1024 to 65535."}
+        if preset is not None and preset not in chat_server.PRESETS:
+            return 400, {"error": "Unknown setting. Reload the page."}
+        if ctx is not None and (type(ctx) is not int or not chat_server.CTX_MIN <= ctx <= chat_server.CTX_MAX):
+            return 400, {"error": f"The context length must be a whole number from {chat_server.CTX_MIN} to "
+                                  f"{chat_server.CTX_MAX}."}
         with self.run_lock:
             if self.installer.status().get("state") in INSTALL_BUSY:
                 return 409, {"error": "llama.cpp is being installed. Start the chat when the install has finished."}
+            if self._comparing():
+                return 409, {"error": "A model comparison is running (My models). Start the chat when it has finished."}
             found, refused = self._chat_model(body.get("id"))
             if refused:
                 return refused
-            return self.chat.start(found[0], found[1], port)
+            used, args, why = self._settings_for(found[0], preset, ctx)
+            if why:
+                return 409, {"error": why}
+            code, out = self.chat.start(found[0], found[1], port, args)
+            if code == 202:                                  # remembered for next time, and for the serve scripts
+                try:
+                    self.ms.save_profile(Path(found[0]).name, used, ctx)
+                except OSError:
+                    pass
+            return code, out
+
+    # --- My models: the models folder, and deleting from it (local_models.py) ---------------------------------
+    def local_models(self) -> dict:
+        d = self.ms.models_dir()
+        rows = []
+        for e in local_models.scan(d):
+            row = dict(e, header_error="")
+            if e["kind"] == "model":
+                info = self._describe(d / e["files"][0])
+                if info.get("error"):
+                    row["header_error"] = info["error"]
+                else:
+                    s = info["shape"]
+                    row.update(arch=s["arch"], layers=s["n_layer"], train_ctx=s["train_ctx"], name=info.get("name", ""))
+            rows.append(row)
+        try:
+            free = shutil.disk_usage(d if d.is_dir() else d.parent).free
+        except OSError:
+            free = 0
+        return {"dir": str(d), "models": rows, "total": sum(r["size"] for r in rows), "free": free}
+
+    def delete_model(self, body: dict):
+        mid = body.get("id")
+        d = self.ms.models_dir()
+        entry = next((e for e in local_models.scan(d) if e["id"] == mid), None) if isinstance(mid, str) else None
+        if entry is None:
+            return 404, {"error": local_models.NOT_HERE}
+        with self.run_lock:
+            with self.lock:
+                if (self.job.get("state") in ("downloading", "testing")
+                        or (self.__dict__.get("vision_job") or {}).get("state") == "downloading"
+                        or self.ms.state_get("dl_active") == "1"):             # also one started in a terminal
+                    return 409, {"error": "A download is running. Delete models when it has finished."}
+            if self._comparing():
+                return 409, {"error": "A model comparison is running. Delete models when it has finished."}
+            chat = self.chat.status()
+            if chat.get("state") in CHAT_BUSY and chat.get("router"):
+                return 409, {"error": "llama-server is serving all your models. Stop it first, then delete."}
+            in_use = {str(d / f) for f in entry["files"]}
+            loaded = {chat.get("model_path") or ""}
+            if loaded != {""}:                               # its image support file is loaded too
+                proj = self._projector(Path(chat["model_path"]))
+                loaded.add(str(proj) if proj else "")
+            if chat.get("state") in CHAT_BUSY and in_use & loaded:
+                return 409, {"error": "The chat is using this file. Stop the chat first, then delete it."}
+            removed, error = local_models.delete(d, mid)
+        if error and not removed:
+            return 409, {"error": error}
+        return 200, dict(self.local_models(), removed=removed, error=error)
+
+    # --- All my models at one address: llama-server's router mode (router.py) ---------------------------------
+    @property
+    def router_preset(self) -> Path:
+        return self.__dict__.get("_router_preset") or detect_tools.ROOT / router.PRESET_NAME
+
+    @router_preset.setter
+    def router_preset(self, path) -> None:
+        self.__dict__["_router_preset"] = Path(path)
+
+    def _router_plan(self) -> dict:
+        flags = self.chat.help_flags()
+        rows = router.entries(self.ms.models_dir())
+        out = {"available": False, "why": "", "models": [r["name"] for r in rows], "rows": rows}
+        if not self.chat.find_server():
+            out["why"] = chat_server.NOT_FOUND
+            return out
+        args, why = router.router_args(self.router_preset, flags)
+        if why:
+            out["why"] = why
+        elif len(rows) < 2:
+            out["why"] = "Serving several models at one address needs at least two downloaded models."
+        else:
+            out.update(available=True, args=args, shared={"c": 4096} if "--ctx-size" in flags else {})
+        return out
+
+    def router_info(self) -> dict:
+        plan = self._router_plan()
+        out = {k: plan[k] for k in ("available", "why", "models")}
+        if plan["available"]:
+            out["cmd"] = self.chat.shown(self.chat.command(None, settings=plan["args"])[0])
+            out["url"] = f"http://127.0.0.1:{self.chat.port()}/v1"
+        return out
+
+    def router_start(self) -> tuple:
+        with self.run_lock:
+            if self.installer.status().get("state") in INSTALL_BUSY:
+                return 409, {"error": "llama.cpp is being installed. Start when the install has finished."}
+            if self._comparing():
+                return 409, {"error": "A model comparison is running (My models). Start when it has finished."}
+            plan = self._router_plan()
+            if not plan["available"]:
+                return 409, {"error": plan["why"]}
+            if self.chat.status().get("state") in CHAT_BUSY:
+                return 409, {"error": "A chat server is already running. Stop it first."}
+            try:
+                router.write_preset(self.router_preset, router.preset_ini(plan["rows"], plan["shared"]))
+            except (OSError, ValueError) as e:
+                return 500, {"error": f"Could not write the model list for llama-server: {e}"}
+            code, body = self.chat.start(None, f"All my models ({len(plan['rows'])})", None, plan["args"], ready="/models")
+            if code == 202:
+                self.chat._set(router=plan["models"])
+                body = self.chat.status()
+            return code, body
+
+    # --- Compare models (compare.py): the same prompts on 2-3 models, one in memory at a time ------------------
+    compare = None
+
+    def _comparing(self) -> bool:
+        return self.compare is not None and self.compare.status()["state"] == "running"
+
+    def compare_status(self) -> dict:
+        return self.compare.status() if self.compare is not None else {"state": "idle", "models": [], "prompts": []}
+
+    def compare_start(self, body: dict):
+        ids = body.get("ids")
+        d = self.ms.models_dir()
+        models = {e["id"]: e for e in local_models.scan(d) if e["kind"] == "model"}
+        if (not isinstance(ids, list) or not 2 <= len(ids) <= 3 or len(set(map(str, ids))) != len(ids)
+                or not all(isinstance(i, str) and i in models for i in ids)):
+            return 400, {"error": "Pick two or three different models from the models folder."}
+        with self.run_lock:
+            if self.chat.status().get("state") in CHAT_BUSY:
+                return 409, {"error": "Stop the chat first: a comparison loads each model in turn and needs the memory."}
+            if self.installer.status().get("state") in INSTALL_BUSY:
+                return 409, {"error": "llama.cpp is being installed. Compare when the install has finished."}
+            if self._comparing():
+                return 409, {"error": "A comparison is already running."}
+            flags = self.chat.help_flags()
+            self.compare = compare.Comparison(
+                [(d / i, i) for i in ids], find_server=self.chat.find_server, system=lambda: self.probe.system,
+                settings=["-c", "4096"] if "--ctx-size" in flags else [])
+            out = self.compare.start()
+        return (409, out) if out.get("error") else (202, out)
+
+    def compare_stop(self) -> dict:
+        return self.compare.stop() if self.compare is not None else self.compare_status()
 
     def tools(self, ids=None, verbose: bool = False) -> dict:
         """Which of Ollama / llama.cpp / LM Studio / Unsloth are installed: detect_tools.py, plus next-step hints."""
@@ -312,6 +617,8 @@ class App:
                 "verdict": "tight" if m.get("mode") == "tight" else ms.verdict(tps),
                 "where": m.get("mode", "cpu"), "gpu_share": m.get("gpu_share", 0), "note": m.get("note", ""),
                 "have": all(ms.local_path(m["repo"], f, sz)[1] for f, sz in files),
+                "need_mb": m.get("need_mb"), "memory_from": m.get("memory_from", "estimate"),
+                "memory_bound": m.get("memory_bound", ""), "memory_note": m.get("memory_note", ""),
                 "commands": self.download_commands(offer)}
 
     def download_commands(self, offer: dict) -> list:
@@ -362,6 +669,7 @@ class App:
             return {"error": "Could not reach Hugging Face. Check your connection and try again."}
         results, _ = ms.discover_check(cands, self.hw, a)
         rows = hf_discover.rank(results, "speed" if use == "fast" else "popular")[:10]
+        rows = [ms.refine_memory(r, self.hw, a.ctx) for r in rows]       # the model file's own header, if readable
         return {"models": [self.card(r) for r in rows]}
 
     def radar(self, gpu_only: bool = False, search: str | None = None,
@@ -429,7 +737,8 @@ class App:
         if not offer:
             return 404, {"error": "Unknown model. Reload the page."}
         with self.lock:
-            if self.job.get("state") in ("downloading", "testing"):
+            if (self.job.get("state") in ("downloading", "testing")
+                    or (self.__dict__.get("vision_job") or {}).get("state") == "downloading"):
                 return 409, {"error": "Another download is running."}
             self.job = {
                 "state": "downloading",
@@ -510,7 +819,12 @@ class App:
                 f"[LAUNCHPAD] Ready! Speed: ~{tps} tokens/s. Start server with: {cmd}\n\n"
             )
             sys.stderr.flush()
-            self._set(state="done", bench="ok" if rc == 0 else "skipped" if rc == 2 else "failed", tps=tps)
+            try:                                            # why a slow run was slow (model_setup.diagnose_speed)
+                notes = json.loads(ms.state_get("speed_notes") or "[]") if rc == 0 else []
+            except ValueError:
+                notes = []
+            self._set(state="done", bench="ok" if rc == 0 else "skipped" if rc == 2 else "failed", tps=tps,
+                      speed_notes=notes if isinstance(notes, list) else [])
         except Exception as e:                              # noqa: BLE001 - show the user something, never crash the page
             ms.state_update({"dl_active": "0", "dl_state": "error"})
             sys.stderr.write(f"\n[LAUNCHPAD] Error during download: {e}\n")
@@ -578,9 +892,22 @@ def make_handler(app: App):
             if url.path == "/api/progress":
                 return self.reply(200, app.snapshot())
             if url.path == "/api/chat":
-                return self.reply(200, app.chat_status((q.get("id") or [None])[0]))
+                ctx = (q.get("ctx") or [""])[0]
+                return self.reply(200, app.chat_status((q.get("id") or [None])[0], (q.get("preset") or [None])[0],
+                                                       int(ctx) if ctx.isascii() and ctx.isdigit() and len(ctx) < 9 else None))
             if url.path == "/api/llama":
                 return self.reply(200, app.llama_info())
+            if url.path == "/api/models":
+                return self.reply(200, app.local_models())
+            if url.path == "/api/compare":
+                return self.reply(200, app.compare_status())
+            if url.path == "/api/router":
+                return self.reply(200, app.router_info())
+            if url.path == "/api/clients":
+                return self.reply(200, app.clients())
+            if url.path == "/api/vision":
+                code, out = app.vision((q.get("id") or [None])[0])
+                return self.reply(code, out)
             if url.path == "/api/tools":
                 ids = q.get("tool") or None
                 if ids and any(i not in detect_tools.SPECS for i in ids):
@@ -625,6 +952,20 @@ def make_handler(app: App):
                 return self.reply(200, app.chat.stop())
             if path == "/api/llama/install":
                 code, out = app.llama_install(body)
+                return self.reply(code, out)
+            if path == "/api/router/start":
+                code, out = app.router_start()
+                return self.reply(code, out)
+            if path == "/api/compare/start":
+                code, out = app.compare_start(body)
+                return self.reply(code, out)
+            if path == "/api/compare/stop":
+                return self.reply(200, app.compare_stop())
+            if path == "/api/vision/get":
+                code, out = app.vision_get(body)
+                return self.reply(code, out)
+            if path == "/api/models/delete":
+                code, out = app.delete_model(body)
                 return self.reply(code, out)
             self.reply(404, {"error": "not found"})
 

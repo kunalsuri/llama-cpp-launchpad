@@ -21,8 +21,11 @@ ALLOWED_IMPORTS = {"__future__", "argparse", "csv", "ctypes", "datetime", "io", 
                    "glob", "importlib",   # detect_tools.py: file-system globbing and installed-package metadata (read-only)
                    "collections", "shlex", "time",   # chat_server.py: in-memory log, quoting the shown command, polling
                    "hashlib", "tarfile", "zipfile",  # llama_install.py: SHA-256 check, unpacking release archives
+                   "struct",                         # gguf.py: decoding a model file's binary header
+                   "statistics",                     # compare.py: mean speed over the prompts
                    "hardware", "hf_discover", "ui_server", "detect_tools", "hf_radar", "model_setup",
-                   "chat_server", "llama_install"}      # local modules
+                   "chat_server", "llama_install", "gguf", "local_models", "compare", "router",
+                   "clients"}      # local modules
 LOCAL_MODULES = {p.stem for p in SOURCES}
 # 127.0.0.1 = the setup page itself (ui_server.py); api.github.com = the llama.cpp release listing (llama_install.py)
 ALLOWED_HOSTS = {"huggingface.co", "github.com", "api.github.com", "127.0.0.1"}
@@ -87,6 +90,8 @@ class TestSourceAudit(unittest.TestCase):
 
     def test_network_hosts_are_only_huggingface_and_github(self):
         for path, tree in trees():
+            if path.name == "clients.py":           # text for the user to paste elsewhere; it connects to nothing
+                continue                            # (test_clients_only_builds_text)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
                     for url in re.findall(r"https?://[^\s\"')]+", node.value):
@@ -95,7 +100,8 @@ class TestSourceAudit(unittest.TestCase):
 
     def test_http_goes_through_one_function_and_sends_no_personal_data(self):
         text = (UTILS / "model_setup.py").read_text(encoding="utf-8")
-        self.assertEqual(text.count("urllib.request.urlopen("), 2, "only http_get and fetch_file touch the network")
+        self.assertEqual(text.count("urllib.request.urlopen("), 3,
+                         "only http_get, fetch_file and http_open (the first megabytes of a model file) touch the network")
         # request headers are limited to a fixed user-agent and (for resume) a Range header
         headers = set(re.findall(r'headers\[?\s*[\"\']?(?:\[)?"(\w[\w-]*)"', text)) | set(re.findall(r'"(User-Agent|Range)"', text))
         self.assertTrue(headers <= {"User-Agent", "Range"}, headers)
@@ -149,6 +155,46 @@ class TestSourceAudit(unittest.TestCase):
         self.assertEqual(re.findall(r"os\.replace\(([^)]*)\)", text), ["src, target"])
         self.assertIn("target = self.bin.joinpath(", text, "files are only moved into bin/")
         self.assertNotRegex(text, r"(unlink|os\.remove|rmdir|sudo|runas|Program Files|/usr/local)")
+
+    def test_local_models_deletes_only_listed_files_inside_the_models_folder(self):
+        """local_models.py is the one module that deletes models. One unlink, of a name scan() listed, after
+        _inside() checked it is a direct child of the folder. Nothing else is removed, nothing is run or fetched."""
+        text = (UTILS / "local_models.py").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"(\.unlink\(|os\.remove|os\.unlink|rmtree|rmdir|os\.replace|shutil)", text), [".unlink("])
+        self.assertIn("if entry is None or not all(_inside(d, f) for f in entry[\"files\"]):", text)
+        self.assertIn("(d / name).unlink()", text)
+        self.assertNotRegex(text, r"(subprocess|urllib|http\.client|run_cmd|write_text|write_bytes|open\()")
+
+    def test_compare_starts_servers_only_through_chat_server_and_talks_only_to_them(self):
+        text = (UTILS / "compare.py").read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"(subprocess|urllib|run_cmd|write_text|write_bytes|open\(|unlink|shutil)")
+        self.assertIn("chat_server.ChatServer(", text)
+        self.assertIn('chat_server.http_post_json(port, "/v1/chat/completions"', text)
+
+    def test_clients_only_builds_text(self):
+        """clients.py holds addresses for other programs (Open WebUI in Docker reaches the host through
+        host.docker.internal). It imports nothing, so it can open no connection, file or program."""
+        tree = ast.parse((UTILS / "clients.py").read_text(encoding="utf-8"))
+        imports = [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
+        self.assertEqual([getattr(n, "module", None) for n in imports], ["__future__"])
+        calls = {n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        self.assertLessEqual(calls, {"which", "len"}, "only the which() it is given, to say whether aider was found")
+
+    def test_router_writes_only_its_preset_file(self):
+        """router.py writes one file, the preset INI it is given, through a temporary file next to it."""
+        text = (UTILS / "router.py").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"(write_text|write_bytes|os\.replace|open\(|unlink|os\.remove|shutil|rmtree)", text),
+                         ["write_text", "os.replace"])
+        self.assertIn('PRESET_NAME = ".launchpad-models.ini"', text)
+        self.assertNotRegex(text, r"(subprocess|urllib|http\.client|run_cmd)")
+
+    def test_gguf_reader_only_reads(self):
+        """gguf.py decodes model headers. It opens files for reading only, writes nothing, runs nothing and has no
+        network code of its own (model_setup.py fetches remote headers and hands it the stream)."""
+        text = (UTILS / "gguf.py").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"open\(([^)]*)\)", text), ['path, "rb"'])
+        self.assertNotRegex(text, r"(write_text|write_bytes|os\.replace|shutil|unlink|os\.remove|rmdir|subprocess"
+                                  r"|urllib|http\.client|run_cmd)")
 
     def test_no_obfuscation(self):
         for path in SOURCES:

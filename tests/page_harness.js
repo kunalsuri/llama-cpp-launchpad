@@ -173,6 +173,12 @@ function routes(job) {
 // Start chatting: a finished download of model "o/M-GGUF|m.gguf", and the chat's states as the server reports them.
 const PREVIEW = { cmd: "llama-server -m /p/models/m.gguf --port 8080", port: 8080, busy: null };
 const IDLE_CHAT = { state: "idle", log: [] };
+const mem = (need, where, extra) => Object.assign({ need_mb: need, kv_mb: 512, ctx: 4096, bound: "exact", where, note: "" }, extra);
+const PRESET_PREVIEW = { ...PREVIEW, cmd: "CMD-AUTO", preset: "auto", presets: [
+  { id: "short", label: "Short chats", text: "About 3,000 words.", available: true, why: "", cmd: "CMD-SHORT", memory: mem(5734, "gpu") },
+  { id: "long", label: "Long documents", text: "About 24,000 words.", available: true, why: "", cmd: "CMD-LONG", memory: mem(9000, "cpu") },
+  { id: "fast", label: "Fastest replies", text: "All on the card.", available: false, why: "This needs a graphics card that llama.cpp can use, and none was found.", memory: mem(5000, "gpu") },
+  { id: "auto", label: "Let llama.cpp decide", text: "llama.cpp picks.", available: true, why: "", cmd: "CMD-AUTO", memory: mem(40000, "no", { note: "whole trained context" }) }] };
 const STARTING = { state: "starting", cmd: PREVIEW.cmd, port: 8080, url: "http://127.0.0.1:8080/", model: "M", log: ["loading"] };
 const RUNNING = { ...STARTING, state: "running" };
 const STOPPED = { ...STARTING, state: "stopped" };
@@ -676,6 +682,275 @@ const scenarios = {
     gpu.click(); await p.settle();
     const sel = tabs.filter((t) => t.getAttribute("aria-selected") === "true").map((t) => t.getAttribute("data-tab"));
     if (sel.join() !== "gpu") return "aria-selected on: " + sel.join();
+  },
+
+  // --- Use the running chat from other programs ------------------------------------------------------------------
+  async "a running chat shows what to type into other programs, with a copy button for each"() {
+    const clients = { clients: [
+      { id: "openai", label: "Any program that speaks the OpenAI API", kind: "values", text: "Address (base URL): http://127.0.0.1:8080/v1", note: "any name works" },
+      { id: "continue", label: "Continue", kind: "file", text: "name: Local llama.cpp\nmodels:\n  - provider: llama.cpp", note: "" },
+      { id: "aider", label: "aider", kind: "missing", text: "aider was not found on this computer", note: "" }] };
+    const base = chatRoutes({ chats: [IDLE_CHAT, RUNNING] });
+    const p = makePage({ routes: (path, opts, full) => (path === "/api/clients" ? clients : base(path, opts, full)) });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    await p.advance(1100);
+    const t = p.text("chat-box");
+    if (!t.includes("Use it from other programs")) return "no panel for other programs: " + t;
+    for (const want of ["http://127.0.0.1:8080/v1", "provider: llama.cpp", "aider was not found"])
+      if (!t.includes(want)) return `missing "${want}": ` + t;
+    const copies = [];
+    const walk = (e) => { if (e.handlers && e.handlers.click && e.text().includes("Copy")) copies.push(e); (e.children || []).forEach(walk); };
+    walk(p.el("chat-box"));
+    if (copies.length < 3) return "expected a copy button for the command, each snippet and the address; found " + copies.length;
+  },
+
+  // --- Image support (a vision projector) on the done screen --------------------------------------------------
+  async "image support is offered, downloads with progress, then the chat command loads it"() {
+    const posts = [];
+    let vis = { have: false, flag: true, file: "", available: { file: "mmproj-model-f16.gguf", size: 851443712 }, why: "", job: { state: "idle" } };
+    const base = chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW });
+    const chatCalls = [];
+    const p = makePage({ routes: (path, opts, full) => {
+      if (path === "/api/vision") return vis;
+      if (path === "/api/vision/get") {
+        posts.push(JSON.parse(opts.body));
+        vis = { ...vis, job: { state: "downloading", done: 425721856, total: 851443712 } };
+        return { ok: true };
+      }
+      if (path === "/api/chat" && full.includes("id=")) chatCalls.push(full);
+      return base(path, opts, full);
+    } });
+    await p.start();
+    await p.advance(1000);
+    const btn = p.button("vision-box", "Add image support");
+    if (!btn) return "no button to add image support: " + p.text("vision-box");
+    if (!p.text("vision-box").includes("812 MB")) return "the download size is not shown: " + p.text("vision-box");
+    btn.click(); await p.settle();
+    if (posts.length !== 1 || posts[0].id !== "o/M-GGUF|m.gguf") return "the request was not sent: " + JSON.stringify(posts);
+    await p.advance(1100);
+    if (!p.text("vision-box").includes("50%")) return "no progress: " + p.text("vision-box");
+    const before = chatCalls.length;
+    vis = { ...vis, have: true, file: "mmproj-model-f16.gguf", available: null, job: { state: "done", file: "mmproj-model-f16.gguf" } };
+    await p.advance(1100);
+    if (!/Image support is on/.test(p.text("vision-box"))) return "not shown as on: " + p.text("vision-box");
+    if (chatCalls.length === before) return "the chat command was not asked for again (it must now include --mmproj)";
+    const n = chatCalls.length;
+    await p.advance(5000);
+    if (chatCalls.length !== n) return "kept polling after the download finished";
+  },
+
+  async "a model that does not read images shows no image box"() {
+    const vis = { have: false, flag: true, file: "", available: null, why: "This model does not read images.", job: { state: "idle" } };
+    const base = chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW });
+    const p = makePage({ routes: (path, opts, full) => (path === "/api/vision" ? vis : base(path, opts, full)) });
+    await p.start();
+    await p.advance(1000);
+    if (!p.el("vision-box").hidden) return "a box is shown for a text-only model: " + p.text("vision-box");
+  },
+
+  // --- My models: the models folder, and deleting with a second click -------------------------------------------
+  async "My models lists the folder and deletes only after a second, explicit click"() {
+    const posts = [];
+    const list = { dir: "/p/models", total: 3e9, free: 50e9, models: [
+      { id: "shape.gguf", kind: "model", size: 2.6e9, repo: "o/Shape-GGUF", files: ["shape.gguf"], arch: "llama", layers: 32, train_ctx: 131072, header_error: "" },
+      { id: "x.gguf.part", kind: "partial", size: 4e8, repo: "", files: ["x.gguf.part"], header_error: "" }] };
+    const after = { ...list, models: [list.models[1]], removed: ["shape.gguf"] };
+    const p = makePage({ hash: "#models", routes: idle((path, opts) => {
+      if (path === "/api/models") return list;
+      if (path === "/api/models/delete") { posts.push(JSON.parse(opts.body)); return after; }
+      return {};
+    }) });
+    await p.start();
+    if (p.visible() !== "v-models") return "the /#models link did not open My models: " + p.visible();
+    const t = p.text("models-list");
+    for (const want of ["shape.gguf", "o/Shape-GGUF", "2.4 GB", "llama", "32 layers", "Unfinished download"])
+      if (!t.includes(want)) return `missing "${want}": ` + t;
+    if (!p.text("models-sum").includes("46.6 GB free")) return "free space not shown: " + p.text("models-sum");
+    p.button("models-list", "Delete").click(); await p.settle();
+    if (posts.length) return "deleted on the first click";
+    if (!p.text("models-list").includes("Delete shape.gguf (2.4 GB)?")) return "no confirmation: " + p.text("models-list");
+    p.button("models-list", "Cancel").click(); await p.settle();
+    if (posts.length || p.text("models-list").includes("Delete shape.gguf (2.4 GB)?")) return "Cancel did not cancel";
+    p.button("models-list", "Delete").click(); await p.settle();
+    p.button("models-list", "Yes, delete").click(); await p.settle();
+    if (posts.length !== 1 || posts[0].id !== "shape.gguf") return "the delete was not sent once with the id: " + JSON.stringify(posts);
+    if (p.text("models-list").includes("o/Shape-GGUF")) return "the list was not refreshed: " + p.text("models-list");
+  },
+
+  async "Compare: pick two models, run, and see their answers side by side with their speed"() {
+    const posts = [];
+    const two = { dir: "/p/models", total: 2, free: 9, models: ["a.gguf", "b.gguf"].map((id) => ({ id, kind: "model", size: 1e9, repo: "", files: [id], header_error: "" })) };
+    const res = (f) => [{ prompt: "Explain", text: "[" + f + "] sky", tps: 40, first_ms: 12, tokens: 7, error: "" }];
+    let cmp = { state: "idle", models: [], prompts: [] };
+    const p = makePage({ hash: "#models", routes: idle((path, opts) => {
+      if (path === "/api/models") return two;
+      if (path === "/api/compare/start") {
+        posts.push(JSON.parse(opts.body));
+        cmp = { state: "running", prompts: ["Explain"], models: [{ file: "a.gguf", title: "a.gguf", state: "loading", results: [] }, { file: "b.gguf", title: "b.gguf", state: "waiting", results: [] }] };
+        return cmp;
+      }
+      if (path === "/api/compare") return cmp;
+      return {};
+    }) });
+    await p.start();
+    if (p.button("compare-box", "Compare these")) return "Compare is offered before two models are picked";
+    p.button("models-list", "Pick to compare", 0).click(); await p.settle();
+    p.button("models-list", "Pick to compare", 0).click(); await p.settle();   // the first is now "Picked"
+    const go = p.button("compare-box", "Compare these");
+    if (!go) return "no Compare button with two picked: " + p.text("compare-box");
+    go.click(); await p.settle();
+    if (posts.length !== 1 || posts[0].ids.join() !== "a.gguf,b.gguf") return "wrong models sent: " + JSON.stringify(posts);
+    if (!/Loading a\.gguf/.test(p.text("compare-box"))) return "no progress: " + p.text("compare-box");
+    cmp = { state: "done", prompts: ["Explain"], models: [
+      { file: "a.gguf", title: "a.gguf", state: "done", load_s: 1.5, tps: 40, results: res("a.gguf") },
+      { file: "b.gguf", title: "b.gguf", state: "done", load_s: 2.5, tps: 20, results: res("b.gguf") }] };
+    await p.advance(1100);
+    const t = p.text("compare-box");
+    for (const want of ["[a.gguf] sky", "[b.gguf] sky", "40.0 tokens/s", "20.0 tokens/s", "Explain"])
+      if (!t.includes(want)) return `missing "${want}": ` + t;
+    const calls = p.state.calls.filter((c) => c === "/api/compare").length;
+    await p.advance(5000);
+    if (p.state.calls.filter((c) => c === "/api/compare").length !== calls) return "kept polling after the comparison finished";
+  },
+
+  async "All my models at one address: start the router, see the names to ask for, stop it"() {
+    const posts = [];
+    const two = { dir: "/p/models", total: 2, free: 9, models: ["alpha.gguf", "beta.gguf"].map((id) => ({ id, kind: "model", size: 1e9, repo: "", files: [id], header_error: "" })) };
+    const info = { available: true, why: "", models: ["alpha", "beta"], cmd: "llama-server --port 8080 --models-preset X --models-max 1", url: "http://127.0.0.1:8080/v1" };
+    let chat = { state: "idle", log: [] };
+    const p = makePage({ hash: "#models", routes: idle((path, opts) => {
+      if (path === "/api/models") return two;
+      if (path === "/api/router") return info;
+      if (path === "/api/compare") return { state: "idle", models: [], prompts: [] };
+      if (path === "/api/router/start") { posts.push(path); chat = { state: "starting", model: "All my models (2)", router: ["alpha", "beta"], url: "http://127.0.0.1:8080/", port: 8080, log: [] }; return chat; }
+      if (path === "/api/chat/stop") { posts.push(path); chat = { ...chat, state: "stopped" }; return chat; }
+      if (path === "/api/chat") return { chat };
+      return {};
+    }) });
+    await p.start();
+    const t0 = p.text("router-box");
+    if (!t0.includes("--models-max 1") || !t0.includes("one at a time")) return "the command or the memory rule is not shown: " + t0;
+    p.button("router-box", "Serve all my models").click(); await p.settle();
+    if (posts[0] !== "/api/router/start") return "not started: " + JSON.stringify(posts);
+    if (!/Starting/.test(p.text("router-box"))) return "no starting state: " + p.text("router-box");
+    chat = { ...chat, state: "running" };
+    await p.advance(1100);
+    const t = p.text("router-box");
+    for (const want of ["Serving 2 models", "http://127.0.0.1:8080/v1", "alpha", "beta"])
+      if (!t.includes(want)) return `missing "${want}": ` + t;
+    p.button("router-box", "Stop").click(); await p.settle();
+    if (posts[1] !== "/api/chat/stop") return "Stop did not stop: " + JSON.stringify(posts);
+    if (p.text("router-box").includes("Serving 2 models")) return "still shown as serving after Stop";
+    // Review finding: a router that failed to start went back to the button without saying why.
+    p.button("router-box", "Serve all my models").click(); await p.settle();
+    chat = { ...chat, state: "failed", error: "llama-server stopped before it was ready (exit code 1).", log: ["error: unknown argument: --models-preset"] };
+    await p.advance(1100);
+    const f = p.text("router-box");
+    if (!f.includes("stopped before it was ready") || !f.includes("unknown argument")) return "the failure is not shown: " + f;
+  },
+
+  async "a refused delete says why and keeps the model"() {
+    const list = { dir: "/p/models", total: 1, free: 1, models: [{ id: "a.gguf", kind: "model", size: 1e9, repo: "", files: ["a.gguf"], header_error: "" }] };
+    const p = makePage({ hash: "#models", routes: idle((path) => (path === "/api/models" ? list
+      : path === "/api/models/delete" ? { error: "The chat is using this model. Stop the chat first, then delete it." } : {})) });
+    await p.start();
+    p.button("models-list", "Delete").click(); await p.settle();
+    p.button("models-list", "Yes, delete").click(); await p.settle();
+    const t = p.text("models-list");
+    if (!t.includes("Stop the chat first") || !t.includes("a.gguf")) return "the reason is not shown: " + t;
+  },
+
+  // --- Plain-language explanations next to the choice they affect ----------------------------------------------
+  async "the recommended model explains its quantization, size and speed in plain words"() {
+    const rec = (quant, tps) => ({ models: [{ id: "a|m.gguf", title: "Qwen3-4B", repo: "a/Qwen3-4B-GGUF", quant, verdict: "smooth",
+      where: "gpu", size: 2.4e9, size_h: "2.4 GB", tps, have: false, note: "", commands: [] }] });
+    const texts = {};
+    for (const [quant, tps] of [["Q4_K_M", 40], ["Q8_0", 20], ["IQ2_XS", 60], ["", 3]]) {
+      const p = makePage({ routes: idle((path) => (path === "/api/recommend" ? rec(quant, tps) : {})) });
+      await p.start();
+      p.button("tiles", "General chat").click(); await p.settle();
+      if (p.visible() !== "v-pick") return "the pick view did not open: " + p.visible();
+      texts[quant] = p.text("top");
+      if (!texts[quant].includes("What do these mean?")) return quant + ": no explanation on the card: " + texts[quant];
+    }
+    if (!/4-bit/.test(texts.Q4_K_M) || !/balance/.test(texts.Q4_K_M)) return "Q4_K_M is not explained: " + texts.Q4_K_M;
+    if (!/8-bit/.test(texts.Q8_0) || !/twice/.test(texts.Q8_0)) return "Q8_0 is not explained: " + texts.Q8_0;
+    if (!/noticeably worse/.test(texts.IQ2_XS)) return "a 2-bit model does not warn about quality: " + texts.IQ2_XS;
+    if (!/about 30 words a second/.test(texts.Q4_K_M)) return "40 tokens/s is not put in words: " + texts.Q4_K_M;
+    if (!/slower than you read/.test(texts[""])) return "3 tokens/s is not compared with reading: " + texts[""];
+    if (!/faster than most people read/.test(texts.Q8_0)) return "20 tokens/s is not compared with reading: " + texts.Q8_0;
+    if (/\b(null|undefined)\b/.test(texts[""])) return "a model without a quantization shows stray text: " + texts[""];
+    const exact = makePage({ routes: idle((path) => (path === "/api/recommend"
+      ? { models: [{ ...rec("Q4_K_M", 40).models[0], need_mb: 3584, memory_from: "header" }] } : {})) });
+    await exact.start();
+    exact.button("tiles", "General chat").click(); await exact.settle();
+    if (!/about 3\.5 GB of memory to run \(worked out from the model file itself\)/.test(exact.text("top"))) return "exact memory not explained: " + exact.text("top");
+  },
+
+  // --- A slow speed test explains itself ----------------------------------------------------------------------
+  async "a slow speed test shows why it was slow and what to do"() {
+    const done = { state: "done", id: "o/M-GGUF|m.gguf", title: "M", bench: "ok", tps: 3,
+      speed_notes: [{ code: "gpu_unused", text: "cannot use your graphics card (RTX)", fix: "Get llama.cpp offers a build" }] };
+    const state = { ...STATE, llama: { offer: { how: "download", label: "CUDA build" } } };
+    const p = makePage({ routes: finishing(state, done) });
+    await p.start();
+    await p.advance(1000);
+    const t = p.text("speed-notes");
+    if (!t.includes("Why it is slow") || !t.includes("cannot use your graphics card") || !t.includes("Get llama.cpp offers a build"))
+      return "the reasons are not shown: " + t;
+    if (!p.button("speed-notes", "Get a build that uses it")) return "no way to act on a graphics card that is not used";
+    const fast = makePage({ routes: finishing(state, { ...done, tps: 40, speed_notes: [] }) });
+    await fast.start();
+    await fast.advance(1000);
+    if (fast.text("speed-notes").includes("Why it is slow")) return "a fast run still explains slowness";
+    if (!fast.el("speed-notes").hidden) return "an empty reasons box is shown";
+  },
+
+  // --- Settings presets on the done screen ----------------------------------------------------------------------
+  async "the done screen offers presets with their memory, and Start sends the one picked"() {
+    const posts = [];
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW, posts }) });
+    await p.start();
+    await p.advance(1000);
+    const t = p.text("done-next");
+    for (const want of ["Short chats", "Long documents", "Needs about 5.6 GB", "fits your graphics card", "too big for this computer"])
+      if (!t.includes(want)) return `missing "${want}": ` + t;
+    if (!t.includes("CMD-AUTO")) return "the default preset's command is not shown: " + t;
+    const long = p.button("done-next", "Long documents");
+    if (!long) return "no button for Long documents";
+    long.click(); await p.settle();
+    if (!p.text("done-next").includes("CMD-LONG")) return "picking a preset did not show its command: " + p.text("done-next");
+    if (long.getAttribute("aria-pressed") !== "true" && !findEl(p.el("done-next"), (e) => e.attrs && e.attrs["aria-pressed"] === "true" && e.text().includes("Long documents")))
+      return "the picked preset is not marked as pressed";
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    const start = posts.find((x) => x.path === "/api/chat/start");
+    if (!start || start.body.preset !== "long") return "Start did not send the picked preset: " + JSON.stringify(posts);
+  },
+
+  async "a preset this llama-server cannot run shows why and cannot be picked"() {
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW }) });
+    await p.start();
+    await p.advance(1000);
+    const t = p.text("done-next");
+    if (!t.includes("needs a graphics card")) return "the reason is not shown: " + t;
+    if (p.button("done-next", "Fastest replies")) return "an unavailable preset can still be clicked";
+  },
+
+  async "typing a context length asks the server for that command"() {
+    const calls = [];
+    const routes = chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW });
+    const p = makePage({ routes: (path, opts, full) => { if (path === "/api/chat") calls.push(full); return routes(path, opts, full); } });
+    await p.start();
+    await p.advance(1000);
+    const input = findEl(p.el("done-next"), (e) => e.attrs && e.attrs.type === "number");
+    if (!input) return "no context length field";
+    input.value = "12000";
+    const apply = p.button("done-next", "Use this length");
+    if (!apply) return "no button to apply the length";
+    apply.click(); await p.settle();
+    if (!calls.some((c) => /[?&]ctx=12000\b/.test(c))) return "the server was not asked: " + calls.join(" ");
   },
 
   // --- Start chatting ------------------------------------------------------------------------------------------

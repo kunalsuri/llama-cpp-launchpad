@@ -44,6 +44,7 @@ class UiBase(tms.Base):
             self.addCleanup(p.stop)
         self.app = ui_server.App(ms)
         self.app.probe = FakeProbe("Linux")     # rule 2: commands and hints must not depend on the host
+        self.app.router_preset = self.tmp / ".launchpad-models.ini"     # never the real project folder
         self.app.llama_version = lambda argv: (True, "version: 4242 (abc1234)")
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), ui_server.make_handler(self.app))
         self.port = self.server.server_address[1]
@@ -69,7 +70,7 @@ class UiBase(tms.Base):
         return path
 
     def fake_speed(self, path, size, hw):
-        ms.state_set("measured_tps", 42)
+        ms.state_update({"measured_tps": 42, "speed_notes": "[]"})
         return 0
 
     def call(self, method, path, body=None, headers=None, host=None):
@@ -377,6 +378,16 @@ class TestApi(UiBase):
         self.assertNotIn("random/Hyped-7B-GGUF", repos)
         self.assertIn("random/Hyped-7B-GGUF", [x["repo"] for x in self.get_json("/api/more?use=chat&all=1")["models"]])
 
+    def test_more_reads_memory_from_each_shown_models_header(self):
+        self.header_file = HERE / "fixtures" / "llama-shape.gguf"
+        d = self.get_json("/api/more?use=chat")
+        mid = next(x for x in d["models"] if x["repo"] == "bartowski/Mid-8B-GGUF")
+        self.assertEqual(mid["memory_from"], "header")
+        self.assertEqual(mid["need_mb"], mid["size"] // 1048576 + 512 + 600)
+        self.header_file = None
+        d = self.get_json("/api/more?use=chat")
+        self.assertEqual({x["memory_from"] for x in d["models"]}, {"estimate"})
+
     def test_more_when_offline(self):
         self.fake_http_get = unittest.mock.Mock(side_effect=urllib.error.URLError("offline"))
         unittest.mock.patch.object(ms, "http_get", self.fake_http_get).start()
@@ -436,6 +447,20 @@ class TestInstall(UiBase):
         self.assertTrue(any(ms.models_dir().glob("*.gguf")))
         self.assertEqual(ms.state_get("installed_repo"), top["repo"])
         self.assertTrue(self.get_json("/api/recommend?use=chat")["models"][0]["have"])
+        self.assertEqual(j["speed_notes"], [], "a fast run has nothing to explain")
+
+    def test_a_slow_speed_test_comes_back_with_its_reasons(self):
+        note = {"code": "gpu_unused", "text": "cannot use your graphics card", "fix": "Get llama.cpp"}
+
+        def slow(path, size, hw):
+            ms.state_update({"measured_tps": 3, "speed_notes": json.dumps([note])})
+            return 0
+        unittest.mock.patch.object(ms, "check_model_speed", slow).start()
+        self.addCleanup(unittest.mock.patch.stopall)
+        top = self.get_json("/api/recommend?use=chat")["models"][0]
+        self.post("/api/install", {"id": top["id"]})
+        j = self.wait_for("done", "error")
+        self.assertEqual(j["speed_notes"], [note])
 
     def test_same_filename_from_another_repo_is_downloaded_not_reused(self):
         row = {"name": "Same-Q4", "size": 5, "tps": 20, "mode": "gpu", "files": [("model.gguf", 5)]}
@@ -752,6 +777,197 @@ class TestChatApi(UiBase):
         self.app.close()
         self.assertEqual(self.app.chat.status()["state"], "stopped")
 
+    # --- settings presets and the memory each one needs ---
+    def preview(self, query=""):
+        return self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]) + query)["preview"]
+
+    def model_path(self):
+        offer = self.app.offered[self.top["id"]]
+        return ms.local_path(offer["repo"], *offer["files"][0])[0]
+
+    def test_preview_offers_each_preset_with_its_exact_command(self):
+        self.download()
+        p = self.preview()
+        self.assertEqual([x["id"] for x in p["presets"]], ["short", "long", "fast", "auto"])
+        self.assertEqual(p["preset"], "auto", "this llama-server has --fit: let it size the context")
+        by = {x["id"]: x for x in p["presets"]}
+        self.assertTrue(by["long"]["cmd"].endswith(f"--port {self.chat_port} -c 32768 -ctk q8_0 -c 4096"),
+                        by["long"]["cmd"])
+        self.assertTrue(all(x["label"] and x["text"] for x in p["presets"]))
+        self.assertTrue(by["fast"]["available"], "the test machine has a usable NVIDIA card")
+        p = self.preview("&preset=long")
+        self.assertEqual(p["preset"], "long")
+        self.assertIn("-c 32768 -ctk q8_0", p["cmd"])
+
+    def test_each_preset_says_how_much_memory_it_needs_and_where_it_fits(self):
+        self.download()
+        path = self.model_path()
+        path.write_bytes((HERE / "fixtures" / "llama-shape.gguf").read_bytes())    # an 8B-shaped header
+        by = {x["id"]: x for x in self.preview()["presets"]}
+        self.assertEqual(by["short"]["memory"]["kv_mb"], 512)
+        self.assertEqual(by["short"]["memory"]["need_mb"], path.stat().st_size // 1048576 + 512 + 600)
+        self.assertEqual(by["short"]["memory"]["where"], "gpu")
+        import gguf
+        s = gguf.shape(gguf.read_file(path))
+        self.assertEqual(by["long"]["memory"]["kv_mb"], gguf.kv_cache_bytes(s, 32768, "q8_0", "f16") // 1048576)
+        self.assertEqual(by["auto"]["memory"]["ctx"], 131072, "llama.cpp may use the whole trained context")
+        self.assertEqual(by["auto"]["memory"]["where"], "no", "16 GB of cache at 128k tokens does not fit 16 GB")
+        self.assertIn("--fit", by["auto"]["memory"]["note"])
+
+    def test_a_model_whose_header_cannot_be_read_says_so(self):
+        self.download()                                       # the fake download is one byte, not a GGUF file
+        by = {x["id"]: x for x in self.preview()["presets"]}
+        self.assertIsNone(by["short"]["memory"])
+        self.assertIn("not a GGUF file", by["short"]["memory_error"])
+
+    def test_start_with_a_preset_and_a_typed_context(self):
+        self.download()
+        status, body = self.post("/api/chat/start", {"id": self.top["id"], "preset": "short", "ctx": 6000})
+        self.assertEqual(status, 202, body)
+        self.assertIn("-c 6000", body["cmd"])
+        s = self.wait_chat("running")
+        self.assertTrue(any('"-c", "6000"' in line for line in s["log"]), s["log"])
+
+    def test_bad_settings_are_refused_before_anything_starts(self):
+        self.download()
+        for body, code in (({"preset": "rm -rf"}, 400), ({"preset": 3}, 400), ({"ctx": "8192"}, 400),
+                           ({"ctx": 10 ** 9}, 400), ({"preset": "short", "args": ["--evil"]}, 202)):
+            with self.subTest(body=body):
+                status, out = self.post("/api/chat/start", dict(body, id=self.top["id"]))
+                self.assertEqual(status, code, out)
+                if code == 202:
+                    self.assertNotIn("--evil", out["cmd"], "the page can only pick presets, never send flags")
+                    self.post("/api/chat/stop", {})
+                    self.wait_chat("stopped")
+        self.assertNotEqual(self.app.chat.status()["state"], "running")
+
+    def test_a_preset_this_llama_server_cannot_run_is_refused_with_the_reason(self):
+        self.download()
+        self.app.chat.help = lambda argv: "-m,    --model FNAME      model path\n"
+        self.app.chat._flags.clear()
+        by = {x["id"]: x for x in self.preview()["presets"]}
+        self.assertFalse(by["long"]["available"])
+        self.assertIn("--ctx-size", by["long"]["why"])
+        self.assertTrue(by["auto"]["available"])
+        status, body = self.post("/api/chat/start", {"id": self.top["id"], "preset": "long"})
+        self.assertEqual(status, 409)
+        self.assertIn("--ctx-size", body["error"])
+
+    # --- remembered settings, and what to type into other programs ---
+    def test_the_settings_a_chat_was_started_with_are_remembered_for_that_model(self):
+        self.download()
+        status, body = self.post("/api/chat/start", {"id": self.top["id"], "preset": "long", "ctx": 6000})
+        self.assertEqual(status, 202, body)
+        self.wait_chat("running")
+        self.post("/api/chat/stop", {})
+        p = self.preview()
+        self.assertEqual((p["preset"], p["ctx"]), ("long", 6000))
+        self.assertIn("-c 6000 -ctk q8_0", p["cmd"])
+        self.assertEqual(ms.load_profile(self.model_path().name), {"preset": "long", "ctx": 6000})
+        self.assertEqual(self.preview("&preset=short")["preset"], "short", "a choice on the page still wins")
+
+    def test_other_programs_get_the_address_and_model_of_the_running_chat(self):
+        self.download()
+        self.assertIn("error", self.get_json("/api/clients"), "nothing to connect to before a chat runs")
+        self.post("/api/chat/start", {"id": self.top["id"]})
+        self.wait_chat("running")
+        rows = {r["id"]: r for r in self.get_json("/api/clients")["clients"]}
+        self.assertIn(f"http://127.0.0.1:{self.chat_port}/v1", rows["openai"]["text"])
+        self.assertIn(self.model_path().stem, rows["openai"]["text"])
+        self.assertEqual(rows["aider"]["kind"], "missing", "the fake computer has no aider")
+
+    # --- image support: the model's vision projector (mmproj) ---
+    def hub_with_projector(self, projector=("mmproj-model-f16.gguf", 7)):
+        sibs = [{"rfilename": f, "size": s} for f, s in self.app.offered[self.top["id"]]["files"]]
+        if projector:
+            sibs.append({"rfilename": projector[0], "size": projector[1]})
+        seen = []
+
+        def http_json(url):
+            seen.append(url)
+            return {"siblings": sibs} if "/api/models/" in url else None
+        p = unittest.mock.patch.object(ms, "http_json", http_json)
+        p.start()
+        self.addCleanup(p.stop)
+        return seen
+
+    def vision(self):
+        return self.get_json("/api/vision?id=" + urllib.parse.quote(self.top["id"]))
+
+    def get_vision(self):
+        status, body = self.post("/api/vision/get", {"id": self.top["id"]})
+        self.assertEqual(status, 202, body)
+        for _ in range(100):
+            v = self.vision()
+            if v["job"].get("state") in ("done", "error"):
+                return v
+            time.sleep(0.05)
+        self.fail(self.vision())
+
+    def test_image_support_is_offered_when_the_repo_has_a_projector(self):
+        self.download()
+        seen = self.hub_with_projector()
+        v = self.vision()
+        self.assertEqual((v["have"], v["flag"]), (False, True))
+        self.assertEqual(v["available"], {"file": "mmproj-model-f16.gguf", "size": 7})
+        self.vision()
+        self.assertEqual(len(seen), 1, "the Hub is asked once per repo")
+
+    def test_getting_image_support_downloads_it_and_the_chat_loads_it(self):
+        self.download()
+        self.hub_with_projector()
+        v = self.get_vision()
+        self.assertEqual((v["job"]["state"], v["have"]), ("done", True), v)
+        proj = ms.models_dir() / v["file"]
+        self.assertTrue(proj.is_file())
+        self.assertEqual(ms.source_file(proj).read_text(encoding="utf-8"), self.app.offered[self.top["id"]]["repo"])
+        p = self.preview()
+        shown = self.app.chat.shown(["--mmproj", str(proj)])      # quoted for the pinned OS, as the page shows it
+        self.assertIn(shown, p["cmd"])
+        self.assertTrue(all(shown in x["cmd"] for x in p["presets"] if x["available"]))
+
+    def test_a_projector_this_llama_server_cannot_load_is_not_passed(self):
+        self.download()
+        self.hub_with_projector()
+        self.get_vision()
+        self.app.chat.help = lambda argv: "-m,    --model FNAME      model path\n"
+        self.app.chat._flags.clear()
+        v = self.vision()
+        self.assertEqual((v["have"], v["flag"]), (True, False))
+        self.assertIn("--mmproj", v["why"])
+        self.assertNotIn("--mmproj", self.preview()["cmd"])
+
+    def test_a_model_without_a_projector_says_it_does_not_read_images(self):
+        self.download()
+        self.hub_with_projector(None)
+        v = self.vision()
+        self.assertIsNone(v["available"])
+        self.assertIn("does not read images", v["why"])
+        self.assertEqual(self.post("/api/vision/get", {"id": self.top["id"]})[0], 409)
+
+    def test_a_model_and_its_image_support_never_download_at_once(self):
+        """Review finding: both share model_setup.last_download_error, so each could report the other's failure."""
+        self.download()
+        self.hub_with_projector()
+        self.app.job = {"state": "downloading"}
+        status, body = self.post("/api/vision/get", {"id": self.top["id"]})
+        self.app.job = {"state": "idle"}
+        self.assertEqual(status, 409)
+        self.assertIn("download", body["error"])
+        self.app.vision_job = {"state": "downloading"}
+        self.addCleanup(setattr, self.app, "vision_job", {"state": "idle"})
+        self.assertEqual(self.post("/api/install", {"id": self.top["id"]})[0], 409)
+
+    def test_a_context_in_odd_digits_is_ignored_not_a_crash(self):
+        self.download()
+        self.assertIn("preview", self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]) + "&ctx=%C2%B2"))
+
+    def test_getting_image_support_needs_the_token_and_an_offered_model(self):
+        self.download()
+        self.hub_with_projector()
+        self.assertEqual(self.post("/api/vision/get", {"id": self.top["id"]}, token=False)[0], 403)
+        self.assertEqual(self.post("/api/vision/get", {"id": "evil/x|y.gguf"})[0], 404)
+
     def test_who_uses_the_port_is_asked_of_the_pinned_machine_not_the_host(self):
         """Rule 2: the lookup programs come from the (fake) probe, and the OS rules from its system."""
         self.download()
@@ -762,6 +978,236 @@ class TestChatApi(UiBase):
             busy = self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]))["preview"]["busy"]
         self.assertTrue(any(line.startswith("netstat:") for line in busy["looked"]), busy["looked"])
         self.assertEqual(self.app.probe.ran[0][0], r"C:\Windows\System32\netstat.exe")
+
+
+class TestModelsApi(UiBase):
+    """My models: what is in the models folder (/api/models) and deleting one (/api/models/delete)."""
+
+    def setUp(self):
+        super().setUp()
+        self.dir = ms.models_dir()
+        self.dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy(HERE / "fixtures" / "llama-shape.gguf", self.dir / "shape.gguf")
+        (self.dir / "shape.gguf.source").write_text("o/Shape-GGUF", encoding="utf-8")
+        (self.dir / "other.gguf").write_bytes(b"x" * 10)
+
+    def test_lists_each_model_with_its_size_origin_and_shape(self):
+        d = self.get_json("/api/models")
+        by = {m["id"]: m for m in d["models"]}
+        self.assertEqual(sorted(by), ["other.gguf", "shape.gguf"])
+        self.assertEqual(by["shape.gguf"]["repo"], "o/Shape-GGUF")
+        self.assertEqual((by["shape.gguf"]["arch"], by["shape.gguf"]["layers"], by["shape.gguf"]["train_ctx"]), ("llama", 32, 131072))
+        self.assertIn("not a GGUF file", by["other.gguf"]["header_error"])
+        self.assertEqual(d["dir"], str(self.dir))
+        self.assertGreater(d["free"], 0)
+        self.assertEqual(d["total"], sum(m["size"] for m in d["models"]))
+
+    def test_delete_removes_the_model_and_needs_the_token(self):
+        self.assertEqual(self.post("/api/models/delete", {"id": "shape.gguf"}, token=False)[0], 403)
+        self.assertTrue((self.dir / "shape.gguf").exists())
+        status, body = self.post("/api/models/delete", {"id": "shape.gguf"})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(sorted(body["removed"]), ["shape.gguf", "shape.gguf.source"])
+        self.assertFalse((self.dir / "shape.gguf").exists())
+        self.assertEqual([m["id"] for m in body["models"]], ["other.gguf"], "the answer is the new list")
+
+    def test_delete_refuses_paths_and_unknown_names(self):
+        outside = self.tmp / "keep.gguf"
+        outside.write_bytes(b"x")
+        for bad in ("../keep.gguf", str(outside), "missing.gguf", 5, None):
+            with self.subTest(id=bad):
+                self.assertEqual(self.post("/api/models/delete", {"id": bad})[0], 404)
+        self.assertTrue(outside.exists())
+
+    def test_the_model_a_chat_is_running_cannot_be_deleted(self):
+        self.app.chat.job = {"state": "running", "model_path": str(self.dir / "shape.gguf")}
+        self.addCleanup(setattr, self.app.chat, "job", {"state": "idle"})
+        status, body = self.post("/api/models/delete", {"id": "shape.gguf"})
+        self.assertEqual(status, 409)
+        self.assertIn("Stop the chat", body["error"])
+        self.assertTrue((self.dir / "shape.gguf").exists())
+        self.assertEqual(self.post("/api/models/delete", {"id": "other.gguf"})[0], 200, "other models can go")
+
+    def test_nothing_is_deleted_while_all_my_models_are_served(self):
+        """Review finding: in router mode the chat has no single model_path, so any served model could be deleted."""
+        self.app.chat.job = {"state": "running", "model_path": "", "router": ["shape", "other"]}
+        self.addCleanup(setattr, self.app.chat, "job", {"state": "idle"})
+        status, body = self.post("/api/models/delete", {"id": "other.gguf"})
+        self.assertEqual(status, 409)
+        self.assertIn("all your models", body["error"])
+
+    def test_the_image_support_file_of_the_running_chat_cannot_be_deleted(self):
+        (self.dir / "mmproj-s.gguf").write_bytes(b"p")
+        (self.dir / "mmproj-s.gguf.source").write_text("o/Shape-GGUF", encoding="utf-8")
+        self.app.chat.job = {"state": "running", "model_path": str(self.dir / "shape.gguf")}
+        self.addCleanup(setattr, self.app.chat, "job", {"state": "idle"})
+        self.assertEqual(self.post("/api/models/delete", {"id": "mmproj-s.gguf"})[0], 409)
+
+    def test_nothing_is_deleted_while_image_support_or_a_terminal_download_runs(self):
+        self.app.vision_job = {"state": "downloading"}
+        self.assertEqual(self.post("/api/models/delete", {"id": "other.gguf"})[0], 409)
+        self.app.vision_job = {"state": "idle"}
+        ms.state_update({"dl_active": "1"})
+        self.assertEqual(self.post("/api/models/delete", {"id": "other.gguf"})[0], 409)
+        ms.state_update({"dl_active": "0"})
+        self.assertEqual(self.post("/api/models/delete", {"id": "other.gguf"})[0], 200)
+
+    def test_a_strange_header_does_not_break_the_list(self):
+        """Review finding: a header with block_count stored as text raised out of /api/models."""
+        import struct
+
+        def s(t):
+            b = t.encode()
+            return struct.pack("<Q", len(b)) + b
+        kvs = [(s("general.architecture"), struct.pack("<I", 8) + s("llama")),
+               (s("llama.block_count"), struct.pack("<I", 8) + s("x")),
+               (s("llama.embedding_length"), struct.pack("<I", 4) + struct.pack("<I", 64)),
+               (s("llama.attention.head_count"), struct.pack("<I", 4) + struct.pack("<I", 4))]
+        (self.dir / "odd.gguf").write_bytes(b"GGUF" + struct.pack("<IQQ", 3, 0, len(kvs)) + b"".join(k + v for k, v in kvs))
+        d = self.get_json("/api/models")
+        self.assertIn("odd.gguf", [m["id"] for m in d["models"]])
+
+    def test_nothing_is_deleted_while_a_download_runs(self):
+        self.app.job = {"state": "downloading", "title": "X"}
+        self.addCleanup(setattr, self.app, "job", {"state": "idle"})
+        status, body = self.post("/api/models/delete", {"id": "other.gguf"})
+        self.assertEqual(status, 409)
+        self.assertIn("download", body["error"])
+
+
+class TestCompareApi(UiBase):
+    """Compare models: two or three models from My models, the same prompts, one model in memory at a time."""
+
+    def setUp(self):
+        super().setUp()
+        import test_chat_server as tcs
+        self.tcs = tcs
+        p = unittest.mock.patch.dict("os.environ", {"PORT": str(tcs.free_port()), "EXTRA_ARGS": ""})
+        p.start()
+        self.addCleanup(p.stop)
+        self.app.chat.find_server = lambda: list(tcs.SERVER)
+        self.addCleanup(self.app.chat.stop)
+        d = ms.models_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        for n in ("a.gguf", "b.gguf", "c.gguf"):
+            (d / n).write_bytes(b"x")
+        (d / "mmproj-x.gguf").write_bytes(b"x")
+        self.addCleanup(lambda: self.app.compare and self.app.compare.stop())
+
+    def wait(self, *states):
+        for _ in range(600):
+            s = self.get_json("/api/compare")
+            if s["state"] in states:
+                return s
+            time.sleep(0.05)
+        self.fail(self.get_json("/api/compare"))
+
+    def test_compares_the_chosen_models_and_reports_each_answer(self):
+        self.assertEqual(self.get_json("/api/compare")["state"], "idle")
+        status, body = self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})
+        self.assertEqual(status, 202, body)
+        s = self.wait("done")
+        self.assertEqual([m["file"] for m in s["models"]], ["a.gguf", "b.gguf"])
+        self.assertEqual(len(s["models"][0]["results"]), len(s["prompts"]))
+        self.assertTrue(s["models"][1]["results"][0]["text"].startswith("[b.gguf] "))
+        self.assertIn("-c 4096", s["models"][0]["cmd"], "every model gets the same short context")
+
+    def test_only_models_from_the_folder_two_or_three_of_them(self):
+        for ids in (["a.gguf"], ["a.gguf", "a.gguf"], ["a.gguf", "../x.gguf"], ["a.gguf", "mmproj-x.gguf"],
+                    ["a.gguf", "b.gguf", "c.gguf", "a.gguf"], "a.gguf", None):
+            with self.subTest(ids=ids):
+                self.assertEqual(self.post("/api/compare/start", {"ids": ids})[0], 400)
+        self.assertEqual(self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]}, token=False)[0], 403)
+
+    def test_a_comparison_and_a_chat_never_run_at_once(self):
+        self.app.chat.job = {"state": "running"}
+        status, body = self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})
+        self.app.chat.job = {"state": "idle"}
+        self.assertEqual(status, 409)
+        self.assertIn("Stop the chat", body["error"])
+        with unittest.mock.patch.dict("os.environ", {"FAKE_LLAMA_REPLY_S": "3"}):
+            self.assertEqual(self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})[0], 202)
+            status, body = self.app.chat_start({"id": "whatever"})
+        self.assertEqual(status, 409)
+        self.assertIn("comparison", body["error"])
+
+    def test_no_model_is_deleted_during_a_comparison(self):
+        with unittest.mock.patch.dict("os.environ", {"FAKE_LLAMA_REPLY_S": "3"}):
+            self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})
+            status, body = self.post("/api/models/delete", {"id": "c.gguf"})
+        self.assertEqual(status, 409)
+        self.assertIn("comparison", body["error"])
+
+    def test_llama_cpp_is_not_replaced_during_a_comparison(self):
+        """Review finding: install refused during a chat, but not during a comparison running the same binary."""
+        with unittest.mock.patch.dict("os.environ", {"FAKE_LLAMA_REPLY_S": "3"}):
+            self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})
+            status, body = self.app.llama_install({})
+        self.assertEqual(status, 409)
+        self.assertIn("comparison", body["error"])
+
+    def test_stop(self):
+        with unittest.mock.patch.dict("os.environ", {"FAKE_LLAMA_REPLY_S": "5"}):
+            self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})
+            status, body = self.post("/api/compare/stop", {})
+        self.assertEqual((status, body["state"]), (200, "stopped"))
+
+
+class TestRouterApi(UiBase):
+    """All my models at one address: llama-server's router mode over the models folder."""
+
+    def setUp(self):
+        super().setUp()
+        import test_chat_server as tcs
+        p = unittest.mock.patch.dict("os.environ", {"PORT": str(tcs.free_port()), "EXTRA_ARGS": ""})
+        p.start()
+        self.addCleanup(p.stop)
+        self.app.chat.find_server = lambda: list(tcs.SERVER)
+        self.addCleanup(self.app.chat.stop)
+        self.dir = ms.models_dir()
+        self.dir.mkdir(parents=True, exist_ok=True)
+        for n, src in (("alpha.gguf", "o/A"), ("beta.gguf", "o/B"), ("mmproj-b.gguf", "o/B")):
+            (self.dir / n).write_bytes(b"x")
+            (self.dir / (n + ".source")).write_text(src, encoding="utf-8")
+
+    def test_offers_every_model_behind_one_address(self):
+        r = self.get_json("/api/router")
+        self.assertTrue(r["available"], r)
+        self.assertEqual(r["models"], ["alpha", "beta"])
+        self.assertIn("--models-preset", r["cmd"])
+        self.assertIn("--models-max 1", r["cmd"])
+        self.assertNotIn(" -m ", r["cmd"])
+
+    def test_start_writes_the_preset_and_runs_the_router(self):
+        status, body = self.post("/api/router/start", {})
+        self.assertEqual(status, 202, body)
+        for _ in range(200):
+            s = self.get_json("/api/chat")["chat"]
+            if s["state"] == "running":
+                break
+            time.sleep(0.05)
+        self.assertEqual(s["state"], "running", s)
+        self.assertEqual(s["router"], ["alpha", "beta"])
+        ini = self.app.router_preset.read_text(encoding="utf-8")
+        self.assertIn(f"[beta]\nmodel = {self.dir / 'beta.gguf'}\nmmproj = {self.dir / 'mmproj-b.gguf'}\n", ini)
+        self.assertIn("[*]\nc = 4096\n", ini, "each model gets a short context unless the user sets one")
+        self.assertEqual(self.post("/api/router/start", {})[0], 409, "one server at a time")
+
+    def test_an_old_llama_server_without_router_mode_is_told_so(self):
+        self.app.chat.help = lambda argv: "-m,    --model FNAME      model path\n"
+        self.app.chat._flags.clear()
+        r = self.get_json("/api/router")
+        self.assertFalse(r["available"])
+        self.assertIn("--models-preset", r["why"])
+        self.assertNotIn("cmd", r)
+        self.assertEqual(self.post("/api/router/start", {})[0], 409)
+
+    def test_needs_two_models_and_the_token(self):
+        self.assertEqual(self.post("/api/router/start", {}, token=False)[0], 403)
+        (self.dir / "beta.gguf").unlink()
+        r = self.get_json("/api/router")
+        self.assertFalse(r["available"])
+        self.assertIn("two", r["why"])
 
 
 class TestLlamaApi(UiBase):
@@ -886,7 +1332,7 @@ class TestLlamaApi(UiBase):
     def test_a_chat_start_and_an_install_at_the_same_moment_do_not_both_run(self):
         gate, entered = threading.Event(), threading.Event()
 
-        def slow_start(model, title, port=None):
+        def slow_start(model, title, port=None, settings=None):
             entered.set()
             gate.wait(5)
             self.app.chat.job = {"state": "starting"}

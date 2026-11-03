@@ -69,6 +69,25 @@ class TestFiles(unittest.TestCase):
         self.assertEqual(g[1]["files"][0][0], "big/M-Q8_0-00001-of-00002.gguf")   # first shard is what llama.cpp loads
 
 
+class TestProjector(unittest.TestCase):
+    """Vision models ship a projector (mmproj) next to the model: pick one llama.cpp can load, best quality first."""
+
+    def test_prefers_f16_then_bf16_then_q8(self):
+        sibs = [sib("m-Q4_K_M.gguf", 2 * GB), sib("mmproj-model-q8_0.gguf", 400 * MB), sib("mmproj-model-f16.gguf", 800 * MB),
+                sib("mmproj-BF16.gguf", 800 * MB)]
+        self.assertEqual(hd.projector_for(sibs), ("mmproj-model-f16.gguf", 800 * MB))
+        self.assertEqual(hd.projector_for(sibs[1:2] + sibs[3:]), ("mmproj-BF16.gguf", 800 * MB))
+        self.assertEqual(hd.projector_for([sib("mmproj-x-Q8_0.gguf", 1), sib("mmproj-x-F32.gguf", 2)]), ("mmproj-x-Q8_0.gguf", 1))
+
+    def test_none_when_the_repo_has_no_projector(self):
+        self.assertIsNone(hd.projector_for([sib("m-Q4_K_M.gguf", GB), sib("imatrix.dat", 1)]))
+        self.assertIsNone(hd.projector_for(None))
+
+    def test_projector_files_are_still_never_offered_as_models(self):
+        self.assertEqual([g["name"] for g in hd.group_files([sib("mmproj-model-f16.gguf", 900 * MB), sib("m-Q4_K_M.gguf", GB)])],
+                         ["m-Q4_K_M"])
+
+
 class TestFit(unittest.TestCase):
     def hw(self, ram=16384, vram=0, kind="none", usable=False):
         return ms.Hw(ram_mb=ram, cores=8, gpu_kind=kind, gpu_name="T", vram_mb=vram, gpu_usable=usable)
@@ -293,6 +312,46 @@ class TestDiscoverCommand(tms.Base):
         rc, _, _ = self.run_main(["--discover"], stdin="")
         self.assertEqual(rc, 0)
         self.assertEqual(ms.state_get("installed"), "")
+
+    # --- memory read from the model file's header (utils/gguf.py) ---
+    def test_memory_comes_from_the_model_header_when_it_can_be_read(self):
+        self.header_file = HERE / "fixtures" / "llama-shape.gguf"      # 32 layers, 8 KV heads: 128 KiB per token
+        data = self.models(["--sort", "size", "--top", "1"])
+        m = data["models"][0]
+        self.assertEqual(m["repo"], "bartowski/Mid-8B-GGUF")
+        self.assertEqual(m["memory_from"], "header")
+        self.assertEqual(m["kv_mb"], 512, "4096 tokens x 128 KiB")
+        self.assertEqual(m["need_mb"], m["size"] // MB + 512 + hd.OVERHEAD_MB)
+        url, headers = self.opened[0]
+        self.assertTrue(url.endswith("/bartowski/Mid-8B-GGUF/resolve/main/" + m["file"]), url)
+        self.assertRegex(headers.get("Range", ""), r"^bytes=0-\d+$", "only the start of the file is asked for")
+
+    def test_only_the_shown_rows_have_their_header_read(self):
+        self.header_file = HERE / "fixtures" / "llama-shape.gguf"
+        self.models(["--top", "1"])
+        self.assertEqual(len(self.opened), 1)
+
+    def test_an_unreadable_header_keeps_the_estimate_and_says_why(self):
+        data = self.models(["--sort", "size", "--top", "1"])            # offline for headers (Base)
+        m = data["models"][0]
+        self.assertEqual(m["memory_from"], "estimate")
+        self.assertIn("offline", m["memory_note"])
+        rc, out, _ = self.run_main(["--discover", "--list", "--sort", "size", "--top", "1"])
+        self.assertIn("rough estimate", out)
+
+    def test_table_says_the_memory_was_read_from_the_file(self):
+        self.header_file = HERE / "fixtures" / "llama-shape.gguf"
+        rc, out, _ = self.run_main(["--discover", "--list", "--sort", "size", "--top", "1"])
+        self.assertEqual(rc, 0)
+        self.assertIn("read from the model file", out)
+
+    def test_a_bigger_cache_than_guessed_moves_the_model_off_the_gpu(self):
+        """The header can change the verdict: at 32k tokens this shape needs 4 GB of cache, not the guess."""
+        self.header_file = HERE / "fixtures" / "llama-shape.gguf"
+        data = self.models(["--sort", "size", "--top", "1", "--ctx", "32768"])
+        m = data["models"][0]
+        self.assertEqual(m["kv_mb"], 4096)
+        self.assertNotEqual(m["mode"], "gpu", "5 GB weights + 4 GB cache do not fit an 8 GB card")
 
 
 if __name__ == "__main__":

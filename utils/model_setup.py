@@ -43,8 +43,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import gguf
 import hf_discover
-from hardware import Hw, detect_hw, find_llama_server
+from hardware import Hw, detect_hw, find_llama_server, run_cmd
 
 ROOT =Path(__file__).resolve().parent.parent
 HF_API = os.environ.get("HF_API", "https://huggingface.co/api")
@@ -228,8 +229,48 @@ def est_tps(size_bytes: int, mode: str, hw: Hw) -> int:
     eff = state_int("eff_bw")
     if eff > 0 and mode == (state_get("eff_mode") or "cpu"):
         return eff // size_mb
+    return default_tps(size_bytes, mode, hw)
+
+
+def default_tps(size_bytes: int, mode: str, hw: Hw) -> int:
+    """What this kind of computer usually manages (typical memory bandwidth / model size), ignoring any speed
+    measured here before."""
     bw10 = {"gpu": 1000 if hw.gpu_kind == "apple" else 2500, "cpu": 150, "tight": 50}.get(mode, 150)
-    return bw10 * 102 // size_mb
+    return bw10 * 102 // max(size_bytes // 1048576, 1)
+
+
+def diagnose_speed(measured: int, size: int, hw: Hw) -> list:
+    """Why a speed test was slow, from facts this computer can check -> [{code, text, fix}]. Empty when the
+    speed is smooth (15+ tokens/s) or as fast as this kind of computer usually is."""
+    if measured >= 15:
+        return []
+    notes, mode = [], fit(size, hw)
+    gb = lambda mb: f"{(mb + 512) // 1024} GB"                                    # noqa: E731
+    need_mb = (size // 1048576) * 115 // 100 + 512
+    other = getattr(hw, "other_gpu", "")
+    if (hw.gpu_kind in ("nvidia", "gpu") and not hw.gpu_usable) or (other and not getattr(hw, "other_gpu_usable", False)):
+        notes.append({"code": "gpu_unused",
+                      "text": f"The llama.cpp on this computer cannot use your graphics card ({hw.gpu_name or other}), "
+                              "so the model runs on the processor.",
+                      "fix": "Get llama.cpp on the setup page offers a build that uses it; then run the speed test again."})
+    elif hw.gpu_kind in ("nvidia", "gpu") and hw.gpu_usable and mode != "gpu":
+        notes.append({"code": "not_on_gpu",
+                      "text": f"The model needs about {gb(need_mb)} but your graphics card has {gb(hw.vram_mb)}, so it "
+                              "runs on the processor, which is much slower.",
+                      "fix": "A smaller model, or a smaller quantization of this one (Q4_K_M or below), would fit the card."})
+    if mode in ("tight", "no"):
+        notes.append({"code": "tight",
+                      "text": f"The model takes most of this computer's memory ({gb(hw.ram_mb)}), so the system may be "
+                              "moving memory to disk while it runs.",
+                      "fix": "Close other programs, or pick a smaller model."})
+    if not notes:
+        expected = default_tps(size, mode if mode in ("gpu", "cpu") else "cpu", hw)
+        if measured * 2 < expected:
+            notes.append({"code": "below_estimate",
+                          "text": f"It ran at {measured} tokens/s; computers like this one usually manage about {expected}.",
+                          "fix": "Other programs may be busy, or a power-saving mode may be slowing the computer down. "
+                                 "Close them and run the speed test again."})
+    return notes
 
 
 def verdict(tps: int) -> str:
@@ -303,6 +344,48 @@ def http_json(url: str):
         return json.loads(http_get(url, int(os.environ.get("LP_HTTP_TIMEOUT", "25"))))
     except (urllib.error.URLError, OSError, ValueError):
         return None
+
+
+HEADER_BYTES = 8 * 1048576      # a model's metadata, read before its vocabulary, fits well inside this
+
+
+def http_open(url: str, headers: dict):
+    """An open binary response (a context manager). Used to read the first megabytes of a model file."""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Range": headers.get("Range", "")})
+    return urllib.request.urlopen(req, timeout=int(os.environ.get("LP_HTTP_TIMEOUT", "25")))
+
+
+def remote_header(repo: str, file: str):
+    """The metadata at the start of a model file on Hugging Face (utils/gguf.py) -> (meta, "") or (None, why).
+    Asks for the first HEADER_BYTES only (HTTP Range), and stops reading at the vocabulary."""
+    url = f"{HF_BASE}/{repo}/resolve/main/{file}"
+    try:
+        with http_open(url, {"Range": f"bytes=0-{HEADER_BYTES - 1}"}) as resp:
+            return gguf.read_header(resp, HEADER_BYTES, stop_at_tokenizer=True), ""
+    except (urllib.error.URLError, OSError) as e:
+        return None, f"could not read the start of {file} ({e})"
+    except gguf.GGUFError as e:
+        return None, f"{file}: {e}"
+
+
+def refine_memory(row: dict, hw: Hw, ctx: int) -> dict:
+    """Replace a discovered model's guessed context cache with the one its own header gives (utils/gguf.py).
+    Where it runs and how fast follow from the new figure. When the header cannot be read, the guess stays and
+    the row says why (memory_from "estimate", memory_note)."""
+    meta, why = remote_header(row["repo"], row["files"][0][0])
+    s = gguf.shape(meta) if meta else None
+    if not s:
+        return dict(row, memory_from="estimate", memory_note=why or "the file does not list its layers")
+    ctx = min(ctx, s["train_ctx"]) if s["train_ctx"] else ctx
+    e = gguf.estimate(s, row["size"], ctx)
+    mode, share = hf_discover.place(e["need_mb"], hw)
+    out = dict(row, kv_mb=e["kv_mb"], need_mb=e["need_mb"], ctx=e["ctx"], memory_from="header",
+               memory_bound=e["bound"], memory_note=" ".join(gguf.NOTE_TEXT[n] for n in e["notes"]))
+    if (mode, round(share, 2)) != (row["mode"], row["gpu_share"]):
+        tps = hf_discover.speed(row["size"], mode, share, lambda size, m: est_tps(size, m, hw),
+                                row.get("moe_ratio", 1.0)) if mode not in ("no", "tight") else 0
+        out.update(mode=mode, gpu_share=round(share, 2), tps=tps)
+    return out
 
 
 def is_trusted(repo_id: str) -> bool:
@@ -452,6 +535,15 @@ def published_sha256(repo: str, file: str) -> str:
     return ""
 
 
+def find_projector(repo: str):
+    """A vision model's projector file in its Hugging Face repo -> ((file, size), "") or (None, why not)."""
+    data = http_json(f"{HF_API}/models/{repo}?blobs=true")
+    if not isinstance(data, dict):
+        return None, "Could not reach Hugging Face to check whether this model can read images."
+    found = hf_discover.projector_for(data.get("siblings"))
+    return (found, "") if found else (None, "This model does not read images (its repository has no mmproj file).")
+
+
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -557,16 +649,60 @@ def check_model_speed(path: Path, size: int, hw: Hw) -> int:
         say(f"{S.RED}The model did not load or the test failed.{S.R} The model may be too big for this machine.")
         return 1
     v = verdict(tps)
+    notes = diagnose_speed(tps, size, hw)
     state_update({
         "measured_tps": tps,
         "eff_bw": tps * max(size // 1048576, 1),
         "eff_mode": fit(size, hw),
+        "speed_notes": json.dumps(notes),
     })
     say(f"{S.GREEN}✔{S.R} Generation speed: {S.B}{tps} t/s{S.R}  {verdict_label(v)}")
     say({"smooth": "  Smooth for chat. You could try a bigger model with --check-updates.",
          "usable": "  Usable. Replies take a moment; a smaller model would feel snappier."}.get(
         v, "  Slow on this machine. Run model-setup again and pick a smaller model."))
+    for n in notes:
+        say(f"  {S.YELLOW}▲{S.R} {n['text']} {S.D}{n['fix']}{S.R}")
     return 0
+
+
+# --- Settings remembered per model (the setup page saves them when a chat starts) ----------------------------
+def _profiles() -> dict:
+    try:
+        data = json.loads(state_get("chat_profiles") or "{}")
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_profile(model_name: str, preset: str, ctx) -> None:
+    profiles = _profiles()
+    profiles[model_name] = {"preset": preset, "ctx": ctx if type(ctx) is int else None}
+    state_set("chat_profiles", json.dumps(profiles, sort_keys=True))
+
+
+def load_profile(model_name: str):
+    p = _profiles().get(model_name)
+    if not isinstance(p, dict) or not isinstance(p.get("preset"), str):
+        return None
+    return {"preset": p["preset"], "ctx": p["ctx"] if type(p.get("ctx")) is int else None}
+
+
+def profile_args(model_name: str) -> list:
+    """The remembered settings of a model as llama-server arguments, checked against the llama-server found now:
+    [] when there are none, or when this llama-server would not accept them (rule 3). Used by the serve scripts."""
+    import chat_server
+    p = load_profile(model_name)
+    server = find_llama_server() if p else ""
+    if not server:
+        return []
+    flags = chat_server.server_flags(run_cmd([server, "--help"]))
+    hw = detect_hw()
+    gpu = (hw.gpu_kind in ("nvidia", "gpu") and hw.gpu_usable) or hw.gpu_kind == "apple"
+    path = models_dir() / Path(model_name).name
+    info = gguf.describe(path) if path.is_file() else {}
+    train = info["shape"]["train_ctx"] if "shape" in info else 0
+    args, why = chat_server.settings_args(p["preset"], flags, p["ctx"], gpu, train)
+    return [] if why else args
 
 
 def record_installed(name: str, repo: str, size: int) -> None:
@@ -786,7 +922,7 @@ def discover_cmd(a) -> int:
             sys.stderr.flush()
 
     results, skipped = discover_check(cands, hw, a, progress)
-    rows = hf_discover.rank(results, a.sort)[: a.top]
+    rows = [refine_memory(r, hw, a.ctx) for r in hf_discover.rank(results, a.sort)[: a.top]]
     if quiet:
         print(json.dumps({"hardware": {"ram_mb": hw.ram_mb, "vram_mb": hw.vram_mb, "gpu": hw.gpu_kind,
                                        "gpu_usable": hw.gpu_usable},
@@ -799,8 +935,8 @@ def discover_cmd(a) -> int:
         return 1
     say(f"\n{len(results)} of {len(cands)} repos checked can run here. Best quantization of each:\n")
     print_discovered(rows)
-    say(f"{Style.D}Skipped: {why_not}. Memory and speed are estimates (the context cache is a rough guess); "
-        f"the speed test after download shows the real number.{Style.R}\n")
+    say(f"{Style.D}Skipped: {why_not}. Memory is read from each model file's header where it could be (else a "
+        f"rough guess); speed is an estimate: the speed test after download shows the real number.{Style.R}\n")
     return 0 if a.list else install_discovered(rows, hw)
 
 
@@ -810,7 +946,9 @@ def print_discovered(rows: list) -> None:
             f"{verdict_label(verdict(r['tps']))}  {Style.D}~{r['tps']} t/s · {mode_label(r)}{Style.R}")
         bits = [r["arch"] or "unknown arch", f"{r['params_b']}B" + (" MoE" if r["moe"] else ""),
                 f"{r['downloads']:,} downloads", f"{r['likes']} likes",
-                f"needs ~{human_size(r['need_mb'] * 1048576)} at {r['ctx']} ctx"]
+                f"needs {'at most ' if r.get('memory_bound') == 'at_most' else '~'}"
+                f"{human_size(r['need_mb'] * 1048576)} at {r['ctx']} ctx "
+                f"({'read from the model file' if r.get('memory_from') == 'header' else 'rough estimate'})"]
         if r["other_quants"]:
             bits.append(f"+{r['other_quants']} other quants fit")
         say(f"       {Style.D}{' · '.join(bits)}{Style.R}")
@@ -911,6 +1049,8 @@ def main(argv: list | None = None) -> int:
     p.add_argument("--port", type=int, default=8765, help="--ui: port to listen on (next free one is used)")
     p.add_argument("--no-browser", action="store_true", help="--ui: do not open the browser")
     p.add_argument("--weekly-prompt", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--profile-args", metavar="MODEL_FILE",
+                   help="print the settings remembered for this model as llama-server arguments, one per line")
     p.add_argument("--use", choices=["chat", "translation", "coding", "fast"])
     p.add_argument("--yes", "-y", action="store_true", help="accept the defaults")
     a = p.parse_args(argv)
@@ -918,6 +1058,10 @@ def main(argv: list | None = None) -> int:
     Ctx.assume_yes = a.yes
     if a.weekly_prompt:
         return weekly_prompt()
+    if a.profile_args is not None:
+        for arg in profile_args(a.profile_args):
+            print(arg)
+        return 0
     if a.ui:
         import ui_server
         return ui_server.serve(sys.modules[__name__], a.port, not a.no_browser)

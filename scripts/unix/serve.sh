@@ -6,7 +6,7 @@
 #   MODELS_DIR      folder with your .gguf files          (default: <project>/models)
 #   LLAMA_SERVER    path to the llama-server binary       (default: auto-detected)
 #   PORT            port to serve on                      (default: 8080)
-#   UI              default | translation: skip the interface menu and use this one
+#   UI              default | translation | tasks: skip the interface menu and use this one
 #   KILL_EXISTING   1 = stop running llama-server first   (default: 1, set 0 to disable)
 #   OPEN_BROWSER    1 = open the web UI when ready        (default: 1, set 0 to disable)
 #   EXTRA_ARGS      extra flags passed to llama-server    (e.g. EXTRA_ARGS="-t 8 -c 8192")
@@ -75,7 +75,8 @@ shard_re='^(.*)-([0-9]{5})-of-([0-9]{5})\.gguf$'
 for f in "$MODELS_DIR"/*.gguf; do
   [ -f "$f" ] || continue
   base="$(basename "$f")"
-  case "$base" in mmproj*) continue ;; esac
+  # vision projectors (mmproj), also when saved under a repo-prefixed name: loaded with a model, not models
+  case "$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')" in *mmproj*) continue ;; esac
   parts=("$f")
   if [[ $base =~ $shard_re ]]; then
     stem="${BASH_REMATCH[1]}"; n=$((10#${BASH_REMATCH[2]})); total=$((10#${BASH_REMATCH[3]}))
@@ -165,15 +166,15 @@ fi
 name="${models[$model_idx]}"
 
 # --- Step 2: interface -------------------------------------------------------
-UI_NAMES=("llama.cpp Default" "Translation")
-UI_KEYS=("default" "translation")
+UI_NAMES=("llama.cpp Default" "Translation" "Tasks")
+UI_KEYS=("default" "translation" "tasks")
 ui_idx=-1
 for i in "${!UI_KEYS[@]}"; do [ "$UI_CHOICE" = "${UI_KEYS[$i]}" ] && ui_idx=$i; done
 [ "$interactive" = 1 ] && echo "  ${GREEN}✔${R} ${D}Model${R}      ${B}$name${R}"
 if [ "$ui_idx" -lt 0 ]; then
   if [ "$interactive" = 1 ]; then
     echo
-    M_ITEMS=("${UI_NAMES[@]}"); M_NOTES=("built-in chat" "translator")
+    M_ITEMS=("${UI_NAMES[@]}"); M_NOTES=("built-in chat" "translator" "summarize, explain code, rewrite")
     menu_select "Choose an interface"
     ui_idx=$M_SEL
   else
@@ -206,13 +207,42 @@ if [ "$OPEN_BROWSER" = "1" ]; then
 fi
 
 ui_args=()
-if [ "$UI_MODE" = "translation" ]; then
-  if [ -f "$ROOT_DIR/ui/translation/index.html" ]; then
-    ui_args=(--path "$ROOT_DIR/ui/translation")
+if [ "$UI_MODE" != "default" ]; then             # translation, tasks: a page of this project, served with --path
+  if [ -f "$ROOT_DIR/ui/$UI_MODE/index.html" ]; then
+    ui_args=(--path "$ROOT_DIR/ui/$UI_MODE")
   else
-    echo "${RED}Translation UI not found at $ROOT_DIR/ui/translation, using the default.${R}"
+    echo "${RED}${UI_NAMES[$ui_idx]} UI not found at $ROOT_DIR/ui/$UI_MODE, using the default.${R}"
   fi
 fi
 
+# --- Image support: the projector downloaded from the same repo as the model (both carry a .source record) ----
+# Passed only when this llama-server lists --mmproj in its --help (an old build would refuse to start).
+mmproj_args=()
+if [ -f "$MODELS_DIR/$name.source" ]; then
+  repo="$(cat "$MODELS_DIR/$name.source")"
+  for f in "$MODELS_DIR"/*.gguf; do
+    case "$(basename "$f" | tr '[:upper:]' '[:lower:]')" in *mmproj*) ;; *) continue ;; esac
+    [ -f "$f.source" ] && [ "$(cat "$f.source")" = "$repo" ] || continue
+    if "$LLAMA_SERVER" --help 2>&1 | grep -qE -- '(^|[[:space:],])--mmproj([[:space:],]|$)'; then
+      mmproj_args=(--mmproj "$f")
+      echo "  ${D}Image support${R} $(basename "$f")"
+    else
+      echo "  ${D}Image support file found, but this llama-server has no --mmproj: not loaded${R}"
+    fi
+    break
+  done
+fi
+
+# --- Settings saved for this model on the setup page (model_setup.py --profile-args: one argument per line, already
+# checked against this llama-server's --help). They go before EXTRA_ARGS, so flags set there still win.
+profile_args=()
+if [ -n "$PY" ]; then
+  while IFS= read -r a; do
+    a="${a%$'\r'}"
+    [ -n "$a" ] && profile_args+=("$a")
+  done < <(LLAMA_SERVER="$LLAMA_SERVER" "$PY" "$ROOT_DIR/utils/model_setup.py" --profile-args "$name" 2>/dev/null)
+  [ ${#profile_args[@]} -gt 0 ] && echo "  ${D}Settings saved on the setup page:${R} ${profile_args[*]}"
+fi
+
 # shellcheck disable=SC2086
-exec "$LLAMA_SERVER" -m "$MODELS_DIR/$name" --port "$PORT" ${ui_args[@]+"${ui_args[@]}"} $EXTRA_ARGS
+exec "$LLAMA_SERVER" -m "$MODELS_DIR/$name" --port "$PORT" ${ui_args[@]+"${ui_args[@]}"} ${mmproj_args[@]+"${mmproj_args[@]}"} ${profile_args[@]+"${profile_args[@]}"} $EXTRA_ARGS

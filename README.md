@@ -111,6 +111,22 @@ its address (normally `http://127.0.0.1:8765/`) and opens your browser.
   (resumable) and runs a speed test. Every download (page, `model-setup`, `radar --download`) is checked against the
   SHA-256 Hugging Face publishes for the file; a file that does not match is not kept. When Hugging Face gives no
   checksum, only the size is checked, and it says so.
+- **How will you use it?** Before starting, pick a preset: *Short chats* (`-c 4096`), *Long documents* (`-c 32768`,
+  8-bit key cache), *Fastest replies* (`-c 2048 -ngl 99`, only with a usable graphics card) or *Let llama.cpp decide*
+  (no flags; the default when your llama-server has `--fit`). Each shows its exact command and the memory it needs
+  (the model's weights + its context cache, worked out from the model file's own header, + overhead), and whether
+  that fits your graphics card or memory. A preset is offered only when your llama-server lists its flags in `--help`.
+  Advanced users can type a context length. The settings you start with are remembered for that model, and the serve
+  scripts use them too (before `EXTRA_ARGS`, so your own flags still win).
+- **Why is it slow?** After a speed test under 15 tokens/s, the done screen names the cause it can check on this
+  computer: a graphics card your llama.cpp build cannot use, a model too big for the card, a model that takes most of
+  your memory, or a run far below what this kind of computer usually manages.
+- **What do these mean?** The recommended model's card explains its quantization (e.g. what 4-bit costs and saves),
+  the memory it needs, and its speed in words per second against reading speed.
+- **Image support:** for a vision model whose Hugging Face repository has a projector file (`mmproj`), the done
+  screen offers *Add image support*; the chat then starts with `--mmproj` (also from the serve scripts).
+- **Use it from other programs:** while a chat runs, the address, key and model name for any OpenAI-API program, Open
+  WebUI's connection settings, a Continue `config.yaml`, and the aider command (only when aider is installed).
 - **Start chatting:** the done screen starts `llama-server` with that model and shows the exact command first
   (`llama-server -m MODEL --port PORT`, plus `EXTRA_ARGS`, as the serve scripts do; `PORT` and `EXTRA_ARGS` come
   from the environment the page was started in). It shows *starting*, *running* (with an **Open the chat** link),
@@ -136,6 +152,14 @@ its address (normally `http://127.0.0.1:8765/`) and opens your browser.
     serve scripts would use that one, not the copy in `bin/`.
 - **Model radar** (`/#radar`) and **What changed** (`/#history`): trending and new GGUF models on Hugging Face, checked
   against your memory. Speeds are labelled as estimates until a model is downloaded and tested.
+- **My models** (`/#models`): what is in the models folder, with size, origin, architecture and free disk space.
+  - *Delete* asks first, then removes the model's files (only files inside the models folder).
+  - *Compare*: pick two or three models; they answer the same prompts one after another (only one is in memory at a
+    time), and the answers are shown side by side with llama-server's own speed figures. There is no quality score:
+    a few prompts cannot rank models, so you judge the answers.
+  - *Serve all my models*: one llama-server for every model, in llama.cpp's router mode (`--models-preset`,
+    `--models-max 1`). A program asks for a model by name and llama.cpp loads it, one at a time. Needs a llama.cpp
+    recent enough to have router mode; the page says so otherwise.
 - **Installed tools** (`/#tools`): Ollama, llama.cpp, LM Studio and Unsloth: found or not, version, location, and how
   to start or install each one.
 - **Every command shown is for your OS** and only uses programs that were found: `scripts\win\...bat` and `curl.exe`
@@ -155,6 +179,7 @@ its address (normally `http://127.0.0.1:8765/`) and opens your browser.
 | --- | --- |
 | **llama.cpp Default** | llama.cpp's own built-in web chat UI. |
 | **Translation** | Clean, fast translation UI matching llama.cpp styling. Select language pairs, swap, choose formal (*vous*) or informal (*tu*) register, and adjust temperature. Self-contained HTML file with no dependencies. |
+| **Tasks** | Three everyday jobs with one option each: *Summarize* (bullets, a paragraph, or detailed), *Explain code* (for a beginner or a developer, with likely bugs listed), *Rewrite* (plainer, more formal, friendlier, shorter). Same style and self-contained file as Translation. `UI=tasks` skips the menu. |
 
 Small models (1B) translate roughly; 4B and up produce high-quality translations.
 
@@ -236,6 +261,17 @@ Which model should you run? The CLI tool provides fine-grained control:
 
 - Filters: `--sort popular|size|speed`, `--hub downloads|trending|recent`, `--author NAME`, `--min-tps N`.
 - Safe & audited: standard library only, talks strictly to `huggingface.co`, and writes only to `models/` and `.launchpad-state`.
+- Memory is read from each shown model's own header (the first megabytes of the file, with an HTTP Range request):
+  layers, key/value heads and trained context give the exact context-cache size. When the header cannot be read, the
+  table says the figure is a rough estimate.
+
+### More tools for the terminal
+
+```bash
+python utils/gguf.py models/MODEL.gguf --ctx 32768 --cache-type-k q8_0   # memory this model needs at that context
+python utils/compare.py models/A.gguf models/B.gguf                      # same prompts, answers side by side
+./scripts/unix/model-setup.sh --profile-args MODEL.gguf                  # settings saved for a model on the setup page
+```
 
 ---
 
@@ -262,7 +298,7 @@ Configure behavior using environment variables on any platform:
 | `MODELS_DIR` | `models/` | Folder containing your `.gguf` files |
 | `LLAMA_SERVER` | auto-detected | Path to `llama-server` binary |
 | `PORT` | `8080` | Port for `llama-server` to serve on |
-| `UI` | ask | `default` or `translation` (bypasses menu) |
+| `UI` | ask | `default`, `translation` or `tasks` (bypasses menu) |
 | `OPEN_BROWSER` | `1` | Automatically open the web browser when server starts |
 | `KILL_EXISTING` | `1` | Stop any running `llama-server` process before starting |
 | `EXTRA_ARGS` | empty | Extra flags for `llama-server`, e.g. `"-t 8 -c 8192"` |
@@ -341,7 +377,10 @@ bin/                 optional llama-server binary (git-ignored)
 scripts/             serve, model-setup, ui, and detect-tools launchers (win / mac / unix)
 ui/setup/            visual model setup page & tools dashboard (one self-contained HTML file)
 ui/translation/      translation interface (self-contained HTML file)
-utils/               model_setup.py, hf_discover.py, ui_server.py, hardware.py, detect_tools.py, models.catalog
+ui/tasks/            summarize / explain code / rewrite interface (self-contained HTML file)
+utils/               model_setup.py, hf_discover.py, ui_server.py, hardware.py, detect_tools.py, models.catalog,
+                     gguf.py (model headers, memory), chat_server.py, local_models.py (My models), compare.py,
+                     router.py (all models at one address), clients.py (settings for other programs)
 tests/               unit tests, source audit, runner (run.py), fake machine (fakes.py)
 ```
 
