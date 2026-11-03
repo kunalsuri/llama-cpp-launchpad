@@ -922,8 +922,9 @@ class TestChatApi(UiBase):
         self.assertTrue(proj.is_file())
         self.assertEqual(ms.source_file(proj).read_text(encoding="utf-8"), self.app.offered[self.top["id"]]["repo"])
         p = self.preview()
-        self.assertIn(f"--mmproj {proj}", p["cmd"])
-        self.assertTrue(all(f"--mmproj {proj}" in x["cmd"] for x in p["presets"] if x["available"]))
+        shown = self.app.chat.shown(["--mmproj", str(proj)])      # quoted for the pinned OS, as the page shows it
+        self.assertIn(shown, p["cmd"])
+        self.assertTrue(all(shown in x["cmd"] for x in p["presets"] if x["available"]))
 
     def test_a_projector_this_llama_server_cannot_load_is_not_passed(self):
         self.download()
@@ -943,6 +944,23 @@ class TestChatApi(UiBase):
         self.assertIsNone(v["available"])
         self.assertIn("does not read images", v["why"])
         self.assertEqual(self.post("/api/vision/get", {"id": self.top["id"]})[0], 409)
+
+    def test_a_model_and_its_image_support_never_download_at_once(self):
+        """Review finding: both share model_setup.last_download_error, so each could report the other's failure."""
+        self.download()
+        self.hub_with_projector()
+        self.app.job = {"state": "downloading"}
+        status, body = self.post("/api/vision/get", {"id": self.top["id"]})
+        self.app.job = {"state": "idle"}
+        self.assertEqual(status, 409)
+        self.assertIn("download", body["error"])
+        self.app.vision_job = {"state": "downloading"}
+        self.addCleanup(setattr, self.app, "vision_job", {"state": "idle"})
+        self.assertEqual(self.post("/api/install", {"id": self.top["id"]})[0], 409)
+
+    def test_a_context_in_odd_digits_is_ignored_not_a_crash(self):
+        self.download()
+        self.assertIn("preview", self.chat("/api/chat?id=" + urllib.parse.quote(self.top["id"]) + "&ctx=%C2%B2"))
 
     def test_getting_image_support_needs_the_token_and_an_offered_model(self):
         self.download()
@@ -1009,6 +1027,45 @@ class TestModelsApi(UiBase):
         self.assertIn("Stop the chat", body["error"])
         self.assertTrue((self.dir / "shape.gguf").exists())
         self.assertEqual(self.post("/api/models/delete", {"id": "other.gguf"})[0], 200, "other models can go")
+
+    def test_nothing_is_deleted_while_all_my_models_are_served(self):
+        """Review finding: in router mode the chat has no single model_path, so any served model could be deleted."""
+        self.app.chat.job = {"state": "running", "model_path": "", "router": ["shape", "other"]}
+        self.addCleanup(setattr, self.app.chat, "job", {"state": "idle"})
+        status, body = self.post("/api/models/delete", {"id": "other.gguf"})
+        self.assertEqual(status, 409)
+        self.assertIn("all your models", body["error"])
+
+    def test_the_image_support_file_of_the_running_chat_cannot_be_deleted(self):
+        (self.dir / "mmproj-s.gguf").write_bytes(b"p")
+        (self.dir / "mmproj-s.gguf.source").write_text("o/Shape-GGUF", encoding="utf-8")
+        self.app.chat.job = {"state": "running", "model_path": str(self.dir / "shape.gguf")}
+        self.addCleanup(setattr, self.app.chat, "job", {"state": "idle"})
+        self.assertEqual(self.post("/api/models/delete", {"id": "mmproj-s.gguf"})[0], 409)
+
+    def test_nothing_is_deleted_while_image_support_or_a_terminal_download_runs(self):
+        self.app.vision_job = {"state": "downloading"}
+        self.assertEqual(self.post("/api/models/delete", {"id": "other.gguf"})[0], 409)
+        self.app.vision_job = {"state": "idle"}
+        ms.state_update({"dl_active": "1"})
+        self.assertEqual(self.post("/api/models/delete", {"id": "other.gguf"})[0], 409)
+        ms.state_update({"dl_active": "0"})
+        self.assertEqual(self.post("/api/models/delete", {"id": "other.gguf"})[0], 200)
+
+    def test_a_strange_header_does_not_break_the_list(self):
+        """Review finding: a header with block_count stored as text raised out of /api/models."""
+        import struct
+
+        def s(t):
+            b = t.encode()
+            return struct.pack("<Q", len(b)) + b
+        kvs = [(s("general.architecture"), struct.pack("<I", 8) + s("llama")),
+               (s("llama.block_count"), struct.pack("<I", 8) + s("x")),
+               (s("llama.embedding_length"), struct.pack("<I", 4) + struct.pack("<I", 64)),
+               (s("llama.attention.head_count"), struct.pack("<I", 4) + struct.pack("<I", 4))]
+        (self.dir / "odd.gguf").write_bytes(b"GGUF" + struct.pack("<IQQ", 3, 0, len(kvs)) + b"".join(k + v for k, v in kvs))
+        d = self.get_json("/api/models")
+        self.assertIn("odd.gguf", [m["id"] for m in d["models"]])
 
     def test_nothing_is_deleted_while_a_download_runs(self):
         self.app.job = {"state": "downloading", "title": "X"}
@@ -1078,6 +1135,14 @@ class TestCompareApi(UiBase):
         with unittest.mock.patch.dict("os.environ", {"FAKE_LLAMA_REPLY_S": "3"}):
             self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})
             status, body = self.post("/api/models/delete", {"id": "c.gguf"})
+        self.assertEqual(status, 409)
+        self.assertIn("comparison", body["error"])
+
+    def test_llama_cpp_is_not_replaced_during_a_comparison(self):
+        """Review finding: install refused during a chat, but not during a comparison running the same binary."""
+        with unittest.mock.patch.dict("os.environ", {"FAKE_LLAMA_REPLY_S": "3"}):
+            self.post("/api/compare/start", {"ids": ["a.gguf", "b.gguf"]})
+            status, body = self.app.llama_install({})
         self.assertEqual(status, 409)
         self.assertIn("comparison", body["error"])
 

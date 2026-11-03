@@ -843,6 +843,12 @@ const scenarios = {
     p.button("router-box", "Stop").click(); await p.settle();
     if (posts[1] !== "/api/chat/stop") return "Stop did not stop: " + JSON.stringify(posts);
     if (p.text("router-box").includes("Serving 2 models")) return "still shown as serving after Stop";
+    // Review finding: a router that failed to start went back to the button without saying why.
+    p.button("router-box", "Serve all my models").click(); await p.settle();
+    chat = { ...chat, state: "failed", error: "llama-server stopped before it was ready (exit code 1).", log: ["error: unknown argument: --models-preset"] };
+    await p.advance(1100);
+    const f = p.text("router-box");
+    if (!f.includes("stopped before it was ready") || !f.includes("unknown argument")) return "the failure is not shown: " + f;
   },
 
   async "a refused delete says why and keeps the model"() {

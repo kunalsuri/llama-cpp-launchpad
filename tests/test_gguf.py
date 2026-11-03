@@ -106,6 +106,29 @@ class TestReadHeader(unittest.TestCase):
             gguf.read_header(io.BytesIO(blob))
         self.assertIn("larger than", str(cm.exception))
 
+    def test_odd_values_in_a_header_give_no_shape_instead_of_an_exception(self):
+        """Review finding: block_count stored as a string raised ValueError out of describe() and took
+        /api/models down; a list raised TypeError; a huge count built an enormous list."""
+        base = {"general.architecture": "llama", "llama.embedding_length": 64, "llama.attention.head_count": 4}
+        for bad in ("32", [32], 10 ** 12, -1, None):
+            with self.subTest(block_count=bad):
+                self.assertIsNone(gguf.shape(dict(base, **{"llama.block_count": bad})))
+        self.assertIsNone(gguf.shape(dict(base, **{"llama.block_count": 2, "llama.attention.head_count_kv": "8"})))
+        self.assertIsNone(gguf.shape(dict(base, **{"llama.block_count": 2, "llama.context_length": "x"})))
+
+    def test_describe_never_raises_on_a_strange_header(self):
+        def s(text):
+            b = text.encode()
+            return struct.pack("<Q", len(b)) + b
+        kvs = [(s("general.architecture"), struct.pack("<I", 8) + s("llama")),
+               (s("llama.block_count"), struct.pack("<I", 8) + s("thirty-two")),
+               (s("llama.embedding_length"), struct.pack("<I", 4) + struct.pack("<I", 64)),
+               (s("llama.attention.head_count"), struct.pack("<I", 4) + struct.pack("<I", 4))]
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "odd.gguf")
+            p.write_bytes(b"GGUF" + struct.pack("<IQQ", 3, 0, len(kvs)) + b"".join(k + v for k, v in kvs))
+            self.assertIn("error", gguf.describe(p))
+
     def test_a_file_without_layers_has_no_shape(self):
         self.assertIsNone(gguf.shape({"general.architecture": "clip"}))
         self.assertIsNone(gguf.shape({}))
@@ -140,7 +163,7 @@ class TestMemory(unittest.TestCase):
                 "jamba.attention.head_count": 4, "jamba.ssm.state_size": 16}
         s = gguf.shape(meta)
         self.assertEqual(s["notes"], ["recurrent"])
-        self.assertEqual(gguf.estimate(s, 0, 10)["bound"], "exact", "the attention part is still exact")
+        self.assertEqual(gguf.estimate(s, 0, 10)["bound"], "at_least", "the recurrent state is not counted")
 
 
 class TestFiles(unittest.TestCase):

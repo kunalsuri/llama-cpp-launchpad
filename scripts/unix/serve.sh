@@ -223,7 +223,7 @@ if [ -f "$MODELS_DIR/$name.source" ]; then
   for f in "$MODELS_DIR"/*.gguf; do
     case "$(basename "$f" | tr '[:upper:]' '[:lower:]')" in *mmproj*) ;; *) continue ;; esac
     [ -f "$f.source" ] && [ "$(cat "$f.source")" = "$repo" ] || continue
-    if "$LLAMA_SERVER" --help 2>&1 | grep -q -- '--mmproj'; then
+    if "$LLAMA_SERVER" --help 2>&1 | grep -qE -- '(^|[[:space:],])--mmproj([[:space:],]|$)'; then
       mmproj_args=(--mmproj "$f")
       echo "  ${D}Image support${R} $(basename "$f")"
     else
@@ -240,7 +240,7 @@ if [ -n "$PY" ]; then
   while IFS= read -r a; do
     a="${a%$'\r'}"
     [ -n "$a" ] && profile_args+=("$a")
-  done < <("$PY" "$ROOT_DIR/utils/model_setup.py" --profile-args "$name" 2>/dev/null)
+  done < <(LLAMA_SERVER="$LLAMA_SERVER" "$PY" "$ROOT_DIR/utils/model_setup.py" --profile-args "$name" 2>/dev/null)
   [ ${#profile_args[@]} -gt 0 ] && echo "  ${D}Settings saved on the setup page:${R} ${profile_args[*]}"
 fi
 

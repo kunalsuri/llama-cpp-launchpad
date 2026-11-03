@@ -167,7 +167,9 @@ class TestServeMenuSplitModels(unittest.TestCase):
         _, out = self.served(2)
         served = next(line for line in out.splitlines() if "SERVED" in line)
         self.assertIn("--mmproj", served)
-        self.assertIn(str(proj), served)
+        # Compare files, not spellings: PowerShell expands Windows' short temp names (RUNNER~1 -> runneradmin).
+        given = served.split("--mmproj", 1)[1].split()[0]
+        self.assertTrue(os.path.samefile(given, proj), served)
         _, out = self.served(1)
         self.assertNotIn("--mmproj", next(line for line in out.splitlines() if "SERVED" in line),
                          "a model from another repo does not get this projector")

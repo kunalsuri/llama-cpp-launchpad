@@ -120,30 +120,51 @@ def read_file(path) -> dict:
 
 
 # --- The model's shape and its memory ---------------------------------------------------------------------
+MAX_LAYERS, MAX_WIDTH, MAX_CTX = 4096, 1 << 20, 1 << 26      # far beyond any real model; anything larger is junk
+
+
+def _int(value, hi: int, default=None) -> int:
+    """A count from the header: a real integer from 0 to hi. Anything else (a string, a list, a float, a huge number)
+    raises ValueError, so a strange file reads as "no shape" instead of taking the caller down."""
+    if value is None and default is not None:
+        return default
+    if type(value) is not int or not 0 <= value <= hi:
+        raise ValueError(f"unexpected value {value!r}")
+    return value
+
+
 def _per_layer(value, n_layer: int) -> list:
     if isinstance(value, list):
-        return [int(v) for v in value[:n_layer]] + [0] * max(0, n_layer - len(value))
-    return [int(value or 0)] * n_layer
+        return [_int(v, MAX_WIDTH) for v in value[:n_layer]] + [0] * max(0, n_layer - len(value))
+    return [_int(value, MAX_WIDTH, 0)] * n_layer
 
 
 def shape(meta: dict):
-    """The numbers the cache depends on -> dict, or None when the header lacks them (not a language model, or a
-    layout this reader does not know)."""
+    """The numbers the cache depends on -> dict, or None when the header lacks them, or holds values no real model
+    has (not a language model, a layout this reader does not know, or a damaged file)."""
+    try:
+        return _shape(meta)
+    except ValueError:
+        return None
+
+
+def _shape(meta: dict):
     arch = meta.get("general.architecture")
     if not isinstance(arch, str) or not arch:
         return None
     g = lambda k: meta.get(f"{arch}.{k}")                    # noqa: E731
-    n_layer = int(g("block_count") or 0)
-    n_embd = int(g("embedding_length") or 0)
-    heads = g("attention.head_count")
-    if not n_layer or not n_embd or heads is None:
+    if g("block_count") is None or g("embedding_length") is None or g("attention.head_count") is None:
         return None
-    n_head = _per_layer(heads, n_layer)
+    n_layer = _int(g("block_count"), MAX_LAYERS)
+    n_embd = _int(g("embedding_length"), MAX_WIDTH)
+    if not n_layer or not n_embd:
+        return None
+    n_head = _per_layer(g("attention.head_count"), n_layer)
     kv = g("attention.head_count_kv")
     n_head_kv = _per_layer(kv, n_layer) if kv is not None else list(n_head)
     widest = max(n_head) or 1
-    k_len = int(g("attention.key_length") or n_embd // widest)
-    v_len = int(g("attention.value_length") or n_embd // widest)
+    k_len = _int(g("attention.key_length"), MAX_WIDTH, n_embd // widest)
+    v_len = _int(g("attention.value_length"), MAX_WIDTH, n_embd // widest)
     notes = []
     if g("attention.sliding_window"):
         notes.append("sliding")
@@ -153,7 +174,7 @@ def shape(meta: dict):
            for k in meta):
         notes.append("recurrent")
     return {"arch": arch, "n_layer": n_layer, "n_embd": n_embd, "n_head_kv": n_head_kv, "k_len": k_len,
-            "v_len": v_len, "train_ctx": int(g("context_length") or 0), "notes": notes,
+            "v_len": v_len, "train_ctx": _int(g("context_length"), MAX_CTX, 0), "notes": notes,
             "name": meta.get("general.name") or ""}
 
 
@@ -175,7 +196,8 @@ def estimate(s: dict, weights_bytes: int, ctx: int, type_k: str = "f16", type_v:
     """Memory to run the model: weights + cache + overhead, in MB, and how sure the figure is."""
     kv = kv_cache_bytes(s, ctx, type_k, type_v) // MIB
     weights = weights_bytes // MIB
-    bound = "at_most" if {"sliding", "compressed"} & set(s["notes"]) else "exact"
+    notes = set(s["notes"])
+    bound = "at_most" if {"sliding", "compressed"} & notes else "at_least" if "recurrent" in notes else "exact"
     return {"weights_mb": weights, "kv_mb": kv, "overhead_mb": OVERHEAD_MB, "need_mb": weights + kv + OVERHEAD_MB,
             "ctx": ctx or s["train_ctx"], "train_ctx": s["train_ctx"], "type_k": type_k, "type_v": type_v,
             "bound": bound, "notes": list(s["notes"])}
@@ -233,7 +255,7 @@ def main(argv=None) -> int:
     e = estimate(d["shape"], d["weights_bytes"], a.ctx, a.cache_type_k, a.cache_type_v)
     s = d["shape"]
     print(f"{d['file']}  ({s['arch']}, {s['n_layer']} layers, trained on {s['train_ctx']} tokens)")
-    word = "at most " if e["bound"] == "at_most" else ""
+    word = {"at_most": "at most ", "at_least": "at least "}.get(e["bound"], "")
     print(f"  weights {e['weights_mb']} MB + context cache {word}{e['kv_mb']} MB ({e['ctx']} tokens, "
           f"K {e['type_k']} / V {e['type_v']}) + overhead {e['overhead_mb']} MB = {word}{e['need_mb']} MB")
     for n in e["notes"]:

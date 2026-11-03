@@ -75,7 +75,10 @@ class TestBrowser(tui.UiBase):
         for day, models in (("2026-10-31", RADAR[1:]), ("2026-11-01", RADAR)):
             (radar / "snapshots" / f"{day}.json").write_text(json.dumps({"updated_at": day + "T08:00:00Z", "models": models}))
         (radar / "latest.json").write_text(json.dumps({"updated_at": "2026-11-01T08:00:00Z", "models": RADAR}))
-        for p in (unittest.mock.patch.dict(os.environ, {"LP_RADAR_DIR": str(radar)}),
+        # A long models folder with no place to wrap, as Windows gives (C:\Users\RUNNER~1\AppData\Local\Temp\...):
+        # My models once scrolled sideways on phones there, and only there, because the Linux temp path is short.
+        models = self.tmp / ("models" + "x" * 70)
+        for p in (unittest.mock.patch.dict(os.environ, {"LP_RADAR_DIR": str(radar), "MODELS_DIR": str(models)}),
                   unittest.mock.patch.object(hf_radar, "http_json", side_effect=AssertionError("network")),
                   unittest.mock.patch.object(ms, "find_llama_server", return_value="")):
             p.start()

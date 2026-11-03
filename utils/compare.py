@@ -88,7 +88,7 @@ class Comparison:
             self.halt.set()
             if self.state["state"] == "running":
                 self.state["state"] = "stopped"
-        cs = self.server
+            cs = self.server
         if cs is not None:
             cs.stop()
         return self.status()
@@ -104,7 +104,10 @@ class Comparison:
 
     def _one(self, i: int, path: Path, title: str) -> None:
         cs = chat_server.ChatServer(find_server=self.find_server, environ=self.environ, system=self.system)
-        self.server = cs
+        with self.lock:                     # stop() sets halt under this lock: never start a server after it
+            if self.halt.is_set():
+                return
+            self.server = cs
         port = cs.port()
         port = port if not chat_server.port_in_use(port) else chat_server.next_free_port(port)
         t0 = time.monotonic()

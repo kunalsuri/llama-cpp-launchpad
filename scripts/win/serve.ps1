@@ -269,7 +269,7 @@ if (Test-Path -LiteralPath $sourceFile) {
         $savedPref = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
         try { $helpText = (& $Server --help 2>&1 | Out-String) } catch { $helpText = '' }
         finally { $ErrorActionPreference = $savedPref }
-        if ($helpText -match '--mmproj') {
+        if ($helpText -match '(^|[\s,])--mmproj([\s,]|$)') {
             $serverArgs += @('--mmproj', $proj.FullName)
             Write-Host "  Image support $($proj.Name)" -ForegroundColor DarkGray
         } else {
@@ -281,9 +281,10 @@ if (Test-Path -LiteralPath $sourceFile) {
 # checked against this llama-server's --help). They go before EXTRA_ARGS, so flags set there still win.
 if ($Py) {
     $savedPref = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $savedServer = $env:LLAMA_SERVER; $env:LLAMA_SERVER = $Server       # check against the server run below
     try { $profileArgs = @(Invoke-ModelSetup @('--profile-args', $model.Name) 2>$null | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) }
     catch { $profileArgs = @() }
-    finally { $ErrorActionPreference = $savedPref }
+    finally { $ErrorActionPreference = $savedPref; $env:LLAMA_SERVER = $savedServer }
     if ($profileArgs.Count -gt 0) {
         Write-Host "  Settings saved on the setup page: $($profileArgs -join ' ')" -ForegroundColor DarkGray
         $serverArgs += $profileArgs

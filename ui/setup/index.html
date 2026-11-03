@@ -268,6 +268,7 @@
   .cmp-col b.wrap, .cmp-col .why { overflow-wrap: anywhere; }
   .cmp-col .why { color: var(--bad); margin: 0; }
   #compare-box { margin-bottom: 8px; }
+  #models-sum, .tool p { overflow-wrap: anywhere; }      /* folder paths have no spaces to wrap at */
   @media (max-width: 560px) { .cmp-grid { grid-template-columns: 1fr; } }
   .tool-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .tool-head b { font-size: 17px; }
@@ -1075,7 +1076,7 @@ const WHERE_FITS = { gpu: "fits your graphics card", partial: "split between gra
   cpu: "runs from main memory", tight: "a tight fit: it may not load", no: "too big for this computer" };
 function memText(m) {
   if (!m) return "";
-  return "Needs " + (m.bound === "at_most" ? "at most " : "about ") + (m.need_mb / 1024).toFixed(1) + " GB · " +
+  return "Needs " + ({ at_most: "at most ", at_least: "at least " }[m.bound] || "about ") + (m.need_mb / 1024).toFixed(1) + " GB · " +
     (WHERE_FITS[m.where] || "") + " · " + m.ctx.toLocaleString("en-US") + " tokens of context";
 }
 function presetPicked(pv) {
@@ -1475,7 +1476,7 @@ async function deleteModel(id) {
   if (r.error && !r.models) { modelsError = { [id]: r.error }; renderModels(); say(r.error); return; }
   modelsData = r; modelsError = r.error ? { [id]: r.error } : {};
   renderModels();
-  say("Deleted " + id);
+  say(r.error ? r.error : "Deleted " + id);            // a partial delete says what went wrong
 }
 // --- What to type into other programs to use the running llama-server (utils/clients.py) -----------------------
 function clientsPanel() {
@@ -1510,6 +1511,9 @@ function renderRouter() {
       h("div", { class: "actions" }, c.state === "running" ? h("a", { class: "btn small", href: c.url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open the chat") : null,
         h("button", { class: "btn small ghost", onclick: stopRouter }, "Stop")));
   } else if (r && r.available) {
+    if (c.router && c.state === "failed")                 // the last try did not start: say why, with its output
+      kids.push(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, c.error || "llama-server stopped.")),
+        h("pre", { class: "log" }, (c.log || []).slice(-30).join("\n")));
     kids.push(h("p", {}, h("b", {}, "All my models at one address. "),
       "One llama-server for every model here: a program asks for a model by name and llama.cpp loads it, one at a time, so only one is ever in memory."),
       h("div", { class: "actions" }, h("button", { class: "btn small", onclick: startRouter }, icon("layers"), "Serve all my models")),

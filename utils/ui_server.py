@@ -219,6 +219,8 @@ class App:
             if self.chat.status().get("state") in CHAT_BUSY:
                 return 409, {"error": "Stop the chat first, and wait until it has stopped: llama-server cannot be "
                                       "replaced while it is running."}
+            if self._comparing():
+                return 409, {"error": "A model comparison is running llama-server. Install when it has finished."}
             if not self.llama_info()["need"]:
                 return 409, {"error": "A working llama-server that can use this computer is already installed."}
             return self.installer.start(variant)
@@ -366,6 +368,8 @@ class App:
         with self.lock:
             if (self.__dict__.get("vision_job") or {}).get("state") == "downloading":
                 return 409, {"error": "Image support is already downloading."}
+            if self.job.get("state") in ("downloading", "testing"):     # one download at a time: they share
+                return 409, {"error": "A model download is running. Add image support when it has finished."}
             self.vision_job = {"state": "downloading", "done": 0, "total": offer[1], "file": offer[0]}
 
         def run():
@@ -463,14 +467,22 @@ class App:
             return 404, {"error": local_models.NOT_HERE}
         with self.run_lock:
             with self.lock:
-                if self.job.get("state") in ("downloading", "testing"):
+                if (self.job.get("state") in ("downloading", "testing")
+                        or (self.__dict__.get("vision_job") or {}).get("state") == "downloading"
+                        or self.ms.state_get("dl_active") == "1"):             # also one started in a terminal
                     return 409, {"error": "A download is running. Delete models when it has finished."}
             if self._comparing():
                 return 409, {"error": "A model comparison is running. Delete models when it has finished."}
             chat = self.chat.status()
+            if chat.get("state") in CHAT_BUSY and chat.get("router"):
+                return 409, {"error": "llama-server is serving all your models. Stop it first, then delete."}
             in_use = {str(d / f) for f in entry["files"]}
-            if chat.get("state") in CHAT_BUSY and chat.get("model_path") in in_use:
-                return 409, {"error": "The chat is using this model. Stop the chat first, then delete it."}
+            loaded = {chat.get("model_path") or ""}
+            if loaded != {""}:                               # its image support file is loaded too
+                proj = self._projector(Path(chat["model_path"]))
+                loaded.add(str(proj) if proj else "")
+            if chat.get("state") in CHAT_BUSY and in_use & loaded:
+                return 409, {"error": "The chat is using this file. Stop the chat first, then delete it."}
             removed, error = local_models.delete(d, mid)
         if error and not removed:
             return 409, {"error": error}
@@ -721,7 +733,8 @@ class App:
         if not offer:
             return 404, {"error": "Unknown model. Reload the page."}
         with self.lock:
-            if self.job.get("state") in ("downloading", "testing"):
+            if (self.job.get("state") in ("downloading", "testing")
+                    or (self.__dict__.get("vision_job") or {}).get("state") == "downloading"):
                 return 409, {"error": "Another download is running."}
             self.job = {
                 "state": "downloading",
@@ -877,7 +890,7 @@ def make_handler(app: App):
             if url.path == "/api/chat":
                 ctx = (q.get("ctx") or [""])[0]
                 return self.reply(200, app.chat_status((q.get("id") or [None])[0], (q.get("preset") or [None])[0],
-                                                       int(ctx) if ctx.isdigit() and len(ctx) < 9 else None))
+                                                       int(ctx) if ctx.isascii() and ctx.isdigit() and len(ctx) < 9 else None))
             if url.path == "/api/llama":
                 return self.reply(200, app.llama_info())
             if url.path == "/api/models":
