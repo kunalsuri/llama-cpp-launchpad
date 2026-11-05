@@ -9,7 +9,7 @@ import shutil
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -164,6 +164,11 @@ class TestFfmpegArgs(unittest.TestCase):
     def test_concat_list_quotes_paths(self):
         text = capture.concat_list([Path("/tmp/a b/one.webm"), Path("/tmp/it's.webm")])
         self.assertEqual(text, "file '/tmp/a b/one.webm'\nfile '/tmp/it'\\''s.webm'\n")
+
+    def test_concat_list_is_the_same_on_windows(self):
+        # ffmpeg reads forward slashes on every OS; a backslash path would make the test (and the list) per-OS.
+        self.assertEqual(capture.concat_list([PureWindowsPath(r"C:\work\a b\one.webm")]),
+                         "file 'C:/work/a b/one.webm'\n")
 
 
 class TestWords(unittest.TestCase):

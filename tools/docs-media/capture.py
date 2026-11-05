@@ -203,8 +203,9 @@ def card_args(png, seconds: float, dst, size=SIZE, fps=FPS) -> list:
 
 
 def concat_list(paths) -> str:
-    """The list file for ffmpeg's concat demuxer; a quote in a path is written as '\\''."""
-    return "".join("file '" + str(p).replace("'", "'\\''") + "'\n" for p in paths)
+    """The list file for ffmpeg's concat demuxer, with forward slashes (ffmpeg reads them on every OS); a quote in a
+    path is written as '\\''."""
+    return "".join("file '" + p.as_posix().replace("'", "'\\''") + "'\n" for p in paths)
 
 
 def mp4_args(src, dst, concat: bool = False) -> list:
