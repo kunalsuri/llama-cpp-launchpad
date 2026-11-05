@@ -1,0 +1,5 @@
+{
+  "about": "How each file in docs/media was made. Written by tools/docs-media/capture.py; checked by tests/test_docs.py.",
+  "captures": [],
+  "runs": {}
+}
