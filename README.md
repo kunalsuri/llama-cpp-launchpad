@@ -31,6 +31,9 @@ on your machine; nothing is sent anywhere.
 **What it is not:** it does not run models itself (llama.cpp does), it does not train or fine-tune, and it does not rank
 models by quality. Speeds it shows are measured on your machine, or labelled as estimates.
 
+**New here?** [Getting started](docs/getting-started.md) goes from nothing to a first reply, step by step. Every guide
+is listed in the [documentation](docs/README.md).
+
 ## Contents
 
 - [Requirements](#requirements)
@@ -256,7 +259,7 @@ suite in it.
 models/      your .gguf files (git-ignored)          bin/     optional llama-server (git-ignored)
 scripts/     launchers: win / mac / unix              ui/      setup page, translation, tasks (one HTML file each)
 utils/       all Python, standard library only       tests/   tests, source audit, runner, fake machine
-docs/        setup page reference, Open WebUI guide
+docs/        guides, setup page reference, media     tools/   docs-media: makes the docs' screenshots and videos
 ```
 
 ## License
