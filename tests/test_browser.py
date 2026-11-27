@@ -64,9 +64,11 @@ RADAR = [
 
 
 READY = playwright_ready()
+# One skip for every real-browser class, so test_harness counts it once (the "no playwright" reason).
+NEEDS_BROWSER = unittest.skipUnless(READY, "needs node + playwright with chromium: npm ci && npx playwright install chromium")
 
 
-@unittest.skipUnless(READY, "needs node + playwright with chromium: npm ci && npx playwright install chromium")
+@NEEDS_BROWSER
 class TestBrowser(tui.UiBase):
     def setUp(self):
         super().setUp()
@@ -132,13 +134,9 @@ def run_page_check(script: str, page: str, *mode: str) -> "tuple[list, subproces
     return rows, done
 
 
+@NEEDS_BROWSER
 class TestPageHistoryAndFiles(unittest.TestCase):
     """History (Translation and Tasks) and Open file (Tasks), in real Chromium against a stand-in llama-server."""
-
-    def setUp(self):
-        # Same reason as TestBrowser above; written as skipTest so the suite's few-skips budget (test_harness) stays at one.
-        if not READY:
-            self.skipTest("needs node + playwright with chromium: npm ci && npx playwright install chromium")
 
     def check_rows(self, rows, done, minimum):
         self.assertGreaterEqual(len(rows), minimum, done.stdout + done.stderr)
