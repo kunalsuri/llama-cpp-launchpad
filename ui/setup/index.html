@@ -1277,7 +1277,7 @@ function llamaUpdate(L) {
   if (!u || !L.found || !L.works) return [];
   if (u.status === "unknown") return [h("p", { class: "muted" }, "Could not check for a newer version: " + u.reason)];
   if (u.status === "up-to-date") return [h("p", { class: "muted" }, "Up to date: b" + u.installed + ".")];
-  const parts = [h("p", {}, h("b", {}, "Update available: b" + u.installed + " → b" + u.latest))];
+  const parts = [h("p", {}, h("b", {}, "Update available: b" + u.installed + " → b" + u.latest), u.latest_is === "newest" ? " (newest release)" : "")];
   if (u.how === "download" && !L.need) parts.push(h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => installLlama("auto") }, icon("download"), "Update llama.cpp")));
   else if (u.cmd) parts.push(h("p", { class: "cmd-label" }, "To update, run:"), cmdRow(u.cmd));
   return parts;

@@ -1224,11 +1224,12 @@ Object.assign(scenarios, {
   async "an update for a Homebrew or winget copy shows its command, and no button, only when that tool was found"() {
     const base = { ...NEED, found: "/opt/homebrew/Cellar/llama.cpp/4242/bin/llama-server", works: true, version: "version: 4242 (abc1234)",
       need: "", offer: { how: "manual" } };
-    const upd = (how, cmd) => ({ status: "update", installed: 4242, latest: 7777, latest_tag: "b7777", reason: "", how, cmd });
+    const upd = (how, cmd) => ({ status: "update", installed: 4242, latest: 7777, latest_tag: "b7777", latest_is: "newest", reason: "", how, cmd });
     let p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [{ ...base, update: upd("brew", "brew upgrade llama.cpp") }] }) });
     await p.start();
     let t = p.text("llama-body");
     if (!t.includes("Update available: b4242 → b7777") || !t.includes("brew upgrade llama.cpp")) return "brew update missing: " + t;
+    if (!t.includes("newest release")) return "the newest tag is not labelled as the newest release: " + t;
     if (p.button("llama-body", "Update")) return "a button for a command this page does not run";
     p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [{ ...base, update: upd("winget", "winget upgrade ggml.llamacpp") }] }) });
     await p.start();

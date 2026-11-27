@@ -741,8 +741,90 @@ class TestInstallerUpdateInfo(InstallBase):
 
     def setUp(self):
         super().setUp()
-        self.api = {li.LATEST_RELEASE: {"tag_name": "b7777", "assets": []}}
+        self.api = {li.LATEST_RELEASE: self.release}        # b7777, with the builds for every machine
         self.found = str(self.bin / "llama-server")
+
+    NEWEST_WITHOUT_BUILDS = {"tag_name": "b8000", "assets": []}      # published, but this machine's archive is not there yet
+
+    def newest_has_no_build(self):
+        self.api = {li.LATEST_RELEASE: self.NEWEST_WITHOUT_BUILDS,
+                    li.RELEASES_LIST: [self.NEWEST_WITHOUT_BUILDS, self.release]}
+
+    def test_a_copy_in_bin_is_only_told_about_the_build_the_installer_would_install(self):
+        self.newest_has_no_build()
+        u = self.inst.update_info(self.found, True, "version: 7000 (abc)")
+        self.assertEqual((u["status"], u["latest"], u["latest_tag"], u["latest_is"]), ("update", 7777, "b7777", "installable"), u)
+
+    def test_when_the_installable_build_is_not_newer_the_copy_in_bin_is_up_to_date(self):
+        self.newest_has_no_build()
+        u = self.inst.update_info(self.found, True, "version: 7777 (abc)")
+        self.assertEqual((u["status"], u["latest_tag"]), ("up-to-date", "b7777"), "b8000 has nothing to install")
+
+    def test_no_release_with_a_build_for_this_machine_is_unknown_not_an_update(self):
+        self.api = {li.LATEST_RELEASE: self.NEWEST_WITHOUT_BUILDS, li.RELEASES_LIST: [self.NEWEST_WITHOUT_BUILDS]}
+        u = self.inst.update_info(self.found, True, "version: 7000 (abc)")
+        self.assertEqual(u["status"], "unknown")
+        self.assertIn("no build", u["reason"].lower())
+
+    def test_the_installable_build_follows_this_machines_gpu(self):
+        """b8000 has only the Vulkan build: an update for a GPU machine, not for a CPU-only one (and the cached answer
+        for one is not reused for the other when the hardware is detected again)."""
+        vulkan = [a for a in self.release["assets"] if a["name"] == "llama-b7777-bin-ubuntu-vulkan-x64.tar.gz"]
+        only = {"tag_name": "b8000", "assets": [dict(a, name=a["name"].replace("b7777", "b8000"),
+                                                     browser_download_url=a["browser_download_url"].replace("b7777", "b8000"))
+                                                for a in vulkan]}
+        self.api = {li.LATEST_RELEASE: only, li.RELEASES_LIST: [only, self.release]}
+        self.assertEqual(self.inst.update_info(self.found, True, "version: 7000 (abc)")["latest_tag"], "b7777")
+        self.gpu = "gpu"
+        self.assertEqual(self.inst.update_info(self.found, True, "version: 7000 (abc)")["latest_tag"], "b8000")
+
+    def test_another_copy_gets_the_newest_tag_labelled_as_such(self):
+        self.newest_has_no_build()
+        u = self.inst.update_info("/usr/local/bin/llama-server", True, "version: 7000 (abc)")
+        self.assertEqual((u["status"], u["latest_tag"], u["latest_is"], u["how"]), ("update", "b8000", "newest", "other"), u)
+
+    def test_a_timeout_is_unknown_and_says_so_and_stops_asking(self):
+        calls = []
+
+        def hangs(url):
+            calls.append(url)
+            raise TimeoutError("timed out")
+        self.inst.fetch_json = hangs
+        u = self.inst.update_info(self.found, True, "version: 7000 (abc)")
+        self.assertEqual(u["status"], "unknown")
+        self.assertIn("timed out", u["reason"])
+        self.assertIn("could not be reached", u["reason"])
+        self.assertEqual(len(calls), 1, "after one timeout the other addresses are not tried (no 3 x wait)")
+
+    def test_a_wrapped_timeout_from_urllib_counts_too(self):
+        import urllib.error
+
+        def hangs(url):
+            raise urllib.error.URLError(TimeoutError("timed out"))
+        self.inst.fetch_json = hangs
+        self.assertIn("timed out", self.inst.update_info("/usr/local/bin/llama-server", True, "version: 7000 (abc)")["reason"])
+
+    def test_the_default_lookup_uses_a_short_timeout_the_install_keeps_its_own(self):
+        seen = []
+        inst = li.Installer(bin_dir=self.bin, system="Linux", machine="x86_64", gpu_kind=lambda: "none", find=self.find,
+                            which=lambda n: "")
+        with unittest.mock.patch.object(li, "_open", lambda url, accept="*/*", timeout=60: seen.append(timeout) or io.BytesIO(
+                json.dumps(self.release).encode())):
+            inst.update_info(self.found, True, "version: 7000 (abc)")
+            li.http_json("https://api.github.com/x")
+        self.assertEqual(seen[-1], 60, "the install's own requests keep the long timeout")
+        self.assertTrue(seen[:-1] and all(t <= 10 for t in seen[:-1]), seen)
+
+    def test_a_server_that_never_answers_is_given_up_on(self):
+        import socket
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        self.addCleanup(srv.close)
+        t0 = time.monotonic()
+        with self.assertRaises(OSError):
+            li.http_json(f"http://127.0.0.1:{srv.getsockname()[1]}/", timeout=0.4)
+        self.assertLess(time.monotonic() - t0, 5)
 
     def test_an_older_copy_in_bin_offers_the_update_through_the_installer(self):
         u = self.inst.update_info(self.found, True, "version: 7000 (abc)")

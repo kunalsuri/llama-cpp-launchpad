@@ -1320,6 +1320,30 @@ class TestLlamaApi(UiBase):
         self.assertIn("could not be reached", u["reason"])
         self.assertTrue(u["looked"], "the misses are logged")
 
+    def test_a_copy_in_bin_is_told_the_installable_build_and_another_copy_the_newest_one(self):
+        newest = {"tag_name": "b9000", "assets": []}                    # no archive for this machine yet
+        self.app.installer = self.app.make_installer(
+            fetch_json=lambda url: [newest, self.release] if url == ui_server.llama_install.RELEASES_LIST else newest,
+            fetch_file=self.fetch_file, version=self.tli.fake_version)
+        self.put_in_bin()
+        u = self.llama()["update"]
+        self.assertEqual((u["latest_tag"], u["latest_is"], u["how"]), ("b7777", "installable", "download"), u)
+        self.found_server = "/usr/local/bin/llama-server"
+        u = self.llama()["update"]
+        self.assertEqual((u["latest_tag"], u["latest_is"], u["how"]), ("b9000", "newest", "other"), u)
+
+    def test_a_slow_github_is_reported_as_timed_out_not_waited_for(self):
+        self.put_in_bin()
+
+        def hangs(url):
+            raise TimeoutError("timed out")
+        self.app.installer = self.app.make_installer(fetch_json=hangs, version=self.tli.fake_version)
+        t0 = time.monotonic()
+        u = self.llama()["update"]
+        self.assertEqual(u["status"], "unknown")
+        self.assertIn("timed out", u["reason"])
+        self.assertLess(time.monotonic() - t0, 5)
+
     def test_the_release_lookup_is_cached_and_never_made_by_the_state_poll(self):
         self.put_in_bin()
         self.counting_releases()
