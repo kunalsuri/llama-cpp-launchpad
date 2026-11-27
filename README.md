@@ -174,6 +174,10 @@ python utils/gguf.py models/MODEL.gguf --ctx 32768 --cache-type-k q8_0   # memor
 python utils/compare.py models/A.gguf models/B.gguf                      # same prompts, answers side by side
 ```
 
+`gguf.py` sizes the cache for every type llama-server lists for `--cache-type-k/-v` (f32, f16, bf16, f8_e4m3, q8_0,
+q4_0, q4_1, iq4_nl, q5_0, q5_1) and refuses any other name. "Serve all my models" adds `--sleep-idle-seconds 600`
+(llama-server sleeps after 10 idle minutes) only when your llama-server's `--help` lists it.
+
 `--discover` talks only to `huggingface.co` and reads each model's header (the first megabytes, by HTTP Range) to size
 its context cache exactly; when it cannot, the table marks the figure as a rough estimate.
 

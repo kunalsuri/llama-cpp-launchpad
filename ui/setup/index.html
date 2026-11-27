@@ -1514,6 +1514,9 @@ async function loadClients(body) {
 
 // --- All my models at one address (utils/router.py): llama-server's router mode over the models folder ----------
 let routerInfo = null, routerTimer = null, routerGen = 0;
+function idleText(r) {         // said only when the flag is in the command shown (r.idle_seconds is 0 otherwise)
+  return r && r.idle_seconds ? " After " + Math.round(r.idle_seconds / 60) + " minutes without a request llama-server goes to sleep; the next request wakes it." : "";
+}
 function renderRouter() {
   const box = $("#router-box"), r = routerInfo, c = S.chat || {};
   const kids = [];
@@ -1521,7 +1524,7 @@ function renderRouter() {
     const api = "http://127.0.0.1:" + c.port + "/v1";
     kids.push(c.state === "starting" ? h("p", {}, h("b", {}, "Starting… "), "llama-server is reading the model list.")
       : h("p", {}, h("b", {}, "Serving " + c.router.length + " models at " + api + ". "),
-        "Programs that use the OpenAI API (Open WebUI, Continue, …) ask for one by name; llama.cpp loads it then, one at a time."),
+        "Programs that use the OpenAI API (Open WebUI, Continue, …) ask for one by name; llama.cpp loads it then, one at a time." + idleText(r)),
       h("ul", { class: "reasons" }, c.router.map((n) => h("li", {}, h("code", {}, n)))),
       c.state === "running" ? clientsPanel() : null,
       h("div", { class: "actions" }, c.state === "running" ? h("a", { class: "btn small", href: c.url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open the chat") : null,
@@ -1531,7 +1534,7 @@ function renderRouter() {
       kids.push(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, c.error || "llama-server stopped.")),
         h("pre", { class: "log" }, (c.log || []).slice(-30).join("\n")));
     kids.push(h("p", {}, h("b", {}, "All my models at one address. "),
-      "One llama-server for every model here: a program asks for a model by name and llama.cpp loads it, one at a time, so only one is ever in memory."),
+      "One llama-server for every model here: a program asks for a model by name and llama.cpp loads it, one at a time, so only one is ever in memory." + idleText(r)),
       h("div", { class: "actions" }, h("button", { class: "btn small", onclick: startRouter }, icon("layers"), "Serve all my models")),
       h("p", { class: "cmd-label" }, "It runs:"), cmdRow(r.cmd));
   } else if (r && r.why && modelsData && modelsData.models.some((m) => m.kind === "model")) {

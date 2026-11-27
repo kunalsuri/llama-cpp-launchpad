@@ -14,6 +14,7 @@ sys.path.insert(0, str(HERE.parent / "utils"))
 import router  # noqa: E402
 
 HELP = (HERE / "fixtures" / "llama_server_help.txt").read_text(encoding="utf-8")
+HELP_B12810 = (HERE / "fixtures" / "llama_server_help_b12810.txt").read_text(encoding="utf-8")
 
 
 class Base(unittest.TestCase):
@@ -74,10 +75,41 @@ class TestArgs(unittest.TestCase):
     def test_router_arguments_only_when_this_llama_server_has_router_mode(self):
         import chat_server
         flags = chat_server.server_flags(HELP)
-        self.assertEqual(router.router_args("/p/x.ini", flags), (["--models-preset", "/p/x.ini", "--models-max", "1"], ""))
+        self.assertEqual(router.router_args("/p/x.ini", flags),
+                         (["--models-preset", "/p/x.ini", "--models-max", "1", "--sleep-idle-seconds", "600"], ""))
         args, why = router.router_args("/p/x.ini", {"--port"})
         self.assertEqual(args, [])
         self.assertIn("--models-preset", why)
+
+    def test_idle_sleep_is_added_only_when_help_lists_it_and_its_absence_is_recorded(self):
+        import chat_server
+        for text in (HELP, HELP_B12810):
+            flags = chat_server.server_flags(text)
+            self.assertIn("--sleep-idle-seconds", flags)
+            args, why = router.router_args("/p/x.ini", flags)
+            self.assertEqual(why, "")
+            self.assertEqual(args[-2:], ["--sleep-idle-seconds", str(router.SLEEP_IDLE_SECONDS)])
+            self.assertEqual(router.idle_sleep(flags), (router.SLEEP_IDLE_SECONDS, ""))
+        flags = {"--models-preset", "--models-max", "--port"}           # router mode, but no idle sleep
+        args, why = router.router_args("/p/x.ini", flags)
+        self.assertEqual(args, ["--models-preset", "/p/x.ini", "--models-max", "1"])
+        self.assertEqual(why, "")
+        seconds, note = router.idle_sleep(flags)
+        self.assertEqual(seconds, 0)
+        self.assertIn("--sleep-idle-seconds", note)
+        self.assertIn("not", note)
+
+    def test_idle_sleep_is_not_required_for_router_mode(self):
+        self.assertNotIn("--sleep-idle-seconds", router.NEEDS)
+
+    def test_the_hard_limit_of_one_model_stays_with_memory_margin_listed(self):
+        """--models-memory-margin is in b12810's help, but it only says "unload LRU models until a new one fits":
+        nothing there says how to pick the margin or that it works without a device, so --models-max 1 stays."""
+        import chat_server
+        args, _ = router.router_args("/p/x.ini", chat_server.server_flags(HELP_B12810))
+        self.assertIn("--models-max", args)
+        self.assertEqual(args[args.index("--models-max") + 1], "1")
+        self.assertNotIn("--models-memory-margin", args)
 
 
 if __name__ == "__main__":
