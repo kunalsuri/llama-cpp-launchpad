@@ -198,18 +198,83 @@ PRESET_ORDER = ("short", "long", "fast", "auto")
 FLAG_FOR = {"-c": "--ctx-size", "-ctk": "--cache-type-k", "-ngl": "--n-gpu-layers"}
 CTX_MIN, CTX_MAX = 256, 1048576
 
+# Extras that combine with any preset above (they do not change the context, so they are not presets):
+#   spec:  n-gram speculative decoding. The server guesses the next tokens by looking for the same words earlier in
+#          the conversation, and checks them in one go. No second model needed. It only helps when the reply copies
+#          the input (rewriting, explaining or editing code, summaries that quote); it does little for open chat.
+#          n-min / n-max / n-match are left at llama.cpp's own defaults. (--draft, --draft-max and --draft-min were
+#          removed from llama.cpp; they are never passed.)
+#   think: how long a model that thinks may think before it answers, as a token budget. "default" passes nothing
+#          (llama.cpp's own default is unrestricted). Only models that think are affected.
+SPEC_ARGS = ["--spec-type", "ngram-mod"]
+THINK_ARGS = {"default": [], "short": ["--reasoning-budget", "1024"], "off": ["--reasoning-budget", "0"]}
+THINK_ORDER = ("default", "short", "off")
+# What the setup page says about them. Plain claims only: no speed-up figure, because none was measured here (the
+# speed test runs llama-bench on a synthetic prompt and passes no llama-server flags, so it cannot show this).
+EXTRAS_INFO = {
+    "spec": {"label": "Faster replies when the answer repeats the input",
+             "text": "Helps when the reply copies from what you gave the model: rewriting a text, explaining or "
+                     "editing code, summaries that quote it. It does little for open conversation. It needs no "
+                     "second model. How much it helps depends on what you ask, and this page does not measure it: "
+                     "try it on your own task."},
+    "think": {"label": "Thinking models: think less, answer sooner",
+              "text": "Only for models that think before they answer (other models ignore it). A limit makes the "
+                      "model stop thinking sooner, so the answer comes sooner, but it can be less careful on hard "
+                      "questions.",
+              "options": {"default": ("Let the model decide", "No limit is set."),
+                          "short": ("Think briefly", "At most about 1,000 tokens (roughly 750 words) of thinking."),
+                          "off": ("Skip thinking", "The model answers straight away.")}},
+}
+
 
 def server_flags(help_text: str) -> set:
     """The long flags a llama-server --help lists. Only the flag column is read (the leading parts of a line, split
     on wide gaps, that start with a dash: "-m,    --model FNAME      model path"), so a flag named in another
-    flag's description does not count."""
+    flag's description does not count. A flag that takes one of a listed set of values ("--spec-type none,ngram-mod,
+    ...") also adds one "--spec-type=ngram-mod" entry per value, so "does this build know that value" is the same
+    membership check as "does it know that flag"."""
     flags = set()
     for line in (help_text or "").splitlines():
         for part in re.split(r"\s{2,}", line.strip()):
             if not part.startswith("-"):
                 break
             flags.update(re.findall(r"(?<![\w-])--[a-z][a-z0-9-]*", part))
+        m = re.match(r"--spec-type\s+(\S+)", line)
+        if m:                                   # the values are the first word after the flag, with or without a
+            flags.update(f"--spec-type={v}" for v in m.group(1).split(",") if v)    # description on the same line
     return flags
+
+
+def spec_why(flags: set) -> str:
+    if "--spec-type" not in flags:
+        return "This llama-server does not list --spec-type in its --help (it may be an old build)."
+    if "--spec-type=ngram-mod" not in flags:
+        listed = sorted(f.split("=", 1)[1] for f in flags if f.startswith("--spec-type="))
+        return ("This llama-server lists --spec-type but not its ngram-mod value (it lists: "
+                + (", ".join(listed) or "none") + "); it may be an old build.")
+    return ""
+
+
+def think_why(flags: set, think: str) -> str:
+    if think not in THINK_ARGS:
+        return f"Unknown thinking setting {think!r}."
+    if THINK_ARGS[think] and "--reasoning-budget" not in flags:
+        return "This llama-server does not list --reasoning-budget in its --help (it may be an old build)."
+    return ""
+
+
+def extras_unavailable(flags: set) -> dict:
+    """-> {"spec": why, "think": why}: "" when this llama-server can run the extra (the thinking limit is judged on
+    "short", which needs the same flag as "off")."""
+    return {"spec": spec_why(flags), "think": think_why(flags, "short")}
+
+
+def usable_extras(flags: set, spec, think) -> tuple:
+    """-> (spec, think) cut back to what this llama-server can run and what is a real choice. For remembered
+    settings, which must never turn into a command this build would refuse; the page and the serve scripts both use it."""
+    spec = spec is True and not spec_why(flags)
+    think = think if isinstance(think, str) and think in THINK_ARGS and not think_why(flags, think) else "default"
+    return spec, think
 
 
 def default_preset(flags: set) -> str:
@@ -218,12 +283,19 @@ def default_preset(flags: set) -> str:
     return "short" if "--ctx-size" in flags and "--fit" not in flags else "auto"
 
 
-def settings_args(preset: str, flags: set, ctx=None, gpu: bool = False, train_ctx: int = 0) -> tuple:
+def settings_args(preset: str, flags: set, ctx=None, gpu: bool = False, train_ctx: int = 0,
+                  spec: bool = False, think: str = "default") -> tuple:
     """-> (arguments for llama-server, "") or ([], why this preset cannot run here). ctx: a context length the
-    user typed, replacing the preset's. train_ctx: the model's own limit (from its header); never asked to exceed it."""
+    user typed, replacing the preset's. train_ctx: the model's own limit (from its header); never asked to exceed it.
+    spec / think: the extras above; asking for one this llama-server does not list is refused with the reason."""
     p = PRESETS.get(preset)
     if p is None:
         return [], f"Unknown setting {preset!r}."
+    if type(spec) is not bool:
+        return [], "Unknown speed-up setting."
+    why = think_why(flags, think) if isinstance(think, str) else "Unknown thinking setting."
+    if why or (spec and spec_why(flags)):
+        return [], why or spec_why(flags)
     if ctx is not None and (type(ctx) is not int or not CTX_MIN <= ctx <= CTX_MAX):
         return [], f"The context length must be a whole number from {CTX_MIN} to {CTX_MAX}."
     if p.get("gpu") and not gpu:
@@ -239,7 +311,7 @@ def settings_args(preset: str, flags: set, ctx=None, gpu: bool = False, train_ct
     missing = [FLAG_FOR[a] for a in args if a in FLAG_FOR and FLAG_FOR[a] not in flags]
     if missing:
         return [], f"This llama-server does not list {', '.join(missing)} in its --help (it may be an old build)."
-    return args, ""
+    return args + (SPEC_ARGS if spec else []) + THINK_ARGS[think], ""
 
 
 # --- The server this page runs -----------------------------------------------------------------
