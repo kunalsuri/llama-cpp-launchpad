@@ -124,7 +124,7 @@ The setup page (`ui` or `launchpad`, normally at `http://127.0.0.1:8765/`) does 
 - **Start and stop a chat** from the page, with llama-server's own output when it fails and a free port when 8080 is
   taken.
 - **Get llama.cpp** (`/#llama`): the official build for your GPU (CUDA, Vulkan or CPU) into `bin/`, verified before it
-  is kept; Homebrew on macOS.
+  is kept; Homebrew on macOS. It also tells you when a newer llama.cpp release exists (`Update available: b5123 → b5200`).
 - **Understand the result**: why a model is slow, what a quantization costs, image support for vision models.
 - **My models** (`/#models`): sizes and free disk; delete; compare two or three models on the same prompts, side by
   side (you judge the answers; there is no score); serve all of them at one address with llama.cpp's router mode.
