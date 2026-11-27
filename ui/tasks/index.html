@@ -104,6 +104,9 @@
   .history-empty[hidden], .link[hidden] { display: none; }
   .link { border-radius: 8px; padding: 6px 10px; font-size: 13px; color: var(--muted-foreground); min-height: 32px; }
   .link:hover { background: var(--secondary); color: var(--foreground); }
+  .history-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0 0 8px; font-size: 13px; }
+  .history-confirm[hidden] { display: none; }
+  .link.danger { color: var(--destructive); font-weight: 600; }
   #history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
   #history-list li { display: flex; align-items: stretch; gap: 4px; background: var(--composer); border: 1px solid var(--border); border-radius: 12px; }
   .hist-open { flex: 1; min-width: 0; text-align: left; border-radius: 11px; padding: 8px 12px; }
@@ -150,6 +153,9 @@
       <h2 id="history-title">History</h2>
       <button type="button" class="link" id="history-clear">Clear history</button>
     </div>
+    <p class="history-confirm" id="history-confirm" role="alert" hidden><span id="history-confirm-text"></span>
+      <button type="button" class="link danger" id="history-clear-yes">Yes, clear</button>
+      <button type="button" class="link" id="history-clear-no">Cancel</button></p>
     <p class="history-note" id="history-note"></p>
     <p class="history-empty" id="history-empty">Nothing yet. Finished results appear here.</p>
     <ul id="history-list"></ul>
@@ -238,6 +244,7 @@
     var list = $("history-list"); list.textContent = "";
     $("history-empty").hidden = history.length > 0;
     $("history-clear").hidden = history.length === 0;
+    $("history-confirm").hidden = true;                 // a new list means a new question: ask again
     $("history-note").textContent = saving
       ? "Saved in this browser only (the last " + HMAX + "). It is never sent anywhere."
       : "This browser is not saving history (private mode or storage is off), so these items are kept only until you close or reload this page.";
@@ -388,7 +395,14 @@
     if (!last || !navigator.clipboard) return;
     navigator.clipboard.writeText(last).then(function () { $("copy").lastChild.textContent = "Copied"; setTimeout(function () { $("copy").lastChild.textContent = "Copy"; }, 1200); }, function () {});
   };
-  $("history-clear").onclick = function () { history = []; saveHistory(); renderHistory(); };
+  // Clear asks first: nothing is removed until "Yes, clear" (there is no undo).
+  $("history-clear").onclick = function () {
+    var n = history.length;
+    $("history-confirm-text").textContent = "Clear all " + n + " item" + (n === 1 ? "" : "s") + "? This cannot be undone.";
+    $("history-clear").hidden = true; $("history-confirm").hidden = false; $("history-clear-no").focus();
+  };
+  $("history-clear-yes").onclick = function () { history = []; saveHistory(); renderHistory(); };
+  $("history-clear-no").onclick = function () { renderHistory(); $("history-clear").focus(); };
   $("file").accept = Object.keys(CODE_LANG).concat(PLAIN_EXT).map(function (x) { return "." + x; }).join(",") + ",text/*";
   $("open-file").onclick = function () { $("file").click(); };
   $("file").addEventListener("change", function () {

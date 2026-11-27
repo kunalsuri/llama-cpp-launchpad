@@ -114,8 +114,22 @@ const nothingSaved = async (page) => {
         return (await items(page)) === before - 1 && left && left.length === before - 1 && !left.some((e) => e.input.startsWith("Good morning"))
           ? "" : "after delete: " + JSON.stringify(left);
       });
-      await scenario("Clear history empties the list and the saved copy", async () => {
+      await scenario("Clear history asks first; Cancel keeps everything", async () => {
+        const before = await items(page);
         await page.click("#history-clear");
+        if (!(await page.isVisible("#history-confirm"))) return "no confirmation shown";
+        const ask = await page.textContent("#history-confirm");
+        if (!ask.includes(String(before))) return "confirmation does not say how many: " + ask;
+        const kept = await stored(page);
+        if ((await items(page)) !== before || !kept || kept.length !== before) return "cleared before confirming: " + JSON.stringify(kept);
+        await page.click("#history-clear-no");
+        if (await page.isVisible("#history-confirm")) return "confirmation still shown after Cancel";
+        const after = await stored(page);
+        if ((await items(page)) !== before || !after || after.length !== before) return "Cancel cleared: " + JSON.stringify(after);
+      });
+      await scenario("Clear history, then Yes, empties the list and the saved copy", async () => {
+        await page.click("#history-clear");
+        await page.click("#history-clear-yes");
         const left = await stored(page);
         if ((await items(page)) !== 0 || (left && left.length)) return "left: " + JSON.stringify(left);
         if (!(await page.isVisible("#history-empty"))) return "no empty-state message";

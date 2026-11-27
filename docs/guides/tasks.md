@@ -58,7 +58,7 @@ Under the answer, **History** lists your last 20 finished results. Each item sho
 the start of your text.
 
 - Click an item to put its task, option, text and answer back on the page.
-- The bin button deletes one item; **Clear history** deletes them all (there is no undo).
+- The bin button deletes one item; **Clear history** asks first, then deletes them all when you press **Yes, clear** (there is no undo).
 - Only finished answers are saved: a request that failed or that you stopped is not.
 - Text longer than 2,000 characters is saved shortened (restoring it says so).
 
