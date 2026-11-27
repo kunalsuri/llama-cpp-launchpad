@@ -202,14 +202,19 @@ class App:
         self.hw = self.ms.detect_hw()
         self.ms.save_hw(self.hw)
 
-    def llama_info(self) -> dict:
-        """What llama-server the serve scripts would use, whether it runs, and why (and how) to install one."""
+    def llama_info(self, check_update: bool = False) -> dict:
+        """What llama-server the serve scripts would use, whether it runs, and why (and how) to install one.
+        check_update adds "update": is there a newer release, and how could it be installed. That asks GitHub (cached
+        for an hour), so only /api/llama and the install route ask: /api/state is polled and never waits for it."""
         found = self.ms.find_llama_server()
         works, out = self.llama_version([found]) if found else (False, "")
         version = next((line.strip() for line in out.splitlines() if "version" in line.lower()), "") if works else ""
-        return {"found": found, "works": works, "version": version,
+        info = {"found": found, "works": works, "version": version,
                 "need": llama_install.why_install(found, works, self.hw),
                 "offer": self.installer.offer(), "job": self.installer.status()}
+        if check_update:
+            info["update"] = self.installer.update_info(found, works, out)
+        return info
 
     def llama_install(self, body: dict):
         variant = body.get("variant", "auto")
@@ -221,8 +226,11 @@ class App:
                                       "replaced while it is running."}
             if self._comparing():
                 return 409, {"error": "A model comparison is running llama-server. Install when it has finished."}
-            if not self.llama_info()["need"]:
-                return 409, {"error": "A working llama-server that can use this computer is already installed."}
+            if not self.llama_info()["need"]:                  # nothing missing: only a newer release is a reason
+                update = self.llama_info(check_update=True)["update"]
+                if not (update["status"] == "update" and update["how"] == "download"):
+                    return 409, {"error": "A working llama-server that can use this computer is already installed, "
+                                          "and there is no newer release this page can install over it."}
             return self.installer.start(variant)
 
     def close(self) -> None:
@@ -896,7 +904,7 @@ def make_handler(app: App):
                 return self.reply(200, app.chat_status((q.get("id") or [None])[0], (q.get("preset") or [None])[0],
                                                        int(ctx) if ctx.isascii() and ctx.isdigit() and len(ctx) < 9 else None))
             if url.path == "/api/llama":
-                return self.reply(200, app.llama_info())
+                return self.reply(200, app.llama_info(check_update=True))
             if url.path == "/api/models":
                 return self.reply(200, app.local_models())
             if url.path == "/api/compare":

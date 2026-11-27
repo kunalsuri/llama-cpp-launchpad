@@ -1270,6 +1270,19 @@ function llamaOffer(L) {
   return [li.install_cmd ? cmdRow(li.install_cmd) : h("p", { class: "note" }, li.install || "See the README for install steps.")];
 }
 
+// A newer release (utils/llama_install.py update_info). The button is the existing install, only for a copy in bin/; a
+// Homebrew or winget copy gets its command only when the server found that tool; any other copy gets the versions only.
+function llamaUpdate(L) {
+  const u = L.update;
+  if (!u || !L.found || !L.works) return [];
+  if (u.status === "unknown") return [h("p", { class: "muted" }, "Could not check for a newer version: " + u.reason)];
+  if (u.status === "up-to-date") return [h("p", { class: "muted" }, "Up to date: b" + u.installed + ".")];
+  const parts = [h("p", {}, h("b", {}, "Update available: b" + u.installed + " → b" + u.latest))];
+  if (u.how === "download" && !L.need) parts.push(h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => installLlama("auto") }, icon("download"), "Update llama.cpp")));
+  else if (u.cmd) parts.push(h("p", { class: "cmd-label" }, "To update, run:"), cmdRow(u.cmd));
+  return parts;
+}
+
 function llamaJob(L) {
   const j = L.job || {};
   const log = j.log && j.log.length ? h("details", { class: "terminal", open: j.state === "failed" ? "" : null },
@@ -1303,7 +1316,10 @@ function renderLlama(L) {
   const parts = [llamaWhy(L)];
   const active = LLAMA_BUSY.includes(j.state) || j.state === "done" || j.state === "failed";
   if (active) parts.push(...[].concat(llamaJob(L)));
-  else if (L.need) parts.push(...llamaOffer(L));
+  else {
+    parts.push(...llamaUpdate(L));
+    if (L.need) parts.push(...llamaOffer(L));
+  }
   $("#llama-body").replaceChildren(...parts.filter(Boolean));
 }
 
