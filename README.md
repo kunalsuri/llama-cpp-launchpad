@@ -140,8 +140,8 @@ Every command the page shows is for your OS and uses only programs it found.
 | Interface | What it is |
 | --- | --- |
 | **llama.cpp Default** | llama.cpp's own built-in web chat. |
-| **Translation** | Language pairs, swap, formal or informal register, temperature. One self-contained HTML file. |
-| **Tasks** | *Summarize* (bullets, paragraph, detailed), *Explain code* (beginner or developer, with likely bugs), *Rewrite* (plainer, more formal, friendlier, shorter). One self-contained HTML file. |
+| **Translation** | Language pairs, swap, formal or informal register, temperature, and a History of your last 20 translations (kept in this browser only). One self-contained HTML file. |
+| **Tasks** | *Summarize* (bullets, paragraph, detailed), *Explain code* (beginner or developer, with likely bugs), *Rewrite* (plainer, more formal, friendlier, shorter). Open a text or code file (up to 1 MB) or drop it on the box; a History of your last 20 results (kept in this browser only). One self-contained HTML file. |
 
 Small models (around 1B) translate roughly; 4B and up do much better.
 

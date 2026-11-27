@@ -125,6 +125,40 @@ class TestBrowser(tui.UiBase):
         self.assertEqual(done.returncode, 0, done.stderr)
 
 
+def run_page_check(script: str, page: str, *mode: str) -> "tuple[list, subprocess.CompletedProcess]":
+    done = subprocess.run(["node", str(HERE / script), str(ROOT / "ui" / page / "index.html"), *mode],
+                          cwd=str(ROOT), env=node_env(), capture_output=True, text=True, timeout=300)
+    rows = [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")]
+    return rows, done
+
+
+class TestPageHistoryAndFiles(unittest.TestCase):
+    """History (Translation and Tasks) and Open file (Tasks), in real Chromium against a stand-in llama-server."""
+
+    def setUp(self):
+        # Same reason as TestBrowser above; written as skipTest so the suite's few-skips budget (test_harness) stays at one.
+        if not READY:
+            self.skipTest("needs node + playwright with chromium: npm ci && npx playwright install chromium")
+
+    def check_rows(self, rows, done, minimum):
+        self.assertGreaterEqual(len(rows), minimum, done.stdout + done.stderr)
+        failed = [f"{r['name']}: {r['detail']}" for r in rows if not r["ok"]]
+        self.assertEqual(failed, [], "\n".join(failed))
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_tasks_history_in_a_real_browser(self):
+        rows, done = run_page_check("tasks_check.js", "tasks", "history")
+        self.check_rows(rows, done, 19)
+
+    def test_tasks_open_file_in_a_real_browser(self):
+        rows, done = run_page_check("tasks_check.js", "tasks", "file")
+        self.check_rows(rows, done, 17)
+
+    def test_translation_history_in_a_real_browser(self):
+        rows, done = run_page_check("translation_check.js", "translation")
+        self.check_rows(rows, done, 22)
+
+
 class TestBrowserRequired(unittest.TestCase):
     def test_ci_browser_job_cannot_pass_by_skipping(self):
         """The CI `browser` job sets LP_REQUIRE_BROWSER=1: there, a missing browser is a failure, not a skip."""
