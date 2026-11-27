@@ -261,9 +261,10 @@ UPGRADE_CMD = {"brew": "brew upgrade llama.cpp", "winget": "winget upgrade ggml.
 
 
 def build_number(text: str):
-    """`version: 5123 (abc1234)` -> 5123. None when the output has no such line: a version is never guessed."""
-    m = re.search(r"^\s*version:\s*(\d+)\s*\(", text or "", re.M | re.I)
-    return int(m.group(1)) if m else None
+    """`version: 5123 (abc1234)` (old) or `Version: 1.1.0-dev (build 12810, commit ca123ba)` (v1.x) -> the build number.
+    None when the output has neither: a version is never guessed (1.1.0 is not a build number)."""
+    m = re.search(r"^\s*version:\s*(?:(\d+)\s*\(|[^\n(]*\(\s*build\s+(\d+)\s*[,)])", text or "", re.M | re.I)
+    return int(m.group(1) or m.group(2)) if m else None
 
 
 def tag_number(tag):

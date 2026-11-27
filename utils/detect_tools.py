@@ -133,7 +133,7 @@ def spec_llamacpp(p: Probe) -> dict:
     return dict(id="llama-cpp", label="llama.cpp", path_names=names, env_file="LLAMA_SERVER",
                 exe_paths=[j(d, _exe(p, n)) for d in dirs for n in names],
                 app_globs=[], packages=["llama-cpp-python"], data_dirs=[],
-                version_args=["--version"], version_re=r"version:\s*([^\n]+)")
+                version_args=["--version"], version_re=r"(?i)version:\s*([^\n]+)")   # `version: 5123 (abc)` and `Version: 1.1.0-dev (build 12810, commit abc)`
 
 
 def spec_lmstudio(p: Probe) -> dict:

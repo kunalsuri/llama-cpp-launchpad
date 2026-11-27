@@ -33,8 +33,10 @@ _STRING, _ARRAY = 8, 9
 
 # Bytes per cached element for each llama-server --cache-type-k / --cache-type-v value. Quantized types store
 # blocks of 32 values: q8_0 = 32 bytes + a 2-byte scale, q4_0 = 16 + 2, q4_1 = 16 + 2 + 2, q5_0 = 20 + 2, ...
-CACHE_TYPES = {"f32": 4.0, "f16": 2.0, "bf16": 2.0, "q8_0": 34 / 32, "q4_0": 18 / 32, "q4_1": 20 / 32,
-               "iq4_nl": 18 / 32, "q5_0": 22 / 32, "q5_1": 24 / 32}
+# f8_e4m3 is an 8-bit float: one byte per value. This is exactly the list llama-server b12810 prints for -ctk / -ctv;
+# a type that is not here is refused, never guessed.
+CACHE_TYPES = {"f32": 4.0, "f16": 2.0, "bf16": 2.0, "f8_e4m3": 1.0, "q8_0": 34 / 32, "q4_0": 18 / 32,
+               "q4_1": 20 / 32, "iq4_nl": 18 / 32, "q5_0": 22 / 32, "q5_1": 24 / 32}
 
 
 class GGUFError(ValueError):

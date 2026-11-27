@@ -47,8 +47,9 @@ llama-server -m MODELS_DIR/MODEL --port PORT [--path ui/INTERFACE] [--mmproj PRO
 - `--path` serves the Translation or Tasks page instead of llama.cpp's own.
 - `--mmproj`: when a vision projector downloaded from the same Hugging Face repository as the model is in the models
   folder, and your `llama-server` lists `--mmproj` in its `--help`. The script says which it did.
-- *Saved settings*: the settings you started this model with on the setup page (the presets). They come before
-  `EXTRA_ARGS`, so a flag you set there wins.
+- *Saved settings*: the settings you started this model with on the setup page (the presets, and the optional extras
+  `--spec-type ngram-mod` and `--reasoning-budget`). They come before `EXTRA_ARGS`, so a flag you set there wins. A
+  saved extra your `llama-server` does not list in `--help` is left out, and the rest are kept.
 
 ## Settings
 

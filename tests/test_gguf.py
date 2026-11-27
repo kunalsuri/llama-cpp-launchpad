@@ -148,6 +148,32 @@ class TestMemory(unittest.TestCase):
         with self.assertRaises(ValueError):
             gguf.kv_cache_bytes(self.s, 8192, "q3_k")
 
+    def test_every_cache_type_llama_server_b12810_lists_is_sized(self):
+        """The -ctk / -ctv list of the real b12810 --help, and ggml's bytes per 32-value block (bf16, f8_e4m3: per value)."""
+        import re
+        text = (FIX / "llama_server_help_b12810.txt").read_text(encoding="utf-8")
+        listed = re.search(r"--cache-type-k TYPE.*?allowed values: ([^\n]+\n[^\n(]+)", text, re.S).group(1)
+        types = [t.strip() for t in listed.replace("\n", " ").split(",")]
+        self.assertEqual(types, ["f32", "f16", "bf16", "f8_e4m3", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"])
+        per_32 = {"f32": 128, "f16": 64, "bf16": 64, "f8_e4m3": 32, "q8_0": 34, "q4_0": 18, "q4_1": 20,
+                  "iq4_nl": 18, "q5_0": 22, "q5_1": 24}
+        for t in types:
+            # llama-shape: 128 KiB per token at f16 for K+V together = 64 KiB each; at 8192 tokens K alone is 512 MiB (f16)
+            self.assertEqual(gguf.kv_cache_bytes(self.s, 8192, t, "f16"), 512 * MB * per_32[t] // 64 + 512 * MB, t)
+            self.assertEqual(gguf.kv_cache_bytes(self.s, 8192, "f16", t), 512 * MB + 512 * MB * per_32[t] // 64, t)
+
+    def test_f8_e4m3_is_one_byte_per_value(self):
+        self.assertEqual(gguf.kv_cache_bytes(self.s, 8192, "f8_e4m3", "f8_e4m3"), 512 * MB)
+
+    def test_an_unknown_cache_type_is_refused_with_the_known_ones_named(self):
+        for bad in ("q3_k", "F16", "f8_e5m2", ""):
+            with self.assertRaises(ValueError) as cm:
+                gguf.kv_cache_bytes(self.s, 8192, "f16", bad)
+            self.assertIn(repr(bad), str(cm.exception))
+            self.assertIn("f8_e4m3", str(cm.exception))
+        with self.assertRaises(ValueError):
+            gguf.estimate(self.s, 0, 8192, "q9_9")
+
     def test_context_zero_means_the_trained_context_as_llama_server_does(self):
         e = gguf.estimate(self.s, 4 * 1024 * MB, 0)
         self.assertEqual(e["ctx"], 131072)

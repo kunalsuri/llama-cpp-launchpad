@@ -19,6 +19,13 @@ import local_models
 PRESET_NAME = ".launchpad-models.ini"
 SAFE_NAME = re.compile(r"[A-Za-z0-9._-]+")
 NEEDS = ("--models-preset", "--models-max")
+# Optional (not in NEEDS): "--sleep-idle-seconds SECONDS: number of seconds of idleness after which the server will
+# sleep (default: -1; -1 = disabled)". Used only when --help lists it.
+SLEEP_FLAG = "--sleep-idle-seconds"
+SLEEP_IDLE_SECONDS = 600
+# --models-memory-margin N ("MiB of device memory to keep free per device, unload LRU models until a new one fits",
+# default 0 = disabled) is deliberately NOT used in place of --models-max 1: the help gives no way to choose N or to
+# know the device memory, so several models staying loaded could not be promised to fit.
 
 
 def _name(stem: str, taken: set) -> str:
@@ -69,4 +76,16 @@ def router_args(preset_path, flags: set) -> tuple:
     if missing:
         return [], (f"This llama-server does not list {', '.join(missing)} in its --help: serving several models "
                     "needs a newer llama.cpp.")
-    return ["--models-preset", str(preset_path), "--models-max", "1"], ""
+    args = ["--models-preset", str(preset_path), "--models-max", "1"]
+    if idle_sleep(flags)[0]:
+        args += [SLEEP_FLAG, str(SLEEP_IDLE_SECONDS)]
+    return args, ""
+
+
+def idle_sleep(flags: set) -> tuple:
+    """-> (seconds of idleness before llama-server sleeps, "") when this llama-server lists --sleep-idle-seconds in its
+    --help, else (0, why it is not used). Optional: router mode works without it (rule 5: a miss is said, too)."""
+    if SLEEP_FLAG in flags:
+        return SLEEP_IDLE_SECONDS, ""
+    return 0, (f"This llama-server does not list {SLEEP_FLAG} in its --help, so it is not used: "
+               "the model stays in memory until you stop the server.")

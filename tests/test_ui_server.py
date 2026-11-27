@@ -857,6 +857,117 @@ class TestChatApi(UiBase):
         self.assertEqual(status, 409)
         self.assertIn("--ctx-size", body["error"])
 
+    # --- extras: n-gram speculation and the thinking limit combine with every preset ---
+    B12810 = (HERE / "fixtures" / "llama_server_help_b12810.txt").read_text(encoding="utf-8")
+
+    def use_help(self, text):
+        """Make this llama-server's --help say `text` (the page asks the program; so the page must follow it)."""
+        self.app.chat.help = lambda argv: text
+        self.app.chat._flags.clear()
+
+    def test_the_extras_are_offered_with_their_wording_and_off_by_default(self):
+        self.download()
+        for build in (None, self.B12810):          # the older fixture the fake prints, and the real b12810 text
+            with self.subTest(build="fake" if build is None else "b12810"):
+                if build:
+                    self.use_help(build)
+                p = self.preview()
+                self.assertEqual((p["spec"], p["think"]), (False, "default"))
+                e = p["extras"]
+                self.assertTrue(e["spec"]["available"], e["spec"])
+                self.assertEqual(e["spec"]["why"], "")
+                self.assertIn("Faster replies when the answer repeats the input", e["spec"]["label"])
+                text = e["spec"]["text"]
+                for honest in ("copies", "open conversation", "does not measure"):
+                    self.assertIn(honest, text)
+                self.assertNotRegex(text, r"\d+\s*(x|%|times)", "no speed-up figure is claimed")
+                self.assertEqual([o["id"] for o in e["think"]["options"]], ["default", "short", "off"])
+                self.assertIn("only for models that think", e["think"]["text"].lower())
+                self.assertTrue(e["think"]["available"], e["think"])
+
+    def test_every_preset_command_carries_the_extras_chosen(self):
+        self.download()
+        p = self.preview("&preset=long&spec=1&think=short")
+        self.assertEqual((p["preset"], p["spec"], p["think"]), ("long", True, "short"))
+        for row in p["presets"]:
+            if row["available"]:
+                self.assertIn("--spec-type ngram-mod", row["cmd"], row["id"])
+                self.assertIn("--reasoning-budget 1024", row["cmd"], row["id"])
+        self.assertIn("--spec-type ngram-mod --reasoning-budget 1024", p["cmd"])
+        off = self.preview("&preset=long&spec=0&think=default")
+        self.assertNotIn("--spec-type", off["cmd"])
+        self.assertNotIn("--reasoning-budget", off["cmd"])
+        self.assertNotIn("--spec-type", " ".join(x.get("cmd", "") for x in off["presets"]))
+
+    def test_an_extra_this_build_lacks_is_unavailable_with_a_reason_and_never_in_the_command(self):
+        self.download()
+        no_ngram = self.B12810.replace("ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache", "ngram-simple,ngram-cache")
+        self.assertNotEqual(no_ngram, self.B12810)
+        no_budget = "\n".join(line for line in self.B12810.splitlines() if "--reasoning-budget" not in line)
+        for name, text, spec_why, think_why in (
+                ("no ngram-mod", no_ngram, "ngram-mod", ""),
+                ("no --reasoning-budget", no_budget, "", "--reasoning-budget"),
+                ("neither flag", "-m, --model FNAME  model\n--ctx-size N  context\n--port PORT  port\n", "--spec-type", "--reasoning-budget")):
+            with self.subTest(build=name):
+                self.use_help(text)
+                p = self.preview("&preset=short&spec=1&think=short")
+                e = p["extras"]
+                self.assertEqual((not e["spec"]["available"], not e["think"]["available"]), (bool(spec_why), bool(think_why)))
+                self.assertIn(spec_why, e["spec"]["why"])
+                self.assertIn(think_why, e["think"]["why"])
+                self.assertNotIn("--spec-type", p["cmd"] if spec_why else "")
+                self.assertNotIn("--reasoning-budget", p["cmd"] if think_why else "")
+                self.assertTrue(all(not (spec_why and "--spec-type" in x.get("cmd", "")) for x in p["presets"]))
+                self.assertEqual(p["spec"], not spec_why, "what is shown as on is what the command has")
+
+    def test_start_with_the_extras_passes_them_and_remembers_them_for_that_model(self):
+        self.download()
+        status, body = self.post("/api/chat/start", {"id": self.top["id"], "preset": "short", "spec": True, "think": "off"})
+        self.assertEqual(status, 202, body)
+        self.assertIn("--spec-type ngram-mod --reasoning-budget 0", body["cmd"])
+        s = self.wait_chat("running")
+        self.assertTrue(any('"--spec-type", "ngram-mod", "--reasoning-budget", "0"' in line for line in s["log"]), s["log"])
+        self.post("/api/chat/stop", {})
+        self.assertEqual(ms.load_profile(self.model_path().name),
+                         {"preset": "short", "ctx": None, "spec": True, "think": "off"})
+        p = self.preview()
+        self.assertEqual((p["preset"], p["spec"], p["think"]), ("short", True, "off"), "remembered for next time")
+        self.assertEqual(self.preview("&preset=short&spec=0&think=default")["spec"], False, "a choice on the page still wins")
+
+    def test_a_remembered_extra_the_build_no_longer_lists_is_shown_off_with_the_reason(self):
+        self.download()
+        ms.save_profile(self.model_path().name, "short", None, spec=True, think="short")
+        self.use_help("-m, --model FNAME  model\n--ctx-size N  context\n--port PORT  port\n")
+        p = self.preview()
+        self.assertEqual((p["preset"], p["spec"], p["think"]), ("short", False, "default"))
+        self.assertNotIn("--spec-type", p["cmd"])
+        self.assertIn("--spec-type", p["extras"]["spec"]["why"])
+
+    def test_extras_the_page_cannot_make_up_are_refused(self):
+        self.download()
+        for body, code in (({"spec": "yes"}, 400), ({"spec": 1}, 400), ({"think": "rm -rf"}, 400), ({"think": 3}, 400),
+                           ({"think": "--reasoning-budget 5"}, 400), ({"spec": True, "think": "short"}, 202)):
+            with self.subTest(body=body):
+                status, out = self.post("/api/chat/start", dict(body, id=self.top["id"]))
+                self.assertEqual(status, code, out)
+                if code == 202:
+                    self.post("/api/chat/stop", {})
+                    self.wait_chat("stopped")
+        self.assertEqual(self.preview("&preset=short&spec=7&think=%3B%20rm")["spec"], False,
+                         "junk in the address is ignored, not passed on")
+        self.assertEqual(self.preview("&preset=short&think=%3B%20rm")["think"], "default")
+
+    def test_start_is_refused_with_the_reason_when_the_build_lacks_an_extra(self):
+        self.download()
+        self.use_help("-m, --model FNAME  model\n--ctx-size N  context\n--port PORT  port\n")
+        status, body = self.post("/api/chat/start", {"id": self.top["id"], "preset": "short", "spec": True})
+        self.assertEqual(status, 409)
+        self.assertIn("--spec-type", body["error"])
+        status, body = self.post("/api/chat/start", {"id": self.top["id"], "preset": "short", "think": "off"})
+        self.assertEqual(status, 409)
+        self.assertIn("--reasoning-budget", body["error"])
+        self.assertEqual(self.app.chat.status()["state"], "idle")
+
     # --- remembered settings, and what to type into other programs ---
     def test_the_settings_a_chat_was_started_with_are_remembered_for_that_model(self):
         self.download()
@@ -867,7 +978,8 @@ class TestChatApi(UiBase):
         p = self.preview()
         self.assertEqual((p["preset"], p["ctx"]), ("long", 6000))
         self.assertIn("-c 6000 -ctk q8_0", p["cmd"])
-        self.assertEqual(ms.load_profile(self.model_path().name), {"preset": "long", "ctx": 6000})
+        self.assertEqual(ms.load_profile(self.model_path().name),
+                         {"preset": "long", "ctx": 6000, "spec": False, "think": "default"})
         self.assertEqual(self.preview("&preset=short")["preset"], "short", "a choice on the page still wins")
 
     def test_other_programs_get_the_address_and_model_of_the_running_chat(self):
@@ -1181,6 +1293,36 @@ class TestRouterApi(UiBase):
         self.assertIn("--models-preset", r["cmd"])
         self.assertIn("--models-max 1", r["cmd"])
         self.assertNotIn(" -m ", r["cmd"])
+
+    def test_idle_sleep_is_offered_and_described_only_when_this_llama_server_lists_it(self):
+        r = self.get_json("/api/router")
+        self.assertIn("--sleep-idle-seconds 600", r["cmd"])
+        self.assertEqual(r["idle_seconds"], 600)
+        self.assertEqual(r["idle_why"], "")
+        b12810 = (HERE / "fixtures" / "llama_server_help_b12810.txt").read_text(encoding="utf-8")
+        self.app.chat.help = lambda argv: b12810
+        self.app.chat._flags.clear()
+        self.assertEqual(self.get_json("/api/router")["idle_seconds"], 600)
+        # a build with router mode but no --sleep-idle-seconds: works as before, says why, nothing is claimed
+        self.app.chat.help = lambda argv: "".join(
+            ln + "\n" for ln in b12810.splitlines() if "sleep-idle" not in ln and not ln.startswith(" " * 20 + "(default: -1; -1"))
+        self.app.chat._flags.clear()
+        r = self.get_json("/api/router")
+        self.assertTrue(r["available"], r)
+        self.assertNotIn("--sleep-idle-seconds", r["cmd"])
+        self.assertIn("--models-max 1", r["cmd"])
+        self.assertEqual(r["idle_seconds"], 0)
+        self.assertIn("--sleep-idle-seconds", r["idle_why"])
+        status, body = self.post("/api/router/start", {})
+        self.assertEqual(status, 202, body)
+        log = "\n".join(self.get_json("/api/chat")["chat"]["log"])
+        self.assertIn("--sleep-idle-seconds", log, "the miss is logged (rule 5)")
+
+    def test_the_hit_is_logged_too(self):
+        status, body = self.post("/api/router/start", {})
+        self.assertEqual(status, 202, body)
+        log = "\n".join(self.get_json("/api/chat")["chat"]["log"])
+        self.assertIn("--sleep-idle-seconds 600", log)
 
     def test_start_writes_the_preset_and_runs_the_router(self):
         status, body = self.post("/api/router/start", {})
