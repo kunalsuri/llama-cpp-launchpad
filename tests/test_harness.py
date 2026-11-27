@@ -129,16 +129,25 @@ class TestServeMenuSplitModels(unittest.TestCase):
         # A stand-in llama-server: --help lists --mmproj and --ctx-size (as real builds do); anything else prints its
         # arguments. The settings file is this test's own, never the developer's .launchpad-state.
         self.state = self.tmp / "state"
+        self.write_server()
+
+    def write_server(self, extras=False):
+        """The stand-in llama-server. extras: its --help also lists --spec-type (with ngram-mod) and --reasoning-budget."""
+        lines = ["-mm,   --mmproj FILE      path to a multimodal projector file",
+                 "-c,    --ctx-size N      size of the prompt context"]
+        if extras:
+            lines += ["--spec-type none,ngram-simple,ngram-mod      types of speculative decoding to use",
+                      "--reasoning-budget N      token budget for thinking"]
         if sys.platform == "win32":
             self.server = self.tmp / "llama-server.cmd"
-            self.server.write_text('@echo off\r\nif "%~1"=="--help" (\r\n  echo -mm,   --mmproj FILE      path to a '
-                                   'multimodal projector file\r\n  echo -c,    --ctx-size N      size of the prompt context'
-                                   '\r\n  exit /b 0\r\n)\r\necho SERVED %*\r\n', encoding="utf-8")
+            body = "".join(f"  echo {line}\r\n" for line in lines)
+            self.server.write_text('@echo off\r\nif "%~1"=="--help" (\r\n' + body + '  exit /b 0\r\n)\r\necho SERVED %*\r\n',
+                                   encoding="utf-8")
         else:
             self.server = self.tmp / "llama-server"
-            self.server.write_text('#!/bin/sh\nif [ "$1" = "--help" ]; then echo "-mm,   --mmproj FILE      path to a '
-                                   'multimodal projector file"; echo "-c,    --ctx-size N      size of the prompt context";'
-                                   ' exit 0; fi\necho SERVED "$@"\n', encoding="utf-8")
+            echoes = "; ".join(f'echo "{line}"' for line in lines)
+            self.server.write_text('#!/bin/sh\nif [ "$1" = "--help" ]; then ' + echoes + '; exit 0; fi\necho SERVED "$@"\n',
+                                   encoding="utf-8")
             self.server.chmod(0o755)
 
     def serve(self, choice, ui="default", stdin_extra=""):
@@ -183,6 +192,24 @@ class TestServeMenuSplitModels(unittest.TestCase):
         self.assertTrue(served.rstrip().endswith("--port 8080 -c 6000"), served)
         _, out = self.served(1)
         self.assertNotIn(" -c ", next(line for line in out.splitlines() if "SERVED" in line), "only for that model")
+
+    def test_the_extras_saved_for_a_model_reach_llama_server_before_extra_args(self):
+        """n-gram speculation and the thinking limit are remembered with the preset. The launcher passes them only
+        when this llama-server lists the flags; a build that does not still gets the rest (the context length)."""
+        self.state.write_text('chat_profiles={"b-Q4_K_M.gguf": {"preset": "short", "ctx": 6000, "spec": true, '
+                              '"think": "short"}}\n', encoding="utf-8")
+        _, out = self.served(2)
+        served = next(line for line in out.splitlines() if "SERVED" in line)
+        self.assertTrue(served.rstrip().endswith("--port 8080 -c 6000"), served)
+        self.assertNotIn("--spec-type", served, "this stand-in's --help does not list it: not passed (rule 3)")
+        self.assertNotIn("--reasoning-budget", served)
+        self.write_server(extras=True)
+        rc, out = self.served(2)
+        served = next(line for line in out.splitlines() if "SERVED" in line)
+        self.assertTrue(served.rstrip().endswith("--port 8080 -c 6000 --spec-type ngram-mod --reasoning-budget 1024"), served)
+        self.assertEqual(rc, 0)
+        _, out = self.served(1)
+        self.assertNotIn("--spec-type", out, "only for that model")
 
     def test_each_interface_serves_its_own_folder(self):
         """UI=tasks / UI=translation serve that page with --path; the default serves llama.cpp's own chat."""

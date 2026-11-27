@@ -43,6 +43,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import chat_server
 import gguf
 import hf_discover
 from hardware import Hw, detect_hw, find_llama_server, run_cmd
@@ -674,23 +675,28 @@ def _profiles() -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def save_profile(model_name: str, preset: str, ctx) -> None:
+def save_profile(model_name: str, preset: str, ctx, spec: bool = False, think: str = "default") -> None:
+    """Remember what a chat was started with, as ids (never as flags: those are rebuilt, and re-checked, each time)."""
     profiles = _profiles()
-    profiles[model_name] = {"preset": preset, "ctx": ctx if type(ctx) is int else None}
+    profiles[model_name] = {"preset": preset, "ctx": ctx if type(ctx) is int else None,
+                            "spec": spec is True, "think": think if think in chat_server.THINK_ARGS else "default"}
     state_set("chat_profiles", json.dumps(profiles, sort_keys=True))
 
 
 def load_profile(model_name: str):
+    """-> {"preset", "ctx", "spec", "think"} or None. Records from before the extras existed load with them off."""
     p = _profiles().get(model_name)
     if not isinstance(p, dict) or not isinstance(p.get("preset"), str):
         return None
-    return {"preset": p["preset"], "ctx": p["ctx"] if type(p.get("ctx")) is int else None}
+    think = p.get("think")
+    return {"preset": p["preset"], "ctx": p["ctx"] if type(p.get("ctx")) is int else None,
+            "spec": p.get("spec") is True, "think": think if isinstance(think, str) and think in chat_server.THINK_ARGS else "default"}
 
 
 def profile_args(model_name: str) -> list:
     """The remembered settings of a model as llama-server arguments, checked against the llama-server found now:
-    [] when there are none, or when this llama-server would not accept them (rule 3). Used by the serve scripts."""
-    import chat_server
+    [] when there are none, or when this llama-server would not accept them (rule 3). An extra (n-gram speculation,
+    the thinking limit) this llama-server does not list is left out and the rest kept. Used by the serve scripts."""
     p = load_profile(model_name)
     server = find_llama_server() if p else ""
     if not server:
@@ -701,7 +707,8 @@ def profile_args(model_name: str) -> list:
     path = models_dir() / Path(model_name).name
     info = gguf.describe(path) if path.is_file() else {}
     train = info["shape"]["train_ctx"] if "shape" in info else 0
-    args, why = chat_server.settings_args(p["preset"], flags, p["ctx"], gpu, train)
+    spec, think = chat_server.usable_extras(flags, p["spec"], p["think"])
+    args, why = chat_server.settings_args(p["preset"], flags, p["ctx"], gpu, train, spec, think)
     return [] if why else args
 
 

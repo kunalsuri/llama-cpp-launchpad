@@ -135,6 +135,30 @@ class TestCommand(Base):
 
 HELP = (HERE / "fixtures" / "llama_server_help.txt").read_text(encoding="utf-8")
 OLD_HELP = "-m,    --model FNAME       model path\n--port PORT                 port to listen\n"
+# The real --help of the official b12810 build. Note: the older fixture above also lists --spec-type and
+# --reasoning-budget, so "this build lacks them" needs help text made on purpose (the helpers below).
+B12810 = (HERE / "fixtures" / "llama_server_help_b12810.txt").read_text(encoding="utf-8")
+
+
+def without_ngram_mod(text: str) -> str:
+    """--spec-type is listed, but ngram-mod is not one of its values. Only the value list is edited: the
+    --spec-ngram-mod-n-* flags and the removed --draft lines also say "ngram-mod", so a substring check on the whole
+    help text would give the wrong answer."""
+    out = re.sub(r"(?m)^(--spec-type \S*?),ngram-mod\b", r"\1", text)
+    assert out != text
+    return out
+
+
+def without_flag(text: str, flag: str) -> str:
+    """The help text with the lines of one flag (its line and its indented description) removed."""
+    out, skipping = [], False
+    for line in text.splitlines():
+        if line.startswith("-"):
+            skipping = re.match(rf"(-\w+,\s+)?{re.escape(flag)}\b", line) is not None
+        if not skipping:
+            out.append(line)
+    assert len(out) < len(text.splitlines())
+    return "\n".join(out) + "\n"
 
 
 class TestSettings(Base):
@@ -186,6 +210,84 @@ class TestSettings(Base):
         no_fit = chat_server.server_flags(HELP.replace("--fit [on|off]", "--nofit-here"))
         self.assertEqual(chat_server.default_preset(no_fit), "short")
         self.assertEqual(chat_server.default_preset(set()), "auto", "nothing can be set: nothing is passed")
+
+    # --- extras that combine with any preset: n-gram speculation and the thinking budget ---
+    def test_the_values_of_spec_type_are_read_whether_or_not_the_description_shares_the_line(self):
+        """b12810 puts the value list alone on the line; the older fixture follows it with the description."""
+        for name, text in (("b12810", B12810), ("older", HELP)):
+            with self.subTest(build=name):
+                flags = chat_server.server_flags(text)
+                self.assertIn("--spec-type", flags)
+                self.assertIn("--spec-type=ngram-mod", flags)
+                self.assertIn("--spec-type=none", flags)
+                self.assertNotIn("--spec-type=comma-separated", flags, "the description is not a value")
+        self.assertEqual({f for f in chat_server.server_flags(OLD_HELP) if f.startswith("--spec-type")}, set())
+
+    def test_spec_type_without_ngram_mod_does_not_count_as_ngram_mod(self):
+        text = without_ngram_mod(B12810)
+        self.assertIn("--spec-ngram-mod-n-max", text, "the other lines that say ngram-mod are still there")
+        flags = chat_server.server_flags(text)
+        self.assertIn("--spec-type", flags)
+        self.assertNotIn("--spec-type=ngram-mod", flags)
+        self.assertIn("--spec-type=ngram-simple", flags)
+
+    def test_the_toggle_adds_spec_type_ngram_mod_to_any_preset(self):
+        flags = chat_server.server_flags(B12810)
+        args = lambda p, **kw: chat_server.settings_args(p, flags, **kw)  # noqa: E731
+        self.assertEqual(args("short", spec=True), (["-c", "4096", "--spec-type", "ngram-mod"], ""))
+        self.assertEqual(args("long", spec=True), (["-c", "32768", "-ctk", "q8_0", "--spec-type", "ngram-mod"], ""))
+        self.assertEqual(args("fast", gpu=True, spec=True)[0][-2:], ["--spec-type", "ngram-mod"])
+        self.assertEqual(args("auto", spec=True), (["--spec-type", "ngram-mod"], ""))
+        self.assertEqual(args("short", spec=False), (["-c", "4096"], ""), "off: nothing is added")
+        everything = " ".join(a for p in chat_server.PRESETS for a in args(p, gpu=True, spec=True, think="short")[0])
+        for removed in ("--draft", "--draft-max", "--draft-min"):
+            self.assertNotIn(removed, everything.split(), "removed from llama.cpp: never passed")
+
+    def test_the_thinking_choices_map_to_a_reasoning_budget(self):
+        flags = chat_server.server_flags(B12810)
+        args = lambda **kw: chat_server.settings_args("short", flags, **kw)  # noqa: E731
+        self.assertEqual(args(think="default"), (["-c", "4096"], ""), "the model's own way: no flag")
+        self.assertEqual(args(think="short"), (["-c", "4096", "--reasoning-budget", "1024"], ""))
+        self.assertEqual(args(think="off"), (["-c", "4096", "--reasoning-budget", "0"], ""))
+        self.assertEqual(args(spec=True, think="off")[0][-4:], ["--spec-type", "ngram-mod", "--reasoning-budget", "0"])
+        _, why = args(think="rm -rf")
+        self.assertIn("thinking", why)
+
+    def test_an_extra_this_llama_server_cannot_run_says_what_is_missing(self):
+        """Rule 3: never a command with a flag this build does not list. The reason names the flag, and for
+        --spec-type the values it did list (rule 5)."""
+        no_flag = chat_server.server_flags(OLD_HELP + "--ctx-size N  context\n")
+        args, why = chat_server.settings_args("short", no_flag, spec=True)
+        self.assertEqual(args, [])
+        self.assertIn("--spec-type", why)
+        no_value = chat_server.server_flags(without_ngram_mod(B12810))
+        args, why = chat_server.settings_args("short", no_value, spec=True)
+        self.assertEqual(args, [])
+        self.assertIn("ngram-mod", why)
+        self.assertIn("ngram-simple", why, "says which values it did find")
+        no_budget = chat_server.server_flags(without_flag(B12810, "--reasoning-budget"))
+        self.assertNotIn("--reasoning-budget", no_budget)
+        for think in ("short", "off"):
+            args, why = chat_server.settings_args("short", no_budget, think=think)
+            self.assertEqual((args, "--reasoning-budget" in why), ([], True))
+        self.assertEqual(chat_server.settings_args("short", no_budget)[0], ["-c", "4096"], "not asked: not needed")
+
+    def test_extras_are_offered_per_build_with_a_reason_when_not(self):
+        both = chat_server.server_flags(B12810)
+        self.assertEqual(chat_server.extras_unavailable(both), {"spec": "", "think": ""})
+        none = chat_server.extras_unavailable(chat_server.server_flags(OLD_HELP))
+        self.assertIn("--spec-type", none["spec"])
+        self.assertIn("--reasoning-budget", none["think"])
+        self.assertIn("ngram-mod", chat_server.extras_unavailable(chat_server.server_flags(without_ngram_mod(B12810)))["spec"])
+
+    def test_remembered_extras_are_cut_back_to_what_this_build_can_run(self):
+        both = chat_server.server_flags(B12810)
+        self.assertEqual(chat_server.usable_extras(both, True, "short"), (True, "short"))
+        none = chat_server.server_flags(OLD_HELP)
+        self.assertEqual(chat_server.usable_extras(none, True, "short"), (False, "default"))
+        no_value = chat_server.server_flags(without_ngram_mod(B12810))
+        self.assertEqual(chat_server.usable_extras(no_value, True, "off"), (False, "off"))
+        self.assertEqual(chat_server.usable_extras(both, "yes", "rm -rf"), (False, "default"), "junk is dropped")
 
     def test_settings_go_before_extra_args_so_the_users_own_flags_win(self):
         self.env.update(PORT="9123", EXTRA_ARGS="-c 1000")

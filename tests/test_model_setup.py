@@ -877,6 +877,7 @@ class TestProfiles(Base):
     """Settings remembered per model (the setup page saves them when a chat starts); the serve scripts ask for them
     with --profile-args, which re-checks them against the llama-server found now (rule 3)."""
     HELP = (HERE / "fixtures" / "llama_server_help.txt").read_text(encoding="utf-8")
+    B12810 = (HERE / "fixtures" / "llama_server_help_b12810.txt").read_text(encoding="utf-8")
 
     def args(self, name, help_text=None):
         with mock.patch.object(ms, "find_llama_server", return_value="/x/llama-server"), \
@@ -888,8 +889,34 @@ class TestProfiles(Base):
         self.assertIsNone(ms.load_profile("m.gguf"))
         ms.save_profile("m.gguf", "long", 6000)
         ms.save_profile("other.gguf", "short", None)
-        self.assertEqual(ms.load_profile("m.gguf"), {"preset": "long", "ctx": 6000})
-        self.assertEqual(ms.load_profile("other.gguf"), {"preset": "short", "ctx": None})
+        self.assertEqual(ms.load_profile("m.gguf"), {"preset": "long", "ctx": 6000, "spec": False, "think": "default"})
+        self.assertEqual(ms.load_profile("other.gguf"), {"preset": "short", "ctx": None, "spec": False, "think": "default"})
+
+    def test_the_extras_are_remembered_as_ids_and_old_records_still_load(self):
+        ms.save_profile("m.gguf", "long", 6000, spec=True, think="short")
+        self.assertEqual(ms.load_profile("m.gguf"), {"preset": "long", "ctx": 6000, "spec": True, "think": "short"})
+        self.assertNotIn("--spec-type", ms.state_get("chat_profiles"), "ids are stored, never flags")
+        ms.state_set("chat_profiles", '{"old.gguf": {"preset": "short", "ctx": null}, '
+                                      '"bad.gguf": {"preset": "short", "ctx": null, "spec": "yes", "think": "--evil"}}')
+        self.assertEqual(ms.load_profile("old.gguf"), {"preset": "short", "ctx": None, "spec": False, "think": "default"})
+        self.assertEqual(ms.load_profile("bad.gguf"), {"preset": "short", "ctx": None, "spec": False, "think": "default"})
+
+    def test_profile_args_include_the_extras_this_llama_server_lists(self):
+        ms.save_profile("m.gguf", "short", None, spec=True, think="off")
+        self.assertEqual(self.args("m.gguf"), ["-c", "4096", "--spec-type", "ngram-mod", "--reasoning-budget", "0"])
+        self.assertEqual(self.args("m.gguf", help_text=self.B12810),
+                         ["-c", "4096", "--spec-type", "ngram-mod", "--reasoning-budget", "0"])
+
+    def test_a_remembered_extra_this_build_lacks_is_dropped_and_the_rest_kept(self):
+        """A build without ngram-mod (or without --reasoning-budget) must not get a flag it would refuse (rule 3),
+        and one missing extra must not throw away the context settings."""
+        ms.save_profile("m.gguf", "long", 6000, spec=True, think="short")
+        no_ngram = self.B12810.replace("ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache", "ngram-simple,ngram-cache")
+        self.assertNotEqual(no_ngram, self.B12810)
+        self.assertEqual(self.args("m.gguf", help_text=no_ngram),
+                         ["-c", "6000", "-ctk", "q8_0", "--reasoning-budget", "1024"])
+        old = "\n".join(line for line in self.HELP.splitlines() if "--spec-type" not in line and "--reasoning-budget" not in line)
+        self.assertEqual(self.args("m.gguf", help_text=old), ["-c", "6000", "-ctk", "q8_0"])
 
     def test_profile_args_are_the_presets_flags_for_this_llama_server(self):
         ms.save_profile("m.gguf", "long", 6000)

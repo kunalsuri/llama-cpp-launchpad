@@ -301,8 +301,21 @@ class App:
                                "This llama-server has no --fit: it really asks for all of it, which may not load."))
         return dict(e, where=where, gpu_share=round(share, 2), note=" ".join(notes))
 
-    def chat_settings(self, path: Path, ctx=None) -> list:
-        """Every preset for this model: its flags (or why it cannot run here), exact command and memory."""
+    def chat_extras(self, flags: set) -> dict:
+        """The two extras that combine with every preset (chat_server.EXTRAS_INFO), and whether this llama-server
+        lists the flags each needs (with the reason when not)."""
+        why, info = chat_server.extras_unavailable(flags), chat_server.EXTRAS_INFO
+        options = [{"id": o, "label": info["think"]["options"][o][0], "text": info["think"]["options"][o][1],
+                    "available": not chat_server.think_why(flags, o), "why": chat_server.think_why(flags, o)}
+                   for o in chat_server.THINK_ORDER]
+        return {"spec": {"label": info["spec"]["label"], "text": info["spec"]["text"],
+                         "available": not why["spec"], "why": why["spec"]},
+                "think": {"label": info["think"]["label"], "text": info["think"]["text"],
+                          "available": not why["think"], "why": why["think"], "options": options}}
+
+    def chat_settings(self, path: Path, ctx=None, spec=False, think="default") -> list:
+        """Every preset for this model: its flags (or why it cannot run here), exact command and memory. spec and
+        think (already cut back to what this llama-server lists) are part of every preset's command."""
         flags, d = self.chat.help_flags(), self._describe(path)
         train = d["shape"]["train_ctx"] if "shape" in d else 0
         vision = self._projector_args(path)
@@ -311,7 +324,7 @@ class App:
         out = []
         for pid in chat_server.PRESET_ORDER:
             p = chat_server.PRESETS[pid]
-            args, why = chat_server.settings_args(pid, flags, ctx, self._gpu(), train)
+            args, why = chat_server.settings_args(pid, flags, ctx, self._gpu(), train, spec, think)
             args = args + vision if not why else args
             row = {"id": pid, "label": p["label"], "text": p["text"], "available": not why, "why": why,
                    "args": args, "memory": None, "memory_error": d.get("error", "")}
@@ -322,14 +335,18 @@ class App:
             out.append(row)
         return out
 
-    def _settings_for(self, path: Path, preset, ctx) -> tuple:
+    def _settings_for(self, path: Path, preset, ctx, spec=False, think="default", strict=True) -> tuple:
         """-> (preset id, llama-server arguments, "") or (preset id, [], why not). A vision projector downloaded for
-        this model is passed with --mmproj when this llama-server lists that flag."""
+        this model is passed with --mmproj when this llama-server lists that flag. An extra this llama-server does
+        not list is refused with the reason (strict: starting) or left out (not strict: the preview, which says
+        why in its extras)."""
         flags = self.chat.help_flags()
         preset = preset or chat_server.default_preset(flags)
         d = self._describe(path)
+        if not strict:
+            spec, think = chat_server.usable_extras(flags, spec, think)
         args, why = chat_server.settings_args(preset, flags, ctx, self._gpu(),
-                                              d["shape"]["train_ctx"] if "shape" in d else 0)
+                                              d["shape"]["train_ctx"] if "shape" in d else 0, spec, think)
         return preset, (args + self._projector_args(path) if not why else args), why
 
     # --- image support: the model's vision projector (mmproj) -------------------------------------------------
@@ -400,7 +417,8 @@ class App:
         threading.Thread(target=run, daemon=True).start()
         return 202, {"ok": True}
 
-    def chat_status(self, mid=None, preset=None, ctx=None) -> dict:
+    def chat_status(self, mid=None, preset=None, ctx=None, spec=None, think=None) -> dict:
+        """spec / think: None = not given, so a remembered choice (or off) is used; otherwise what the page shows."""
         out = {"chat": self.chat.status()}
         if mid:
             found, _ = self._chat_model(mid)
@@ -410,9 +428,15 @@ class App:
                     saved = self.ms.load_profile(Path(found[0]).name)
                     if saved and saved["preset"] in chat_server.PRESETS:
                         preset, ctx = saved["preset"], saved["ctx"]
-                preset, args, why = self._settings_for(found[0], preset, ctx)
+                        spec = saved["spec"] if spec is None else spec
+                        think = saved["think"] if think is None else think
+                flags = self.chat.help_flags()
+                spec, think = chat_server.usable_extras(flags, spec, think)    # never shown on for what it cannot run
+                preset, args, why = self._settings_for(found[0], preset, ctx, spec, think, strict=False)
                 out["preview"] = self.chat.preview(found[0], settings=args)
-                out["preview"].update(preset=preset, ctx=ctx, presets=self.chat_settings(found[0], ctx), why=why)
+                out["preview"].update(preset=preset, ctx=ctx, why=why, spec=spec, think=think,
+                                      presets=self.chat_settings(found[0], ctx, spec, think),
+                                      extras=self.chat_extras(flags))
         return out
 
     def clients(self) -> tuple:
@@ -432,6 +456,9 @@ class App:
         if ctx is not None and (type(ctx) is not int or not chat_server.CTX_MIN <= ctx <= chat_server.CTX_MAX):
             return 400, {"error": f"The context length must be a whole number from {chat_server.CTX_MIN} to "
                                   f"{chat_server.CTX_MAX}."}
+        spec, think = body.get("spec", False), body.get("think", "default")
+        if type(spec) is not bool or not isinstance(think, str) or think not in chat_server.THINK_ARGS:
+            return 400, {"error": "Unknown setting. Reload the page."}
         with self.run_lock:
             if self.installer.status().get("state") in INSTALL_BUSY:
                 return 409, {"error": "llama.cpp is being installed. Start the chat when the install has finished."}
@@ -440,13 +467,13 @@ class App:
             found, refused = self._chat_model(body.get("id"))
             if refused:
                 return refused
-            used, args, why = self._settings_for(found[0], preset, ctx)
+            used, args, why = self._settings_for(found[0], preset, ctx, spec, think)
             if why:
                 return 409, {"error": why}
             code, out = self.chat.start(found[0], found[1], port, args)
             if code == 202:                                  # remembered for next time, and for the serve scripts
                 try:
-                    self.ms.save_profile(Path(found[0]).name, used, ctx)
+                    self.ms.save_profile(Path(found[0]).name, used, ctx, spec, think)
                 except OSError:
                     pass
             return code, out
@@ -901,8 +928,11 @@ def make_handler(app: App):
                 return self.reply(200, app.snapshot())
             if url.path == "/api/chat":
                 ctx = (q.get("ctx") or [""])[0]
-                return self.reply(200, app.chat_status((q.get("id") or [None])[0], (q.get("preset") or [None])[0],
-                                                       int(ctx) if ctx.isascii() and ctx.isdigit() and len(ctx) < 9 else None))
+                spec, think = (q.get("spec") or [""])[0], (q.get("think") or [""])[0]
+                return self.reply(200, app.chat_status(
+                    (q.get("id") or [None])[0], (q.get("preset") or [None])[0],
+                    int(ctx) if ctx.isascii() and ctx.isdigit() and len(ctx) < 9 else None,
+                    {"1": True, "0": False}.get(spec), think if think in chat_server.THINK_ARGS else None))
             if url.path == "/api/llama":
                 return self.reply(200, app.llama_info(check_update=True))
             if url.path == "/api/models":
