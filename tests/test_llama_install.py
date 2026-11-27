@@ -573,6 +573,280 @@ class TestVersion(unittest.TestCase):
         self.assertEqual(li.server_version([str(Path(tempfile.gettempdir()) / "no-such-llama-server")])[0], False)
 
 
+class TestBuildNumbers(unittest.TestCase):
+    """llama-server prints `version: 5123 (abc1234)`; releases are tagged b5123. Nothing else is a build number."""
+
+    def test_the_build_number_of_a_version_banner(self):
+        self.assertEqual(li.build_number("version: 5123 (abc1234)"), 5123)
+        self.assertEqual(li.build_number("ggml_vulkan: Found 1 device\nversion: 5123 (abc1234)\nbuilt with cc"), 5123)
+        self.assertEqual(li.build_number("version: 4242 (abc1234)\nbuilt with fake-cc for test"), 4242)
+
+    def test_anything_else_is_not_guessed(self):
+        for text in ("", "version: 0.8.0", "version: (unknown)", "error while loading shared libraries", "build: 5123"):
+            with self.subTest(text=text):
+                self.assertIsNone(li.build_number(text))
+
+    def test_the_number_of_a_release_tag(self):
+        self.assertEqual(li.tag_number("b5123"), 5123)
+        for tag in ("v0.8.0", "b", "b12x", "", None, "5123"):
+            with self.subTest(tag=tag):
+                self.assertIsNone(li.tag_number(tag))
+
+
+class LatestBase(unittest.TestCase):
+    """The latest release tag, found without a network: fake listings, a fake clock."""
+    STABLE = InstallBase.STABLE
+    NIGHTLY_URL = STABLE["assets"][0]["browser_download_url"]
+
+    def setUp(self):
+        self.api = {li.LATEST_RELEASE: self.STABLE}
+        self.texts = {self.NIGHTLY_URL: "b7777\n"}
+        self.asked = []
+        self.now = 1000.0
+
+    def fetch_json(self, url):
+        self.asked.append(url)
+        if url not in self.api:
+            raise OSError(f"unreachable {url}")
+        return self.api[url]
+
+    def fetch_text(self, url):
+        self.asked.append(url)
+        return self.texts[url]
+
+    def make(self, **kw):
+        return li.LatestBuild(self.fetch_json, self.fetch_text, clock=lambda: self.now, **kw)
+
+
+class TestLatestBuild(LatestBase):
+    def test_the_stable_release_leads_to_the_newest_build_through_nightly_tag(self):
+        r = self.make().get()
+        self.assertEqual((r["tag"], r["number"], r["error"]), ("b7777", 7777, ""))
+
+    def test_a_bnnnn_tag_on_latest_is_used_directly(self):
+        self.api[li.LATEST_RELEASE] = {"tag_name": "b8000", "assets": []}
+        self.assertEqual(self.make().get()["number"], 8000)
+        self.assertEqual(self.asked, [li.LATEST_RELEASE], "nothing else was needed")
+
+    def test_without_a_usable_nightly_tag_the_newest_listed_build_is_used_and_the_miss_is_logged(self):
+        self.texts[self.NIGHTLY_URL] = "not a tag"
+        self.api[li.RELEASES_LIST] = [{"tag_name": "v0.8.0"}, {"tag_name": "b7001"}, {"tag_name": "b7003", "draft": True},
+                                      {"tag_name": "b7002"}]
+        r = self.make().get()
+        self.assertEqual(r["number"], 7002, r)
+        self.assertTrue(any("nightly-tag.txt" in line and "does not name" in line for line in r["looked"]), r["looked"])
+
+    def test_unreachable_is_an_error_not_a_guess(self):
+        self.api = {}
+        r = self.make().get()
+        self.assertIsNone(r["number"])
+        self.assertIn("could not be reached", r["error"])
+        self.assertTrue(any(li.LATEST_RELEASE in line for line in r["looked"]), "the miss says where it looked")
+
+    def test_reachable_but_no_bnnnn_release_is_a_different_error(self):
+        self.texts[self.NIGHTLY_URL] = "v9"
+        self.api[li.RELEASES_LIST] = [{"tag_name": "v0.8.0"}]
+        r = self.make().get()
+        self.assertIsNone(r["number"])
+        self.assertIn("no bNNNN release", r["error"])
+
+    def test_the_lookup_is_cached_so_polling_does_not_ask_github_every_time(self):
+        latest = self.make()
+        for _ in range(5):
+            latest.get()
+        self.assertEqual(self.asked, [li.LATEST_RELEASE, self.NIGHTLY_URL])
+        self.now += li.LATEST_TTL + 1
+        latest.get()
+        self.assertEqual(len(self.asked), 4, "asked again once the cache expired")
+
+    def test_a_failed_lookup_is_retried_sooner_but_not_on_every_poll(self):
+        self.api = {}
+        latest = self.make()
+        latest.get()
+        latest.get()
+        self.assertEqual(len(self.asked), 2, "the second call came from the cache (a miss tries /latest and the list once)")
+        self.api = {li.LATEST_RELEASE: self.STABLE}
+        self.now += li.FAIL_TTL + 1
+        self.assertEqual(latest.get()["number"], 7777)
+        self.assertLess(li.FAIL_TTL, li.LATEST_TTL)
+
+
+class TestUpdateStatus(unittest.TestCase):
+    """installed vs latest -> up to date / update available / unknown, with the reason for unknown."""
+    LATEST = {"tag": "b7777", "number": 7777, "error": "", "looked": ["x"]}
+
+    def status(self, found="/p/bin/llama-server", works=True, out="version: 7000 (abc1234)", latest=None):
+        return li.update_status(found, works, out, latest or self.LATEST)
+
+    def test_older_means_an_update_is_available(self):
+        s = self.status()
+        self.assertEqual((s["status"], s["installed"], s["latest"], s["latest_tag"]), ("update", 7000, 7777, "b7777"))
+
+    def test_same_or_newer_is_up_to_date(self):
+        self.assertEqual(self.status(out="version: 7777 (abc)")["status"], "up-to-date")
+        self.assertEqual(self.status(out="version: 7800 (abc)")["status"], "up-to-date", "a newer local build is not outdated")
+
+    def test_unknown_says_why_and_never_guesses(self):
+        cases = [(dict(found=""), "No llama-server"),
+                 (dict(works=False, out="error while loading shared libraries"), "--version"),
+                 (dict(out="version: 0.8.0"), "build number"),
+                 (dict(latest={"tag": "", "number": None, "error": "The release list could not be reached (x).", "looked": []}),
+                  "could not be reached")]
+        for kw, word in cases:
+            with self.subTest(word=word):
+                s = self.status(**kw)
+                self.assertEqual(s["status"], "unknown")
+                self.assertIn(word, s["reason"])
+
+    def test_the_release_list_is_not_asked_when_the_installed_version_is_already_unknown(self):
+        asked = []
+        s = li.update_status("", False, "", lambda: asked.append(1) or self.LATEST)
+        self.assertEqual((s["status"], asked), ("unknown", []))
+
+
+class TestUpdateHow(unittest.TestCase):
+    """How the page may offer the update: only a way that is managed here, and only with the program it needs found."""
+    BREW, WINGET = "/opt/homebrew/bin/brew", r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\winget.exe"
+
+    def how(self, found, which=None, offer="download", bin_dir="/p/proj/bin"):
+        return li.update_how(found, bin_dir, offer, lambda n: (which or {}).get(n, ""))
+
+    def test_a_copy_in_bin_is_updated_by_the_existing_install(self):
+        self.assertEqual(self.how("/p/proj/bin/llama-server")["how"], "download")
+        self.assertEqual(self.how(r"C:\p\proj\bin\llama-server.exe", bin_dir=r"C:\p\proj\bin")["how"], "download")
+
+    def test_a_copy_in_bin_on_a_mac_is_not_updated_by_brew_or_a_download(self):
+        self.assertEqual(self.how("/p/proj/bin/llama-server", offer="brew", which={"brew": self.BREW})["how"], "other")
+
+    def test_homebrew_command_only_when_brew_was_found(self):
+        found = "/opt/homebrew/Cellar/llama.cpp/7000/bin/llama-server"
+        self.assertEqual(self.how(found, {"brew": self.BREW}, offer="brew"), {"how": "brew", "cmd": "brew upgrade llama.cpp"})
+        self.assertEqual(self.how(found, {}, offer="manual"), {"how": "other", "cmd": ""})
+        self.assertEqual(self.how("/home/linuxbrew/.linuxbrew/bin/llama-server", {"brew": "/x/brew"})["how"], "brew")
+
+    def test_winget_command_only_when_winget_was_found(self):
+        found = r"C:\Users\me\AppData\Local\Microsoft\WinGet\Packages\ggml.llamacpp_x\llama-server.exe"
+        self.assertEqual(self.how(found, {"winget": self.WINGET}, bin_dir=r"C:\p\bin"),
+                         {"how": "winget", "cmd": "winget upgrade ggml.llamacpp"})
+        self.assertEqual(self.how(found, {}, bin_dir=r"C:\p\bin"), {"how": "other", "cmd": ""})
+
+    def test_any_other_copy_only_gets_the_versions(self):
+        self.assertEqual(self.how("/usr/local/bin/llama-server", {"brew": self.BREW, "winget": self.WINGET}),
+                         {"how": "other", "cmd": ""})
+        self.assertEqual(self.how("")["how"], "other")
+
+
+class TestInstallerUpdateInfo(InstallBase):
+    """Installer.update_info: the answer the page gets, from the server the app would use."""
+
+    def setUp(self):
+        super().setUp()
+        self.api = {li.LATEST_RELEASE: self.release}        # b7777, with the builds for every machine
+        self.found = str(self.bin / "llama-server")
+
+    NEWEST_WITHOUT_BUILDS = {"tag_name": "b8000", "assets": []}      # published, but this machine's archive is not there yet
+
+    def newest_has_no_build(self):
+        self.api = {li.LATEST_RELEASE: self.NEWEST_WITHOUT_BUILDS,
+                    li.RELEASES_LIST: [self.NEWEST_WITHOUT_BUILDS, self.release]}
+
+    def test_a_copy_in_bin_is_only_told_about_the_build_the_installer_would_install(self):
+        self.newest_has_no_build()
+        u = self.inst.update_info(self.found, True, "version: 7000 (abc)")
+        self.assertEqual((u["status"], u["latest"], u["latest_tag"], u["latest_is"]), ("update", 7777, "b7777", "installable"), u)
+
+    def test_when_the_installable_build_is_not_newer_the_copy_in_bin_is_up_to_date(self):
+        self.newest_has_no_build()
+        u = self.inst.update_info(self.found, True, "version: 7777 (abc)")
+        self.assertEqual((u["status"], u["latest_tag"]), ("up-to-date", "b7777"), "b8000 has nothing to install")
+
+    def test_no_release_with_a_build_for_this_machine_is_unknown_not_an_update(self):
+        self.api = {li.LATEST_RELEASE: self.NEWEST_WITHOUT_BUILDS, li.RELEASES_LIST: [self.NEWEST_WITHOUT_BUILDS]}
+        u = self.inst.update_info(self.found, True, "version: 7000 (abc)")
+        self.assertEqual(u["status"], "unknown")
+        self.assertIn("no build", u["reason"].lower())
+
+    def test_the_installable_build_follows_this_machines_gpu(self):
+        """b8000 has only the Vulkan build: an update for a GPU machine, not for a CPU-only one (and the cached answer
+        for one is not reused for the other when the hardware is detected again)."""
+        vulkan = [a for a in self.release["assets"] if a["name"] == "llama-b7777-bin-ubuntu-vulkan-x64.tar.gz"]
+        only = {"tag_name": "b8000", "assets": [dict(a, name=a["name"].replace("b7777", "b8000"),
+                                                     browser_download_url=a["browser_download_url"].replace("b7777", "b8000"))
+                                                for a in vulkan]}
+        self.api = {li.LATEST_RELEASE: only, li.RELEASES_LIST: [only, self.release]}
+        self.assertEqual(self.inst.update_info(self.found, True, "version: 7000 (abc)")["latest_tag"], "b7777")
+        self.gpu = "gpu"
+        self.assertEqual(self.inst.update_info(self.found, True, "version: 7000 (abc)")["latest_tag"], "b8000")
+
+    def test_another_copy_gets_the_newest_tag_labelled_as_such(self):
+        self.newest_has_no_build()
+        u = self.inst.update_info("/usr/local/bin/llama-server", True, "version: 7000 (abc)")
+        self.assertEqual((u["status"], u["latest_tag"], u["latest_is"], u["how"]), ("update", "b8000", "newest", "other"), u)
+
+    def test_a_timeout_is_unknown_and_says_so_and_stops_asking(self):
+        calls = []
+
+        def hangs(url):
+            calls.append(url)
+            raise TimeoutError("timed out")
+        self.inst.fetch_json = hangs
+        u = self.inst.update_info(self.found, True, "version: 7000 (abc)")
+        self.assertEqual(u["status"], "unknown")
+        self.assertIn("timed out", u["reason"])
+        self.assertIn("could not be reached", u["reason"])
+        self.assertEqual(len(calls), 1, "after one timeout the other addresses are not tried (no 3 x wait)")
+
+    def test_a_wrapped_timeout_from_urllib_counts_too(self):
+        import urllib.error
+
+        def hangs(url):
+            raise urllib.error.URLError(TimeoutError("timed out"))
+        self.inst.fetch_json = hangs
+        self.assertIn("timed out", self.inst.update_info("/usr/local/bin/llama-server", True, "version: 7000 (abc)")["reason"])
+
+    def test_the_default_lookup_uses_a_short_timeout_the_install_keeps_its_own(self):
+        seen = []
+        inst = li.Installer(bin_dir=self.bin, system="Linux", machine="x86_64", gpu_kind=lambda: "none", find=self.find,
+                            which=lambda n: "")
+        with unittest.mock.patch.object(li, "_open", lambda url, accept="*/*", timeout=60: seen.append(timeout) or io.BytesIO(
+                json.dumps(self.release).encode())):
+            inst.update_info(self.found, True, "version: 7000 (abc)")
+            li.http_json("https://api.github.com/x")
+        self.assertEqual(seen[-1], 60, "the install's own requests keep the long timeout")
+        self.assertTrue(seen[:-1] and all(t <= 10 for t in seen[:-1]), seen)
+
+    def test_a_server_that_never_answers_is_given_up_on(self):
+        import socket
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        self.addCleanup(srv.close)
+        t0 = time.monotonic()
+        with self.assertRaises(OSError):
+            li.http_json(f"http://127.0.0.1:{srv.getsockname()[1]}/", timeout=0.4)
+        self.assertLess(time.monotonic() - t0, 5)
+
+    def test_an_older_copy_in_bin_offers_the_update_through_the_installer(self):
+        u = self.inst.update_info(self.found, True, "version: 7000 (abc)")
+        self.assertEqual((u["status"], u["installed"], u["latest"], u["how"]), ("update", 7000, 7777, "download"))
+
+    def test_the_lookup_is_cached_across_calls(self):
+        for _ in range(4):
+            self.inst.update_info(self.found, True, "version: 7000 (abc)")
+        self.assertEqual(self.asked, [li.LATEST_RELEASE])
+
+    def test_no_network_is_unknown_with_the_reason_and_where_it_looked(self):
+        self.api = {}
+        u = self.inst.update_info(self.found, True, "version: 7000 (abc)")
+        self.assertEqual(u["status"], "unknown")
+        self.assertIn("could not be reached", u["reason"])
+        self.assertTrue(any(li.LATEST_RELEASE in line for line in u["looked"]))
+
+    def test_nothing_is_contacted_when_there_is_no_server(self):
+        self.inst.update_info("", False, "")
+        self.assertFalse(getattr(self, "asked", []))
+
+
 class TestWhyInstall(unittest.TestCase):
     def hw(self, kind="none", usable=False, other="", other_usable=False):
         return unittest.mock.Mock(gpu_kind=kind, gpu_usable=usable, other_gpu=other, other_gpu_usable=other_usable)

@@ -64,9 +64,11 @@ RADAR = [
 
 
 READY = playwright_ready()
+# One skip for every real-browser class, so test_harness counts it once (the "no playwright" reason).
+NEEDS_BROWSER = unittest.skipUnless(READY, "needs node + playwright with chromium: npm ci && npx playwright install chromium")
 
 
-@unittest.skipUnless(READY, "needs node + playwright with chromium: npm ci && npx playwright install chromium")
+@NEEDS_BROWSER
 class TestBrowser(tui.UiBase):
     def setUp(self):
         super().setUp()
@@ -123,6 +125,36 @@ class TestBrowser(tui.UiBase):
         failed = [f"{r['name']}: {r['detail']}" for r in rows if not r["ok"]]
         self.assertEqual(failed, [], "\n".join(failed))
         self.assertEqual(done.returncode, 0, done.stderr)
+
+
+def run_page_check(script: str, page: str, *mode: str) -> "tuple[list, subprocess.CompletedProcess]":
+    done = subprocess.run(["node", str(HERE / script), str(ROOT / "ui" / page / "index.html"), *mode],
+                          cwd=str(ROOT), env=node_env(), capture_output=True, text=True, timeout=300)
+    rows = [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")]
+    return rows, done
+
+
+@NEEDS_BROWSER
+class TestPageHistoryAndFiles(unittest.TestCase):
+    """History (Translation and Tasks) and Open file (Tasks), in real Chromium against a stand-in llama-server."""
+
+    def check_rows(self, rows, done, minimum):
+        self.assertGreaterEqual(len(rows), minimum, done.stdout + done.stderr)
+        failed = [f"{r['name']}: {r['detail']}" for r in rows if not r["ok"]]
+        self.assertEqual(failed, [], "\n".join(failed))
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_tasks_history_in_a_real_browser(self):
+        rows, done = run_page_check("tasks_check.js", "tasks", "history")
+        self.check_rows(rows, done, 19)
+
+    def test_tasks_open_file_in_a_real_browser(self):
+        rows, done = run_page_check("tasks_check.js", "tasks", "file")
+        self.check_rows(rows, done, 17)
+
+    def test_translation_history_in_a_real_browser(self):
+        rows, done = run_page_check("translation_check.js", "translation")
+        self.check_rows(rows, done, 22)
 
 
 class TestBrowserRequired(unittest.TestCase):

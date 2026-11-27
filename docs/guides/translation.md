@@ -33,6 +33,17 @@ picks a model suited to it.
 4. Translations stay on the page, one under another, until you press **New translation** (the pencil button in the
    side bar), which also puts every setting back to its default.
 
+## History
+
+Under the box, **History** lists your last 20 finished translations: the language pair, the time and the start of the
+text. Click the line to open it; it shows the text and its translation again and sets the languages back. The bin
+button deletes one item; **Clear history** asks first, then deletes them all when you press **Yes, clear** (there is no undo). A request that failed or that you
+stopped is not saved, and text longer than 2,000 characters is saved shortened.
+
+History is kept in this browser's own storage (`localStorage`) and nowhere else: not on the server, not in another
+browser. If the browser will not store it (private mode, or storage switched off), the page says so and keeps the
+items only until you close or reload the page.
+
 The 24 languages: English, Spanish, French, German, Italian, Portuguese, Dutch, Russian, Ukrainian, Polish, Turkish,
 Arabic, Hebrew, Hindi, Bengali, Urdu, Chinese, Japanese, Korean, Vietnamese, Thai, Indonesian, Swedish and Greek.
 

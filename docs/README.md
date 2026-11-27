@@ -32,7 +32,6 @@ make them again.
 
 ## For contributors
 
-- [Developer notes](notes.md): Windows virtual environment, running the tests, the radar dashboard.
 - The rules for code in this project are in [CLAUDE.md](../CLAUDE.md) and the test workflow in
   [tests/README.md](../tests/README.md).
 

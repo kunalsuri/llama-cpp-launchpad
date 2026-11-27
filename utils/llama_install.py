@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import tarfile
 import threading
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -142,21 +143,24 @@ class _GitHubOnly(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _open(url: str, accept: str = "*/*"):
+LOOKUP_TIMEOUT = 8      # seconds per request when only asking "is there a newer release?": the page waits for it
+
+
+def _open(url: str, accept: str = "*/*", timeout: float = 60):
     opener = urllib.request.build_opener(_GitHubOnly)
-    return opener.open(urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": accept}), timeout=60)
+    return opener.open(urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": accept}), timeout=timeout)
 
 
-def http_json(url: str):
-    with _open(url, "application/vnd.github+json") as r:
+def http_json(url: str, timeout: float = 60):
+    with _open(url, "application/vnd.github+json", timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
-def http_text(url: str) -> str:
+def http_text(url: str, timeout: float = 60) -> str:
     """A small text asset of the official release (nightly-tag.txt): at most 1 KB is read."""
     if not download_url_ok(url):
         raise urllib.error.URLError(f"not an official llama.cpp release download: {url}")
-    with _open(url) as r:
+    with _open(url, timeout=timeout) as r:
         return r.read(1024).decode("utf-8", "replace")
 
 
@@ -248,6 +252,169 @@ def server_version(argv: list, timeout: int = 60) -> tuple:
         return False, str(e)
     out = (done.stdout + done.stderr).strip()
     return done.returncode == 0 and bool(re.search(r"version", out, re.I)), out
+
+
+# --- Is there a newer llama.cpp? -----------------------------------------------------------------------
+LATEST_TTL = 3600        # seconds a found release tag is reused: the page polls, GitHub is asked about once an hour
+FAIL_TTL = 300           # a failed lookup is retried sooner, but not on every poll
+UPGRADE_CMD = {"brew": "brew upgrade llama.cpp", "winget": "winget upgrade ggml.llamacpp"}
+
+
+def build_number(text: str):
+    """`version: 5123 (abc1234)` -> 5123. None when the output has no such line: a version is never guessed."""
+    m = re.search(r"^\s*version:\s*(\d+)\s*\(", text or "", re.M | re.I)
+    return int(m.group(1)) if m else None
+
+
+def tag_number(tag):
+    """A llama.cpp release tag, b5123 -> 5123. Stable tags such as v0.8.0 have no build number."""
+    m = re.fullmatch(r"b(\d+)", str(tag or ""))
+    return int(m.group(1)) if m else None
+
+
+def _is_timeout(e: BaseException) -> bool:
+    return isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError) or "timed out" in str(e).lower()
+
+
+class _Guard:
+    """The two fetch functions of one lookup, remembering what failed. After a timeout every later request of the same
+    lookup fails at once, so a slow GitHub costs one wait, not one per address."""
+
+    def __init__(self, fetch_json, fetch_text):
+        self._json, self._text = fetch_json, fetch_text
+        self.failed = self.timed_out = False
+
+    def _call(self, fn, url):
+        if self.timed_out:
+            raise TimeoutError("timed out (not asked again)")
+        try:
+            return fn(url)
+        except (OSError, ValueError) as e:
+            self.failed = True
+            self.timed_out = self.timed_out or _is_timeout(e)
+            raise
+
+    def fetch_json(self, url):
+        return self._call(self._json, url)
+
+    def fetch_text(self, url):
+        return self._call(self._text, url)
+
+    def unreachable(self) -> str:
+        return "The release list could not be reached (" + ("timed out" if self.timed_out else "no answer from api.github.com") + ")."
+
+
+class LatestBuild:
+    """A llama.cpp release tag looked up on GitHub and remembered (LATEST_TTL, FAIL_TTL). By default the newest bNNNN
+    tag; `resolve(fetch_json, fetch_text, say) -> (tag, error)` replaces that lookup (the build the installer would
+    install). `key()` names what the answer depends on: a changed key forgets the cached answer. Where it looked, hits
+    and misses, is kept in the answer's "looked" list."""
+
+    def __init__(self, fetch_json, fetch_text, clock=time.monotonic, resolve=None, key=lambda: None):
+        self.fetch_json, self.fetch_text, self.clock = fetch_json, fetch_text, clock
+        self.resolve, self.key = resolve or self._newest, key
+        self.lock = threading.Lock()
+        self.cached, self.until, self.cached_key = None, 0.0, None
+
+    def get(self) -> dict:
+        """-> {"tag", "number", "error", "looked"}; number is None (and error says why) when it could not be found."""
+        with self.lock:
+            key = self.key()
+            if self.cached is None or self.clock() >= self.until or key != self.cached_key:
+                looked = []
+                guard = _Guard(self.fetch_json, self.fetch_text)
+                tag, error = self.resolve(guard, looked.append)
+                if not tag_number(tag):
+                    tag, error = "", error or "The latest release could not be found."
+                    if guard.failed and "could not be reached" not in error:
+                        error = guard.unreachable()
+                self.cached = {"tag": tag, "number": tag_number(tag), "error": error, "looked": looked}
+                self.cached_key = key
+                self.until = self.clock() + (LATEST_TTL if tag else FAIL_TTL)
+            return dict(self.cached, looked=list(self.cached["looked"]))
+
+    @staticmethod
+    def _newest(g, say):
+        """The newest bNNNN tag: /releases/latest, else the build its nightly-tag.txt names, else the newest listed."""
+        reached = False
+        try:
+            latest = g.fetch_json(LATEST_RELEASE)
+            reached = True
+        except (OSError, ValueError) as e:
+            say(f"{LATEST_RELEASE}: failed ({e})")
+            latest = {}
+        latest = latest if isinstance(latest, dict) else {}
+        stable = str(latest.get("tag_name") or "")
+        if tag_number(stable):
+            say(f"{LATEST_RELEASE} names the build: {stable}")
+            return stable, ""
+        if stable:
+            say(f"{LATEST_RELEASE}: {stable} is not a bNNNN build")
+        for a in latest.get("assets") or []:
+            if isinstance(a, dict) and a.get("name") == NIGHTLY_TAG_FILE and download_url_ok(str(a.get("browser_download_url", ""))):
+                try:
+                    nightly = g.fetch_text(a["browser_download_url"]).strip()
+                except (OSError, ValueError) as e:
+                    say(f"{NIGHTLY_TAG_FILE} of {stable}: failed ({e})")
+                    continue
+                if tag_number(nightly):
+                    say(f"{NIGHTLY_TAG_FILE} of {stable} names the build: {nightly}")
+                    return nightly, ""
+                say(f"{NIGHTLY_TAG_FILE} of {stable} does not name a bNNNN release")
+        try:
+            listing = g.fetch_json(RELEASES_LIST)
+            reached = True
+        except (OSError, ValueError) as e:
+            say(f"{RELEASES_LIST}: failed ({e})")
+            listing = []
+        tags = [str(r.get("tag_name") or "") for r in listing if isinstance(r, dict) and not r.get("draft")] if isinstance(listing, list) else []
+        builds = [t for t in tags if tag_number(t)]
+        if builds:
+            best = max(builds, key=tag_number)
+            say(f"the newest of the last {len(tags)} releases: {best}")
+            return best, ""
+        say(f"{RELEASES_LIST}: no bNNNN release in it")
+        return "", ("There is no bNNNN release in GitHub's list of llama.cpp releases." if reached else g.unreachable())
+
+
+def update_status(found: str, works: bool, out: str, latest) -> dict:
+    """Installed build vs latest -> {"status": "up-to-date" | "update" | "unknown", "installed", "latest", "latest_tag",
+    "reason", "looked"}. `latest` is LatestBuild.get()'s answer, or a function returning it (asked only when the
+    installed build is known). Unknown is a valid answer and says why."""
+    def unknown(reason, got=None):
+        got = got or {}
+        return {"status": "unknown", "installed": build_number(out) if works else None, "latest": got.get("number"),
+                "latest_tag": got.get("tag", ""), "reason": reason, "looked": list(got.get("looked", []))}
+
+    if not found:
+        return unknown("No llama-server was found.")
+    if not works:
+        return unknown(f"`llama-server --version` failed for {found}.")
+    installed = build_number(out)
+    if installed is None:
+        first = (out.strip().splitlines() or [""])[0][:80]
+        return unknown(f"llama-server's version output has no build number ({first or 'it printed nothing'}).")
+    got = latest() if callable(latest) else latest
+    if not got.get("number"):
+        return unknown(got.get("error") or "The latest release could not be found.", got)
+    state = "update" if got["number"] > installed else "up-to-date"
+    return {"status": state, "installed": installed, "latest": got["number"], "latest_tag": got["tag"], "reason": "",
+            "looked": list(got.get("looked", []))}
+
+
+def update_how(found: str, bin_dir, offer_how: str, which) -> dict:
+    """The way to update the copy found, if one is managed here -> {"how": "download" | "brew" | "winget" | "other",
+    "cmd"}. download: the copy is in bin/ and the page can download releases (the install button). brew / winget: the
+    path shows the package manager installed it AND that program was found, so the command can run. Else only versions."""
+    p = (found or "").replace("\\", "/").lower()
+    b = str(bin_dir).replace("\\", "/").lower().rstrip("/")
+    if p and offer_how == "download" and p.startswith(b + "/"):
+        return {"how": "download", "cmd": ""}
+    if p and any(x in p for x in ("/cellar/", "/homebrew/", "/linuxbrew/")) and which("brew"):
+        return {"how": "brew", "cmd": UPGRADE_CMD["brew"]}
+    if p and "/winget/" in p and which("winget"):
+        return {"how": "winget", "cmd": UPGRADE_CMD["winget"]}
+    return {"how": "other", "cmd": ""}
 
 
 def why_install(found: str, works: bool, hw) -> str:
@@ -360,7 +527,8 @@ class Installer:
     """One install at a time. status() is safe to call from any thread."""
 
     def __init__(self, bin_dir, system, machine, gpu_kind, find, which, fetch_json=http_json, fetch_file=fetch_file,
-                 version=server_version, run=_run_streaming, on_done=None, cuda_max=lambda: "", fetch_text=http_text):
+                 version=server_version, run=_run_streaming, on_done=None, cuda_max=lambda: "", fetch_text=http_text,
+                 clock=time.monotonic):
         # bin_dir, system and machine may be values or functions returning them (the setup page passes functions,
         # so they follow the machine description it was given).
         self._bin, self._system, self._machine = bin_dir, system, machine
@@ -369,6 +537,30 @@ class Installer:
         self.find, self.which = find, which     # find(): the llama-server the serve scripts would use, or ""
         self.fetch_json, self.fetch_file, self.version, self.run = fetch_json, fetch_file, version, run
         self.fetch_text = fetch_text
+        # Release lookups ("is there a newer one?") use the attributes at call time, so a replaced fetch_json (tests) is
+        # followed. With the real downloaders they get a short timeout: the page waits for the answer.
+        def ask_json(url):
+            return http_json(url, timeout=LOOKUP_TIMEOUT) if self.fetch_json is http_json else self.fetch_json(url)
+
+        def ask_text(url):
+            return http_text(url, timeout=LOOKUP_TIMEOUT) if self.fetch_text is http_text else self.fetch_text(url)
+
+        def installable(g, say):
+            """The release find_release would install for this machine (its OS, chip, GPU, CUDA), not just the newest."""
+            try:
+                p = find_release(g.fetch_json, g.fetch_text, self.system, self.machine, self.gpu_kind(), "auto",
+                                cuda_max=self.cuda_max(), say=say)
+            except (OSError, ValueError) as e:
+                say(f"find_release failed ({e})")
+                return "", g.unreachable()
+            if "error" in p:
+                return "", (g.unreachable() if g.failed else p["error"])
+            return p["tag"], ""
+
+        self.latest = LatestBuild(ask_json, ask_text, clock=clock)                       # the newest bNNNN tag
+        self.latest_installable = LatestBuild(                                           # what this machine would install
+            ask_json, ask_text, clock=clock, resolve=installable,
+            key=lambda: (self.system, self.machine, self.gpu_kind(), self.cuda_max()))
         self.on_done = on_done                  # called after a successful install, before "done" is reported
         self.lock = threading.Lock()
         self.job = {"state": "idle"}
@@ -404,6 +596,17 @@ class Installer:
             kind = {"nvidia": "cuda", "gpu": "vulkan"}.get(self.gpu_kind(), "cpu")
             return {"how": "download", "kind": kind, "label": KIND_LABEL[kind], "into": str(self.bin)}
         return {"how": "manual"}
+
+    def update_info(self, found: str, works: bool, out: str) -> dict:
+        """Is there a newer llama.cpp than the `found` one (whose `--version` printed `out`), and how could it be
+        updated here? The release lookup is cached (LatestBuild) and only made once the installed build is known.
+        A copy in bin/ is updated by this installer, so it is compared with the build the installer would install
+        for this machine ("latest_is": "installable"); any other copy with the newest release ("newest")."""
+        how = update_how(found, self.bin, self.offer()["how"], self.which)
+        managed = how["how"] == "download"
+        u = update_status(found, works, out, (self.latest_installable if managed else self.latest).get)
+        u.update(how, latest_is="installable" if managed else "newest")
+        return u
 
     def status(self) -> dict:
         with self.lock:

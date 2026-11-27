@@ -124,7 +124,7 @@ The setup page (`ui` or `launchpad`, normally at `http://127.0.0.1:8765/`) does 
 - **Start and stop a chat** from the page, with llama-server's own output when it fails and a free port when 8080 is
   taken.
 - **Get llama.cpp** (`/#llama`): the official build for your GPU (CUDA, Vulkan or CPU) into `bin/`, verified before it
-  is kept; Homebrew on macOS.
+  is kept; Homebrew on macOS. It also tells you when a newer llama.cpp release exists (`Update available: b5123 → b5200`).
 - **Understand the result**: why a model is slow, what a quantization costs, image support for vision models.
 - **My models** (`/#models`): sizes and free disk; delete; compare two or three models on the same prompts, side by
   side (you judge the answers; there is no score); serve all of them at one address with llama.cpp's router mode.
@@ -140,8 +140,8 @@ Every command the page shows is for your OS and uses only programs it found.
 | Interface | What it is |
 | --- | --- |
 | **llama.cpp Default** | llama.cpp's own built-in web chat. |
-| **Translation** | Language pairs, swap, formal or informal register, temperature. One self-contained HTML file. |
-| **Tasks** | *Summarize* (bullets, paragraph, detailed), *Explain code* (beginner or developer, with likely bugs), *Rewrite* (plainer, more formal, friendlier, shorter). One self-contained HTML file. |
+| **Translation** | Language pairs, swap, formal or informal register, temperature, and a History of your last 20 translations (kept in this browser only). One self-contained HTML file. |
+| **Tasks** | *Summarize* (bullets, paragraph, detailed), *Explain code* (beginner or developer, with likely bugs), *Rewrite* (plainer, more formal, friendlier, shorter). Open a text or code file (up to 1 MB) or drop it on the box; a History of your last 20 results (kept in this browser only). One self-contained HTML file. |
 
 Small models (around 1B) translate roughly; 4B and up do much better.
 

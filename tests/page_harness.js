@@ -1205,6 +1205,68 @@ Object.assign(scenarios, {
     if (!p.button("llama-body", "Install llama.cpp (CUDA build")) return "no CUDA install button: " + t;
   },
 
+  async "a newer llama.cpp release is announced with both builds, and the update runs the existing install"() {
+    const posts = [];
+    const bin = { ...NEED, found: "/p/proj/bin/llama-server", works: true, version: "version: 4242 (abc1234)", need: "",
+      update: { status: "update", installed: 4242, latest: 7777, latest_tag: "b7777", reason: "", how: "download", cmd: "" } };
+    const p = makePage({ hash: "#llama", routes: llamaRoutes({ posts, infos: [bin,
+      job({ state: "downloading", done: 1, total: 100, found: bin.found, works: true, need: "", update: bin.update })] }) });
+    await p.start();
+    const t = p.text("llama-body");
+    if (!t.includes("Update available: b4242 → b7777")) return "update not announced with both builds: " + t;
+    const b = p.button("llama-body", "Update llama.cpp");
+    if (!b) return "no update button: " + t;
+    b.click(); await p.settle();
+    if (JSON.stringify(posts) !== "[{\"variant\":\"auto\"}]") return "the update did not use the install request: " + JSON.stringify(posts);
+    if (/Update available/.test(p.text("llama-body"))) return "update still offered while it installs: " + p.text("llama-body");
+  },
+
+  async "an update for a Homebrew or winget copy shows its command, and no button, only when that tool was found"() {
+    const base = { ...NEED, found: "/opt/homebrew/Cellar/llama.cpp/4242/bin/llama-server", works: true, version: "version: 4242 (abc1234)",
+      need: "", offer: { how: "manual" } };
+    const upd = (how, cmd) => ({ status: "update", installed: 4242, latest: 7777, latest_tag: "b7777", latest_is: "newest", reason: "", how, cmd });
+    let p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [{ ...base, update: upd("brew", "brew upgrade llama.cpp") }] }) });
+    await p.start();
+    let t = p.text("llama-body");
+    if (!t.includes("Update available: b4242 → b7777") || !t.includes("brew upgrade llama.cpp")) return "brew update missing: " + t;
+    if (!t.includes("newest release")) return "the newest tag is not labelled as the newest release: " + t;
+    if (p.button("llama-body", "Update")) return "a button for a command this page does not run";
+    p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [{ ...base, update: upd("winget", "winget upgrade ggml.llamacpp") }] }) });
+    await p.start();
+    t = p.text("llama-body");
+    if (!t.includes("winget upgrade ggml.llamacpp")) return "winget command missing: " + t;
+    p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [{ ...base, update: upd("other", "") }] }) });
+    await p.start();
+    t = p.text("llama-body");
+    if (!t.includes("Update available: b4242 → b7777")) return "versions missing: " + t;
+    if (/brew upgrade|winget upgrade/.test(t) || p.button("llama-body", "Update")) return "a command or button without the tool found: " + t;
+  },
+
+  async "up to date and unknown are stated plainly, and unknown gives its reason"() {
+    const ok = { ...NEED, found: "/p/proj/bin/llama-server", works: true, version: "version: 7777 (abc1234)", need: "" };
+    let p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [{ ...ok, update: { status: "up-to-date", installed: 7777, latest: 7777,
+      latest_tag: "b7777", reason: "", how: "download", cmd: "" } }] }) });
+    await p.start();
+    let t = p.text("llama-body");
+    if (!/Up to date/.test(t) || /Update available/.test(t) || p.button("llama-body", "Update")) return "up to date not plain: " + t;
+    p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [{ ...ok, update: { status: "unknown", installed: 7777, latest: null,
+      latest_tag: "", reason: "The release list could not be reached (no answer from api.github.com).", how: "download", cmd: "" } }] }) });
+    await p.start();
+    t = p.text("llama-body");
+    if (!t.includes("could not be reached") || /Update available|Up to date/.test(t) || p.button("llama-body", "Update")) return "unknown not honest: " + t;
+  },
+
+  async "when an install is already offered, an update does not add a second install button"() {
+    const nogpu = { ...NEED, found: "/p/proj/bin/llama-server", works: true, version: "version: 4242 (abc1234)", need: "no-gpu",
+      update: { status: "update", installed: 4242, latest: 7777, latest_tag: "b7777", reason: "", how: "download", cmd: "" } };
+    const p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [nogpu] }) });
+    await p.start();
+    const t = p.text("llama-body");
+    if (!t.includes("Update available: b4242 → b7777")) return "versions missing: " + t;
+    const buttons = []; findEl(p.el("llama-body"), (e) => { if (e.handlers && e.handlers.click) buttons.push(e); return false; });
+    if (buttons.length !== 1) return "expected one install button, got " + buttons.length + ": " + t;
+  },
+
   async "leaving the install view stops asking about the install"() {
     const p = makePage({ hash: "#llama", routes: llamaRoutes({ infos: [job({ state: "downloading", done: 1, total: 100 })] }) });
     await p.start();

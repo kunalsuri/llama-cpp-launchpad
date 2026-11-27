@@ -38,6 +38,35 @@ The page opens at `http://localhost:8080` (or your `PORT`). The model's name is 
 5. Under the answer: how many tokens it wrote, how long it took and the speed in tokens per second, measured in your
    browser for this answer. **Copy** copies the answer.
 
+## Open a file
+
+Instead of pasting, press **Open file** (next to the option) and pick a text or code file, or drag a file onto the
+box. The file is read by your browser and its text goes into the box; nothing is uploaded anywhere except the normal
+request to the local model when you press **Run**. You can still edit the text before running.
+
+- The picker offers `.txt`, `.md` and common code files (`.py`, `.js`, `.ts`, `.c`, `.cpp`, `.java`, `.go`, `.rs`,
+  `.json`, `.yaml`, `.html`, `.css`, `.sh` and a few more). Any other file that is plain UTF-8 text opens too.
+- The name of the file you opened is shown under the box. For **Explain code**, a known extension tells the model the
+  language ("Python" for `.py`); pasted code carries no such hint.
+- A file over **1 MB**, or one that looks binary (an image, a program, a zip), is not opened. The message under the box
+  names the file and the reason, and your text stays as it was.
+- If you drop several files, only the first is opened, and the message says so.
+
+## History
+
+Under the answer, **History** lists your last 20 finished results. Each item shows the task, its option, the time and
+the start of your text.
+
+- Click an item to put its task, option, text and answer back on the page.
+- The bin button deletes one item; **Clear history** asks first, then deletes them all when you press **Yes, clear** (there is no undo).
+- Only finished answers are saved: a request that failed or that you stopped is not.
+- Text longer than 2,000 characters is saved shortened (restoring it says so).
+
+History lives in this browser's own storage (`localStorage`) and nowhere else: it is not sent to the model or any
+server, it stays after you close the page, and another browser or another computer does not see it. If the browser
+will not store it (private mode, or storage switched off), the page says so and keeps the items only until you close or
+reload the page.
+
 ## What the model is asked
 
 The page sends your text with an instruction for the task (`TASKS` in `ui/tasks/index.html`). In short:

@@ -71,6 +71,29 @@ Offered when no working `llama-server` is found (looked for in `LLAMA_SERVER`, y
 - If another `llama-server` comes first in the lookup order (`LLAMA_SERVER` or your PATH), the page says so: the serve
   scripts would use that one, not the copy in `bin/`.
 
+### Is there a newer llama.cpp?
+
+When a working `llama-server` is found, the page compares its build number (`llama-server --version` prints
+`version: 5123 (abc1234)`) with the newest llama.cpp release tag (`b5200`), and says one of:
+
+- *Update available: b5123 → b5200.* What comes with it depends on where the copy in use is:
+  - in `bin/` (Windows, Linux): an **Update llama.cpp** button, which is the same download and checks as above. The
+    newer build named is the one that download would install for this computer (its OS, chip and graphics card), so a
+    brand-new release that has no archive for you yet is not announced;
+  - installed by Homebrew: `brew upgrade llama.cpp`, only if `brew` was found;
+  - installed by winget: `winget upgrade ggml.llamacpp`, only if `winget` was found;
+  - any other copy: just the two builds. The page does not touch a program it did not install.
+
+  For the last three the newer build is the newest release, and the page labels it "(newest release)".
+- *Up to date.* A local build newer than the newest release (built from source) counts as up to date.
+- *Could not check*, with the reason: no `llama-server` found, `--version` failed or printed no build number, or the
+  release list on api.github.com could not be reached (including "timed out"). The page never guesses.
+
+The release lookup is made when this view opens (not by the other screens), waits at most 8 seconds (one timeout
+ends the lookup), is remembered for an hour (five minutes after a failure), and is not repeated while you watch an
+install. `GET /api/llama` returns it as `update`, with the
+places it looked.
+
 ## Model radar (`/#radar`) and What changed (`/#history`)
 
 Trending and new GGUF models on Hugging Face, checked against your memory. Speeds are labelled as estimates until a

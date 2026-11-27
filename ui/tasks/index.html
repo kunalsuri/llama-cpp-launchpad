@@ -85,6 +85,36 @@
   .copy { display: inline-flex; align-items: center; gap: 6px; border-radius: 8px; padding: 4px 8px; font-size: 13px; color: var(--muted-foreground); }
   .copy:hover { background: var(--secondary); color: var(--foreground); }
   .hint { margin: 18px 0 0; font-size: 13px; color: var(--muted-foreground); }
+
+  /* Open file */
+  .attach { display: inline-flex; align-items: center; gap: 6px; background: var(--pill); border-radius: 10px; box-shadow: var(--shadow);
+    padding: 5px 10px; font-size: 14px; font-weight: 500; min-height: 36px; }
+  .attach:hover { background: var(--secondary); }
+  .composer.drag { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
+  .file-status { margin: 8px 8px 0; font-size: 13px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+  .file-status[hidden] { display: none; }
+  .file-status.error { color: var(--destructive); }
+
+  /* History */
+  .history { margin-top: 28px; border-top: 1px solid var(--border); padding-top: 16px; }
+  .history-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .history h2 { margin: 0; font-size: 16px; }
+  .history-note { margin: 4px 0 10px; font-size: 13px; color: var(--muted-foreground); }
+  .history-empty { margin: 0; font-size: 14px; color: var(--muted-foreground); }
+  .history-empty[hidden], .link[hidden] { display: none; }
+  .link { border-radius: 8px; padding: 6px 10px; font-size: 13px; color: var(--muted-foreground); min-height: 32px; }
+  .link:hover { background: var(--secondary); color: var(--foreground); }
+  .history-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0 0 8px; font-size: 13px; }
+  .history-confirm[hidden] { display: none; }
+  .link.danger { color: var(--destructive); font-weight: 600; }
+  #history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  #history-list li { display: flex; align-items: stretch; gap: 4px; background: var(--composer); border: 1px solid var(--border); border-radius: 12px; }
+  .hist-open { flex: 1; min-width: 0; text-align: left; border-radius: 11px; padding: 8px 12px; }
+  .hist-open:hover { background: var(--secondary); }
+  .hist-what { display: block; font-size: 13px; color: var(--muted-foreground); }
+  .hist-preview { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hist-del { flex: none; width: 36px; min-height: 36px; display: grid; place-items: center; border-radius: 11px; color: var(--muted-foreground); font-size: 16px; }
+  .hist-del:hover { background: var(--secondary); color: var(--destructive); }
   @media (max-width: 640px) { h1 { font-size: 24px; } .run { margin-left: 0; } }
 </style>
 </head>
@@ -107,15 +137,30 @@
     <div class="bar">
       <label for="option" id="option-label">Length</label>
       <select class="pill" id="option"></select>
+      <button type="button" class="attach" id="open-file" title="Open a text or code file (or drop one on this box)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>Open file</button>
+      <input type="file" id="file" hidden aria-label="Choose a text or code file">
       <button type="submit" class="run" id="run" aria-label="Run"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7M12 19V5"/></svg><span id="run-text">Run</span></button>
     </div>
+    <p class="file-status" id="file-status" role="status" hidden></p>
   </form>
 
   <section class="result" id="result" hidden aria-live="polite">
     <div class="output" id="output"></div>
     <div class="meta"><span id="stats"></span><button type="button" class="copy" id="copy" aria-label="Copy the result"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>Copy</button></div>
   </section>
-  <p class="hint">Ctrl+Enter runs the task. Everything stays on your computer: the text goes only to the llama-server serving this page.</p>
+  <section class="history" id="history" aria-labelledby="history-title">
+    <div class="history-head">
+      <h2 id="history-title">History</h2>
+      <button type="button" class="link" id="history-clear">Clear history</button>
+    </div>
+    <p class="history-confirm" id="history-confirm" role="alert" hidden><span id="history-confirm-text"></span>
+      <button type="button" class="link danger" id="history-clear-yes">Yes, clear</button>
+      <button type="button" class="link" id="history-clear-no">Cancel</button></p>
+    <p class="history-note" id="history-note"></p>
+    <p class="history-empty" id="history-empty">Nothing yet. Finished results appear here.</p>
+    <ul id="history-list"></ul>
+  </section>
+  <p class="hint">Ctrl+Enter runs the task. You can also open a text file or drop one on the box (up to 1 MB). Everything stays on your computer: the text goes only to the llama-server serving this page.</p>
 </main>
 
 <script>
@@ -126,6 +171,7 @@
   // The model is told to answer only with the result, so the output can be copied as it is.
   var TASKS = {
     summarize: {
+      name: "Summarize",
       what: "Paste an article, an email thread or notes. You get the main points back.",
       placeholder: "Paste the text to summarize...", label: "Length", code: false,
       options: [["short", "A few bullet points"], ["paragraph", "One paragraph"], ["detailed", "Detailed, by section"]],
@@ -137,6 +183,7 @@
       user: function (t) { return "Summarize this text:\n\n" + t; }
     },
     explain: {
+      name: "Explain code",
       what: "Paste code. You get an explanation of what it does, step by step, and anything that looks wrong.",
       placeholder: "Paste the code to explain...", label: "For", code: true,
       options: [["beginner", "A beginner"], ["developer", "A developer"]],
@@ -146,9 +193,11 @@
           (o === "beginner" ? "The reader is new to programming: avoid jargon and explain every term you use."
                             : "The reader is an experienced developer: be concise.");
       },
-      user: function (t) { return "Explain this code:\n\n```\n" + t + "\n```"; }
+      // lang comes from a file's extension (Open file); empty when the code was pasted.
+      user: function (t, lang) { return "Explain this code" + (lang ? " (language: " + lang + ")" : "") + ":\n\n```\n" + t + "\n```"; }
     },
     rewrite: {
+      name: "Rewrite",
       what: "Paste a draft. You get it back in the tone you pick, with the same meaning.",
       placeholder: "Paste the text to rewrite...", label: "Tone", code: false,
       options: [["plain", "Plainer and clearer"], ["formal", "More formal"], ["friendly", "Friendlier"], ["shorter", "Shorter"]],
@@ -162,6 +211,105 @@
     }
   };
   var task = "summarize", controller = null, busy = false, last = "";
+
+  // ---- History: the last results, kept in this browser's localStorage (never sent anywhere) ----
+  var HKEY = "lp.tasks.history.v1", HMAX = 20, IN_MAX = 2000, OUT_MAX = 20000;
+  var history = [], saving = true;   // saving: false when the browser refuses to store (private mode, full disk)
+
+  function loadHistory() {
+    try {
+      var raw = localStorage.getItem(HKEY), a = raw ? JSON.parse(raw) : [], out = [];
+      if (!Array.isArray(a)) return [];
+      a.forEach(function (e) {
+        if (e && typeof e === "object" && TASKS[e.task] && typeof e.input === "string" && typeof e.output === "string" && typeof e.time === "number") out.push(e);
+      });
+      return out.slice(0, HMAX);
+    } catch (e) { saving = false; return []; }
+  }
+  function saveHistory() {
+    try { localStorage.setItem(HKEY, JSON.stringify(history)); saving = true; }
+    catch (e) { saving = false; }
+  }
+  function addHistory(t, opt, input, output) {
+    var cut = input.length > IN_MAX || output.length > OUT_MAX;
+    history.unshift({ time: Date.now(), task: t, option: opt, input: input.slice(0, IN_MAX), output: output.slice(0, OUT_MAX), cut: cut });
+    history = history.slice(0, HMAX);
+    saveHistory(); renderHistory();
+  }
+  function optionLabel(e) {
+    var o = TASKS[e.task].options.filter(function (x) { return x[0] === e.option; })[0];
+    return o ? o[1] : "";
+  }
+  function renderHistory() {
+    var list = $("history-list"); list.textContent = "";
+    $("history-empty").hidden = history.length > 0;
+    $("history-clear").hidden = history.length === 0;
+    $("history-confirm").hidden = true;                 // a new list means a new question: ask again
+    $("history-note").textContent = saving
+      ? "Saved in this browser only (the last " + HMAX + "). It is never sent anywhere."
+      : "This browser is not saving history (private mode or storage is off), so these items are kept only until you close or reload this page.";
+    history.forEach(function (e, i) {
+      var li = document.createElement("li");
+      var open = document.createElement("button"); open.type = "button"; open.className = "hist-open";
+      var what = document.createElement("span"); what.className = "hist-what";
+      var when = new Date(e.time).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      what.textContent = [TASKS[e.task].name, optionLabel(e), when].filter(Boolean).join(" · ");
+      var prev = document.createElement("span"); prev.className = "hist-preview"; prev.textContent = e.input.replace(/\s+/g, " ").slice(0, 100);
+      open.appendChild(what); open.appendChild(prev);
+      open.title = "Restore this input and result";
+      open.onclick = function () { restoreHistory(i); };
+      var del = document.createElement("button"); del.type = "button"; del.className = "hist-del";
+      del.setAttribute("aria-label", "Delete this item from history"); del.title = "Delete this item";
+      del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v5M14 11v5"/></svg>';
+      del.onclick = function () { history.splice(i, 1); saveHistory(); renderHistory(); };
+      li.appendChild(open); li.appendChild(del); list.appendChild(li);
+    });
+  }
+  function restoreHistory(i) {
+    var e = history[i]; if (!e || busy) return;
+    setTask(e.task);
+    $("option").value = e.option;
+    $("text").value = e.input; clearFile();
+    last = e.output; show(e.output, false, false);
+    $("stats").textContent = "Restored from history" + (e.cut ? " (long text was shortened when it was saved)" : "");
+  }
+
+  // ---- Open file: read in the browser with FileReader; nothing is uploaded ----
+  var FILE_MAX = 1024 * 1024;
+  // Extension -> language name (a hint for Explain code). Extensions with no entry here are plain text.
+  var CODE_LANG = { py: "Python", js: "JavaScript", mjs: "JavaScript", jsx: "JavaScript (JSX)", ts: "TypeScript", tsx: "TypeScript (TSX)",
+    c: "C", h: "C", cpp: "C++", cc: "C++", hpp: "C++", java: "Java", go: "Go", rs: "Rust", json: "JSON", yaml: "YAML", yml: "YAML",
+    html: "HTML", css: "CSS", sh: "shell script", bash: "shell script", rb: "Ruby", php: "PHP", cs: "C#", kt: "Kotlin", swift: "Swift",
+    sql: "SQL", toml: "TOML", xml: "XML", ps1: "PowerShell", lua: "Lua" };
+  var PLAIN_EXT = ["txt", "md", "markdown", "csv", "log", "rst", "ini", "cfg"];
+  var fileLang = "";
+
+  function fileMsg(text, error) {
+    var s = $("file-status"); s.textContent = text; s.hidden = !text; s.className = "file-status" + (error ? " error" : "");
+  }
+  function clearFile() { fileLang = ""; fileMsg("", false); }
+  function niceSize(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " bytes"; }
+
+  function loadFile(file, extra) {
+    var name = file.name || "(unnamed file)";
+    if (file.size > FILE_MAX) { fileMsg("\"" + name + "\" was not opened: it is " + niceSize(file.size) + ", and the limit is 1 MB.", true); return; }
+    var reader = new FileReader();
+    reader.onerror = function () { fileMsg("\"" + name + "\" was not opened: the browser could not read it.", true); };
+    reader.onload = function () {
+      var text = String(reader.result || "");
+      var bad = (text.match(/�/g) || []).length;
+      if (text.indexOf("\u0000") !== -1 || bad > text.length / 100) {
+        fileMsg("\"" + name + "\" was not opened: it looks like a binary file, not text.", true); return;
+      }
+      var m = /\.([A-Za-z0-9]+)$/.exec(name), ext = m ? m[1].toLowerCase() : "";
+      $("text").value = text;
+      fileLang = CODE_LANG[ext] || "";
+      fileMsg("Opened " + name + " (" + niceSize(file.size) + (fileLang ? ", " + fileLang : "") + ")." + (extra || ""), false);
+      $("text").focus();
+    };
+    reader.readAsText(file);
+  }
+  function hasFiles(e) { return !!(e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") !== -1); }
 
   function setTask(t) {
     task = t;
@@ -195,14 +343,14 @@
     if (busy) { if (controller) controller.abort(); return; }
     var text = $("text").value.trim();
     if (!text) { $("text").focus(); return; }
-    var T = TASKS[task], opt = $("option").value;
+    var which = task, T = TASKS[which], opt = $("option").value;   // the task can be switched while it runs
     controller = new AbortController(); setBusy(true);
     $("stats").textContent = ""; last = ""; show("", true, false);
     var t0 = performance.now(), chunks = 0, usage = null;
     try {
       var res = await fetch("/v1/chat/completions", {
         method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
-        body: JSON.stringify({ messages: [{ role: "system", content: T.system(opt) }, { role: "user", content: T.user(text) }],
+        body: JSON.stringify({ messages: [{ role: "system", content: T.system(opt) }, { role: "user", content: T.user(text, fileLang) }],
           stream: true, stream_options: { include_usage: true }, temperature: task === "rewrite" ? 0.5 : 0.2 })
       });
       if (!res.ok) throw new Error("llama-server answered " + res.status + ": " + (await res.text()).slice(0, 300));
@@ -227,6 +375,7 @@
       var secs = (performance.now() - t0) / 1000, tokens = (usage && usage.completion_tokens) || chunks;
       show(last || "(The model returned nothing.)", false, false);
       $("stats").textContent = tokens + " tokens · " + secs.toFixed(1) + " s · " + (secs > 0 ? (tokens / secs).toFixed(1) : "0") + " tokens/s";
+      if (last) addHistory(which, opt, text, last);   // only a finished answer: a stopped or failed request goes to catch
     } catch (e) {
       if (e.name === "AbortError") show(last || "Stopped.", false, false);
       else show("Error: " + e.message, false, true);
@@ -246,6 +395,37 @@
     if (!last || !navigator.clipboard) return;
     navigator.clipboard.writeText(last).then(function () { $("copy").lastChild.textContent = "Copied"; setTimeout(function () { $("copy").lastChild.textContent = "Copy"; }, 1200); }, function () {});
   };
+  // Clear asks first: nothing is removed until "Yes, clear" (there is no undo).
+  $("history-clear").onclick = function () {
+    var n = history.length;
+    $("history-confirm-text").textContent = "Clear all " + n + " item" + (n === 1 ? "" : "s") + "? This cannot be undone.";
+    $("history-clear").hidden = true; $("history-confirm").hidden = false; $("history-clear-no").focus();
+  };
+  $("history-clear-yes").onclick = function () { history = []; saveHistory(); renderHistory(); };
+  $("history-clear-no").onclick = function () { renderHistory(); $("history-clear").focus(); };
+  $("file").accept = Object.keys(CODE_LANG).concat(PLAIN_EXT).map(function (x) { return "." + x; }).join(",") + ",text/*";
+  $("open-file").onclick = function () { $("file").click(); };
+  $("file").addEventListener("change", function () {
+    var f = this.files && this.files[0];
+    if (f) loadFile(f);
+    this.value = "";   // so choosing the same file again still fires "change"
+  });
+  var box = $("form");
+  box.addEventListener("dragover", function (e) { if (hasFiles(e)) { e.preventDefault(); box.classList.add("drag"); } });
+  box.addEventListener("dragleave", function (e) { if (!box.contains(e.relatedTarget)) box.classList.remove("drag"); });
+  box.addEventListener("drop", function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); e.stopPropagation(); box.classList.remove("drag");
+    var fs = e.dataTransfer.files;
+    if (fs && fs.length) loadFile(fs[0], fs.length > 1 ? " Only the first of " + fs.length + " files was opened." : "");
+  });
+  // A file dropped beside the box would make the browser leave the page and lose the text: ignore it instead.
+  window.addEventListener("dragover", function (e) { if (hasFiles(e)) e.preventDefault(); });
+  window.addEventListener("drop", function (e) { if (hasFiles(e)) e.preventDefault(); });
+  // Pasting or emptying the box means the text no longer is the opened file.
+  $("text").addEventListener("paste", clearFile);
+  $("text").addEventListener("input", function () { if (!this.value) clearFile(); });
+  history = loadHistory(); renderHistory();
   fetch("/v1/models").then(function (r) { return r.json(); }).then(function (j) {
     var m = (j.data && j.data[0] && j.data[0].id) || "";
     $("model").textContent = m ? m.split(/[\\/]/).pop().replace(/\.gguf$/i, "") : "connected";

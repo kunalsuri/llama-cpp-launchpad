@@ -46,6 +46,10 @@ class UiBase(tms.Base):
         self.app.probe = FakeProbe("Linux")     # rule 2: commands and hints must not depend on the host
         self.app.router_preset = self.tmp / ".launchpad-models.ini"     # never the real project folder
         self.app.llama_version = lambda argv: (True, "version: 4242 (abc1234)")
+
+        def no_network(url):
+            raise OSError("no network in tests")
+        self.app.installer = self.app.make_installer(fetch_json=no_network)     # GitHub is never really asked (rule 2)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), ui_server.make_handler(self.app))
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -1276,6 +1280,119 @@ class TestLlamaApi(UiBase):
         self.assertTrue((self.bin / "llama-server").is_file())
         self.found_server = str(self.bin / "llama-server")
         self.assertEqual(self.llama()["need"], "")
+
+    # --- "Tell me when llama.cpp has a new version" ---------------------------------------------------
+    def counting_releases(self):
+        self.asked = []
+        self.app.installer = self.app.make_installer(fetch_json=lambda url: self.asked.append(url) or self.release,
+                                                     fetch_file=self.fetch_file, version=self.tli.fake_version)
+
+    def put_in_bin(self):
+        self.bin.mkdir(parents=True, exist_ok=True)
+        (self.bin / "llama-server").write_bytes(b"x")
+
+    def test_an_older_copy_in_bin_is_reported_with_both_builds_and_the_install_as_the_way_to_update(self):
+        self.put_in_bin()
+        self.counting_releases()
+        u = self.llama()["update"]
+        self.assertEqual((u["status"], u["installed"], u["latest"], u["latest_tag"], u["how"]),
+                         ("update", 4242, 7777, "b7777", "download"), u)
+
+    def test_a_current_copy_is_up_to_date(self):
+        self.put_in_bin()
+        self.app.llama_version = lambda argv: (True, "version: 7777 (abc1234)")
+        self.assertEqual(self.llama()["update"]["status"], "up-to-date")
+
+    def test_unknown_is_reported_with_the_reason_for_each_case(self):
+        self.assertEqual((self.llama()["update"]["status"], "No llama-server" in self.llama()["update"]["reason"]), ("unknown", True))
+        self.put_in_bin()
+        self.app.llama_version = lambda argv: (False, "error while loading shared libraries")
+        self.assertIn("--version", self.llama()["update"]["reason"])
+        self.app.llama_version = lambda argv: (True, "version: 0.8.0")
+        self.assertIn("build number", self.llama()["update"]["reason"])
+        self.app.llama_version = lambda argv: (True, "version: 4242 (abc1234)")
+
+        def offline(url):
+            raise OSError("offline")
+        self.app.installer = self.app.make_installer(fetch_json=offline, version=self.tli.fake_version)
+        u = self.llama()["update"]
+        self.assertEqual(u["status"], "unknown")
+        self.assertIn("could not be reached", u["reason"])
+        self.assertTrue(u["looked"], "the misses are logged")
+
+    def test_a_copy_in_bin_is_told_the_installable_build_and_another_copy_the_newest_one(self):
+        newest = {"tag_name": "b9000", "assets": []}                    # no archive for this machine yet
+        self.app.installer = self.app.make_installer(
+            fetch_json=lambda url: [newest, self.release] if url == ui_server.llama_install.RELEASES_LIST else newest,
+            fetch_file=self.fetch_file, version=self.tli.fake_version)
+        self.put_in_bin()
+        u = self.llama()["update"]
+        self.assertEqual((u["latest_tag"], u["latest_is"], u["how"]), ("b7777", "installable", "download"), u)
+        self.found_server = "/usr/local/bin/llama-server"
+        u = self.llama()["update"]
+        self.assertEqual((u["latest_tag"], u["latest_is"], u["how"]), ("b9000", "newest", "other"), u)
+
+    def test_a_slow_github_is_reported_as_timed_out_not_waited_for(self):
+        self.put_in_bin()
+
+        def hangs(url):
+            raise TimeoutError("timed out")
+        self.app.installer = self.app.make_installer(fetch_json=hangs, version=self.tli.fake_version)
+        t0 = time.monotonic()
+        u = self.llama()["update"]
+        self.assertEqual(u["status"], "unknown")
+        self.assertIn("timed out", u["reason"])
+        self.assertLess(time.monotonic() - t0, 5)
+
+    def test_the_release_lookup_is_cached_and_never_made_by_the_state_poll(self):
+        self.put_in_bin()
+        self.counting_releases()
+        self.get_json("/api/state")
+        self.assertEqual(self.asked, [], "/api/state must not contact GitHub")
+        for _ in range(4):
+            self.llama()
+        self.assertEqual(len(self.asked), 1, self.asked)
+
+    def test_homebrew_upgrade_command_only_when_brew_was_found(self):
+        cellar = "/opt/homebrew/Cellar/llama.cpp/4242/bin/llama-server"
+        self.found_server = cellar
+        self.app.probe = FakeProbe("Darwin", path={"brew": "/opt/homebrew/bin/brew"})
+        self.counting_releases()
+        u = self.llama()["update"]
+        self.assertEqual((u["status"], u["how"], u["cmd"]), ("update", "brew", "brew upgrade llama.cpp"))
+        self.app.probe = FakeProbe("Darwin")
+        u = self.llama()["update"]
+        self.assertEqual((u["status"], u["how"], u["cmd"]), ("update", "other", ""))
+
+    def test_winget_upgrade_command_only_when_winget_was_found(self):
+        self.found_server = r"C:\Users\me\AppData\Local\Microsoft\WinGet\Packages\ggml.llamacpp_x\llama-server.exe"
+        self.app.probe = FakeProbe("Windows", path={"winget": r"C:\WindowsApps\winget.exe"})
+        self.counting_releases()
+        u = self.llama()["update"]
+        self.assertEqual((u["how"], u["cmd"]), ("winget", "winget upgrade ggml.llamacpp"))
+        self.app.probe = FakeProbe("Windows")
+        self.assertEqual(self.llama()["update"]["how"], "other")
+
+    def test_a_copy_elsewhere_on_path_only_gets_the_versions(self):
+        self.found_server = "/usr/local/bin/llama-server"
+        self.counting_releases()
+        u = self.llama()["update"]
+        self.assertEqual((u["status"], u["how"], u["cmd"]), ("update", "other", ""))
+
+    def test_an_update_can_be_installed_into_bin_but_only_when_bin_holds_the_copy_in_use(self):
+        self.put_in_bin()
+        self.counting_releases()
+        status, body = self.post("/api/llama/install", {})
+        self.assertEqual(status, 202, body)
+        for _ in range(200):
+            if self.llama()["job"]["state"] in ("done", "failed"):
+                break
+            time.sleep(0.02)
+        self.assertEqual(self.llama()["job"]["state"], "done", self.llama()["job"])
+        self.found_server = "/usr/local/bin/llama-server"       # another copy comes first: updating bin/ would not help
+        self.app.installer = self.app.make_installer(fetch_json=lambda url: self.release, fetch_file=self.fetch_file,
+                                                     version=self.tli.fake_version)
+        self.assertEqual(self.post("/api/llama/install", {})[0], 409)
 
     def test_install_is_refused_when_a_working_llama_server_can_use_the_gpu(self):
         self.found_server = "/opt/llama/llama-server"
