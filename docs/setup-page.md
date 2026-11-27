@@ -28,6 +28,26 @@ model file's own header, + overhead), and whether that fits your graphics card o
 your llama-server lists its flags in `--help`. Advanced users can type a context length. The settings you start with are
 remembered for that model, and the serve scripts use them too (before `EXTRA_ARGS`, so your own flags still win).
 
+### Extras (optional)
+
+Two choices sit under the presets and combine with any of them. Every command on the page includes what you chose, built
+by the server, so what you see is what runs. They are remembered per model like the preset.
+
+| Extra | Flags | What it is for |
+| --- | --- | --- |
+| *Faster replies when the answer repeats the input* | `--spec-type ngram-mod` | The server guesses the next words by finding the same words earlier in the conversation, so no second model is needed. It helps when the reply copies from what you gave the model: rewriting a text, explaining or editing code, summaries that quote. It does little for open conversation. |
+| *Thinking models: think less, answer sooner* | `--reasoning-budget 1024` (*Think briefly*), `--reasoning-budget 0` (*Skip thinking*); *Let the model decide* passes nothing | Only for models that think before they answer; other models ignore it. A limit makes the answer come sooner but it can be less careful on hard questions. |
+
+How much the first one helps depends on what you ask. **The page does not measure it** (the speed test runs
+`llama-bench` on a made-up prompt and passes no `llama-server` flags), so try it on your own task and leave it off if it
+does not help you.
+
+Each is offered only when your `llama-server` lists what it needs in `--help`: `--spec-type` with `ngram-mod` among its
+values, and `--reasoning-budget`. A build that does not shows the reason on the page instead (an older build may list
+`--spec-type` without `ngram-mod`), and the command never contains the flag. A remembered extra that your current
+`llama-server` no longer lists is left out when you start from the serve scripts; the rest of the saved settings are
+still used.
+
 ## Explanations on the page
 
 - **Why is it slow?** After a speed test under 15 tokens/s, the done screen names the cause it can check on this

@@ -120,7 +120,8 @@ The setup page (`ui` or `launchpad`, normally at `http://127.0.0.1:8765/`) does 
   Hugging Face publishes, and a speed test.
 - **Choose settings with their cost shown**: presets for short chats, long documents or fastest replies, each with the
   exact command and the memory it needs, worked out from the model file's own header. Settings are remembered per
-  model and used by the serve scripts.
+  model and used by the serve scripts. Two optional extras go with any preset when your llama-server supports them:
+  n-gram speculation (for replies that copy the input) and a thinking limit (for models that think).
 - **Start and stop a chat** from the page, with llama-server's own output when it fails and a free port when 8080 is
   taken.
 - **Get llama.cpp** (`/#llama`): the official build for your GPU (CUDA, Vulkan or CPU) into `bin/`, verified before it
