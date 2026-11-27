@@ -523,11 +523,14 @@ class App:
             out["why"] = "Serving several models at one address needs at least two downloaded models."
         else:
             out.update(available=True, args=args, shared={"c": 4096} if "--ctx-size" in flags else {})
+            out["idle_seconds"], out["idle_why"] = router.idle_sleep(flags)
         return out
 
     def router_info(self) -> dict:
         plan = self._router_plan()
         out = {k: plan[k] for k in ("available", "why", "models")}
+        if plan["available"]:
+            out.update(idle_seconds=plan["idle_seconds"], idle_why=plan["idle_why"])
         if plan["available"]:
             out["cmd"] = self.chat.shown(self.chat.command(None, settings=plan["args"])[0])
             out["url"] = f"http://127.0.0.1:{self.chat.port()}/v1"
@@ -551,6 +554,8 @@ class App:
             code, body = self.chat.start(None, f"All my models ({len(plan['rows'])})", None, plan["args"], ready="/models")
             if code == 202:
                 self.chat._set(router=plan["models"])
+                self.chat.log.append(f"launchpad: idle sleep after {plan['idle_seconds']} s ({router.SLEEP_FLAG} "
+                                     f"{plan['idle_seconds']})" if plan["idle_seconds"] else f"launchpad: {plan['idle_why']}")
                 body = self.chat.status()
             return code, body
 

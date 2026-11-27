@@ -1182,6 +1182,36 @@ class TestRouterApi(UiBase):
         self.assertIn("--models-max 1", r["cmd"])
         self.assertNotIn(" -m ", r["cmd"])
 
+    def test_idle_sleep_is_offered_and_described_only_when_this_llama_server_lists_it(self):
+        r = self.get_json("/api/router")
+        self.assertIn("--sleep-idle-seconds 600", r["cmd"])
+        self.assertEqual(r["idle_seconds"], 600)
+        self.assertEqual(r["idle_why"], "")
+        b12810 = (HERE / "fixtures" / "llama_server_help_b12810.txt").read_text(encoding="utf-8")
+        self.app.chat.help = lambda argv: b12810
+        self.app.chat._flags.clear()
+        self.assertEqual(self.get_json("/api/router")["idle_seconds"], 600)
+        # a build with router mode but no --sleep-idle-seconds: works as before, says why, nothing is claimed
+        self.app.chat.help = lambda argv: "".join(
+            ln + "\n" for ln in b12810.splitlines() if "sleep-idle" not in ln and not ln.startswith(" " * 20 + "(default: -1; -1"))
+        self.app.chat._flags.clear()
+        r = self.get_json("/api/router")
+        self.assertTrue(r["available"], r)
+        self.assertNotIn("--sleep-idle-seconds", r["cmd"])
+        self.assertIn("--models-max 1", r["cmd"])
+        self.assertEqual(r["idle_seconds"], 0)
+        self.assertIn("--sleep-idle-seconds", r["idle_why"])
+        status, body = self.post("/api/router/start", {})
+        self.assertEqual(status, 202, body)
+        log = "\n".join(self.get_json("/api/chat")["chat"]["log"])
+        self.assertIn("--sleep-idle-seconds", log, "the miss is logged (rule 5)")
+
+    def test_the_hit_is_logged_too(self):
+        status, body = self.post("/api/router/start", {})
+        self.assertEqual(status, 202, body)
+        log = "\n".join(self.get_json("/api/chat")["chat"]["log"])
+        self.assertIn("--sleep-idle-seconds 600", log)
+
     def test_start_writes_the_preset_and_runs_the_router(self):
         status, body = self.post("/api/router/start", {})
         self.assertEqual(status, 202, body)

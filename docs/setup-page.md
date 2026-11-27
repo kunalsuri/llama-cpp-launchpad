@@ -109,7 +109,12 @@ What is in the models folder, with size, origin, architecture and free disk spac
   few prompts cannot rank models, so you judge the answers.
 - *Serve all my models*: one llama-server for every model, in llama.cpp's router mode (`--models-preset`,
   `--models-max 1`). A program asks for a model by name and llama.cpp loads it, one at a time. Needs a llama.cpp recent
-  enough to have router mode; the page says so otherwise.
+  enough to have router mode; the page says so otherwise. When this llama.cpp lists `--sleep-idle-seconds` in its
+  `--help`, the command also has `--sleep-idle-seconds 600`: after 10 minutes without a request llama-server goes to
+  sleep, and the next request wakes it. The page says so only when the flag is in the command it shows; an older build
+  keeps the model loaded until you stop the server, and the server log notes that the flag was not used.
+  `--models-memory-margin` is not used: it would only unload models when memory runs short, with no way for this tool
+  to know a safe margin, so one model at a time stays the rule.
 
 ## Installed tools (`/#tools`)
 
