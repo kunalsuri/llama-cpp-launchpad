@@ -38,10 +38,6 @@ reason, and CI runs on all three OSes. `test_source_audit.py` guards what the co
   on every OS (real ports, real start and stop). Failure knobs: `FAKE_LLAMA_EXIT`, `FAKE_LLAMA_VERSION_FAIL`.
 - `fixtures/llama_release_reconstructed.json`: a llama.cpp release listing for the installer's asset matching.
   Asset names follow llama.cpp's `release-publish.yml`; sizes and digests are made up (see its `_provenance`).
-- `fixtures/llama_server_help_reconstructed.txt`: four options (`-c`, `-ctk`, `-ctv`, `-ngl`) as a recent
-  llama-server `--help` prints them, with the `allowed values:` list under `-ctk`/`-ctv` wrapped at 70 columns.
-  Not captured output: rendered by a port of `common_arg::to_string()` from llama.cpp `common/arg.cpp` (master
-  `16f090f92c0e2ac6dfddcaf93589a9b158c598c7`, read 2026-11-28). Replace it with real output when one is captured.
 - `page_harness.js`: runs the setup page's real script under Node with a fake DOM, fetch, timers, clipboard and URL
   history, so page behaviour (screens, polling, Back/Forward, focus) is tested without a browser. The fake DOM follows
   the real one where it matters (`append(null)` shows "null"). Skipped, with a reason, if Node is not installed.

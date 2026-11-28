@@ -581,6 +581,20 @@ class TestBuildNumbers(unittest.TestCase):
         self.assertEqual(li.build_number("ggml_vulkan: Found 1 device\nversion: 5123 (abc1234)\nbuilt with cc"), 5123)
         self.assertEqual(li.build_number("version: 4242 (abc1234)\nbuilt with fake-cc for test"), 4242)
 
+    def test_the_build_number_of_a_v1_banner(self):
+        """Since llama.cpp v1.0 the banner is `Version: 1.1.0-dev (build 12810, commit ca123ba76)` (real output of b12810)."""
+        real = (HERE / "fixtures" / "llama_server_version_b12810.txt").read_text(encoding="utf-8")
+        self.assertEqual(li.build_number(real), 12810)
+        self.assertEqual(li.build_number("Version: 1.1.0-dev (build 12810, commit ca123ba76)"), 12810)
+        self.assertEqual(li.build_number("ggml_vulkan: Found 1 device\n" + real), 12810)
+        self.assertEqual(li.build_number("version: 12810 (ca123ba76)"), 12810, "the old banner with a big number")
+
+    def test_a_semver_is_never_a_build_number(self):
+        for text in ("Version: 1.1.0-dev", "Version: 1.1.0-dev (commit ca123ba76)", "Version: 1.1.0 (build )",
+                     "Version: 1.1.0 (build x12)", "garbage (build 12810) in the middle of a line"):
+            with self.subTest(text=text):
+                self.assertIsNone(li.build_number(text))
+
     def test_anything_else_is_not_guessed(self):
         for text in ("", "version: 0.8.0", "version: (unknown)", "error while loading shared libraries", "build: 5123"):
             with self.subTest(text=text):
@@ -685,6 +699,15 @@ class TestUpdateStatus(unittest.TestCase):
     def test_same_or_newer_is_up_to_date(self):
         self.assertEqual(self.status(out="version: 7777 (abc)")["status"], "up-to-date")
         self.assertEqual(self.status(out="version: 7800 (abc)")["status"], "up-to-date", "a newer local build is not outdated")
+
+    def test_a_v1_llama_server_is_compared_with_the_latest_tag(self):
+        real = (HERE / "fixtures" / "llama_server_version_b12810.txt").read_text(encoding="utf-8")
+        newer = {"tag": "b12900", "number": 12900, "error": "", "looked": []}
+        same = {"tag": "b12810", "number": 12810, "error": "", "looked": []}
+        s = self.status(out=real, latest=newer)
+        self.assertEqual((s["status"], s["installed"], s["latest"], s["latest_tag"]), ("update", 12810, 12900, "b12900"))
+        s = self.status(out=real, latest=same)
+        self.assertEqual((s["status"], s["installed"]), ("up-to-date", 12810))
 
     def test_unknown_says_why_and_never_guesses(self):
         cases = [(dict(found=""), "No llama-server"),

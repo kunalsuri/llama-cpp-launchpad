@@ -202,6 +202,11 @@
   .preset .mem.partial, .preset .mem.tight { color: var(--warn); }
   .preset .mem.no, .preset .why { color: var(--bad); }
   .preset.off { opacity: .75; background: var(--surface-2); }
+  .presets.one { grid-template-columns: 1fr; }
+  .extras-think { margin: 14px 0 8px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .extras-think b { font-size: 15px; }
+  .extras-think span { font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
+  .extras > .preset.off { margin-top: 14px; }
   .settings input[type=number] { width: 9em; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm);
     background: var(--surface); color: var(--text); font: inherit; }
   @media (max-width: 560px) { .presets { grid-template-columns: 1fr; } }
@@ -972,7 +977,7 @@ async function done(j) {
   renderSpeedNotes(j.bench === "ok" ? j.speed_notes : []);
   const next = $("#done-next");
   $("#chat-box").replaceChildren();
-  chatKey = ""; chatPre = null; chatPreset = ""; chatCtx = null;
+  chatKey = ""; chatPre = null; chatPreset = ""; chatCtx = null; chatSpec = null; chatThink = null;
   chatModel = j.id || lastId;
   lastDone = j;
   if (!S.llama_server) {
@@ -1048,7 +1053,7 @@ async function loadVision(wasDownloading) {
   if (state === "downloading") visionTimer = setTimeout(() => loadVision(true), 1000);
   else if (wasDownloading && state === "done") {        // the command now loads the projector: show it
     let d = null;
-    try { d = await api("/api/chat?id=" + encodeURIComponent(chatModel) + (chatPreset ? "&preset=" + chatPreset : "") + (chatCtx ? "&ctx=" + chatCtx : "")); } catch (e) {}
+    try { d = await api(chatUrl()); } catch (e) {}
     if (d && d.preview && !(S.chat && ["starting", "running"].includes(S.chat.state))) renderChatStart($("#done-next"), d.preview);
   }
 }
@@ -1072,6 +1077,18 @@ function renderSpeedNotes(notes) {
 
 // --- Settings presets: the server says which ones this llama-server can run, their exact command and memory -----
 let chatPreset = "", chatCtx = null, chatPv = null;
+let chatSpec = null, chatThink = null;     // the extras as the server last showed them; null = not asked yet (the server uses what it remembers)
+// One place builds the request, so every control (preset, context length, extras, image support) asks for the same thing.
+function chatUrl() {
+  return "/api/chat?id=" + encodeURIComponent(chatModel) + (chatPreset ? "&preset=" + chatPreset : "") + (chatCtx ? "&ctx=" + chatCtx : "") +
+    (chatSpec === null ? "" : "&spec=" + (chatSpec ? 1 : 0)) + (chatThink ? "&think=" + chatThink : "");
+}
+async function applyExtras(spec, think) {
+  chatSpec = spec; chatThink = think;
+  let d = null;
+  try { d = await api(chatUrl()); } catch (e) {}
+  if (d && d.preview) renderChatStart($("#done-next"), d.preview);
+}
 const WHERE_FITS = { gpu: "fits your graphics card", partial: "split between graphics card and main memory",
   cpu: "runs from main memory", tight: "a tight fit: it may not load", no: "too big for this computer" };
 function memText(m) {
@@ -1101,17 +1118,39 @@ function settingsPanel(pv) {
   return h("div", { class: "settings" },
     h("p", { class: "rows-title" }, "How will you use it?"),
     h("div", { class: "presets", role: "group", "aria-label": "Settings" }, ...rows),
+    extrasPanel(pv),
     first && !pv.presets.some((x) => x.memory) ? h("p", { class: "muted" }, "Memory needed: could not read the model file (" + first.memory_error + ").") : null,
     h("details", { class: "explain" }, h("summary", {}, icon("info"), "Set the context length yourself"),
       h("div", { class: "terminal-body" },
         h("p", { class: "muted", style: "margin:0 0 8px" }, "The context is how much of the conversation the model can see at once, in tokens (a token is about 3/4 of a word). More context needs more memory."),
         h("div", { class: "actions" }, ctxIn, h("button", { class: "btn small ghost", onclick: () => applyCtx(ctxIn.value) }, "Use this length")))));
 }
+// Extras that go with any preset above. Whether each is offered, and why not, is the server's call (rule 3): it knows what
+// this llama-server lists. The command shown is always the one the server built with the extras included.
+function extrasPanel(pv) {
+  const e = pv.extras;
+  if (!e) return null;
+  const spec = e.spec, think = e.think;
+  const specCard = spec.available
+    ? h("button", { class: "preset", "aria-pressed": pv.spec ? "true" : "false", onclick: () => applyExtras(!pv.spec, pv.think) }, h("b", {}, spec.label), h("span", {}, spec.text))
+    : h("div", { class: "preset off", "aria-disabled": "true" }, h("b", {}, spec.label), h("span", {}, spec.text), h("span", { class: "why" }, spec.why));
+  const thinkBody = [h("b", {}, think.label), h("span", {}, think.text)];
+  let choices = null;
+  if (think.available) {
+    choices = h("div", { class: "presets", role: "group", "aria-label": "Thinking limit" }, ...think.options.map((o) =>
+      h("button", { class: "preset", "aria-pressed": pv.think === o.id ? "true" : "false", onclick: () => applyExtras(pv.spec, o.id) }, h("b", {}, o.label), h("span", {}, o.text))));
+  } else thinkBody.push(h("span", { class: "why" }, think.why));
+  return h("div", { class: "extras" },
+    h("p", { class: "rows-title" }, "Extras (optional)"),
+    h("div", { class: "presets one" }, specCard),
+    h("div", { class: think.available ? "extras-think" : "preset off", ...(think.available ? {} : { "aria-disabled": "true" }) }, ...thinkBody),
+    choices);
+}
 async function applyCtx(value) {
   const n = parseInt(value, 10);
   chatCtx = n >= 256 && n <= 1048576 ? n : null;
   let d = null;
-  try { d = await api("/api/chat?id=" + encodeURIComponent(chatModel) + (chatPreset ? "&preset=" + chatPreset : "") + (chatCtx ? "&ctx=" + chatCtx : "")); } catch (e) {}
+  try { d = await api(chatUrl()); } catch (e) {}
   if (d && d.preview) renderChatStart($("#done-next"), d.preview);
 }
 
@@ -1120,6 +1159,7 @@ function renderChatStart(next, pv) {
   const kids = [];
   chatPv = pv;
   if (pv && pv.ctx && chatCtx == null) chatCtx = pv.ctx;     // the context this model last ran with
+  if (pv && typeof pv.spec === "boolean") { chatSpec = pv.spec; chatThink = pv.think; }     // what the server says is on, which may be less than was asked
   if (!pv) {                                         // not a model this page offered (e.g. a terminal download)
     kids.push(h("p", {}, "To start chatting, run this from the project folder:"), cmdRow(S.serve_cmd),
       SERVE_TIP[S.os] ? h("p", { class: "muted", style: "margin-top:10px" }, SERVE_TIP[S.os]) : null);
@@ -1150,6 +1190,7 @@ async function startChat(port) {
   const picked = presetPicked(chatPv);
   if (picked) body.preset = picked.id;
   if (chatCtx) body.ctx = chatCtx;
+  if (chatPv && typeof chatPv.spec === "boolean") { body.spec = chatPv.spec; body.think = chatPv.think; }
   $("#done-next").replaceChildren(serveFromTerminal() || "");
   let r;
   try { r = await api("/api/chat/start", body); } catch (e) { r = { error: UNREACHABLE }; }
@@ -1514,6 +1555,9 @@ async function loadClients(body) {
 
 // --- All my models at one address (utils/router.py): llama-server's router mode over the models folder ----------
 let routerInfo = null, routerTimer = null, routerGen = 0;
+function idleText(r) {         // said only when the flag is in the command shown (r.idle_seconds is 0 otherwise)
+  return r && r.idle_seconds ? " After " + Math.round(r.idle_seconds / 60) + " minutes without a request llama-server goes to sleep; the next request wakes it." : "";
+}
 function renderRouter() {
   const box = $("#router-box"), r = routerInfo, c = S.chat || {};
   const kids = [];
@@ -1521,7 +1565,7 @@ function renderRouter() {
     const api = "http://127.0.0.1:" + c.port + "/v1";
     kids.push(c.state === "starting" ? h("p", {}, h("b", {}, "Starting… "), "llama-server is reading the model list.")
       : h("p", {}, h("b", {}, "Serving " + c.router.length + " models at " + api + ". "),
-        "Programs that use the OpenAI API (Open WebUI, Continue, …) ask for one by name; llama.cpp loads it then, one at a time."),
+        "Programs that use the OpenAI API (Open WebUI, Continue, …) ask for one by name; llama.cpp loads it then, one at a time." + idleText(r)),
       h("ul", { class: "reasons" }, c.router.map((n) => h("li", {}, h("code", {}, n)))),
       c.state === "running" ? clientsPanel() : null,
       h("div", { class: "actions" }, c.state === "running" ? h("a", { class: "btn small", href: c.url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open the chat") : null,
@@ -1531,7 +1575,7 @@ function renderRouter() {
       kids.push(h("div", { class: "notice warn", role: "status" }, icon("alert"), h("div", { class: "notice-body" }, c.error || "llama-server stopped.")),
         h("pre", { class: "log" }, (c.log || []).slice(-30).join("\n")));
     kids.push(h("p", {}, h("b", {}, "All my models at one address. "),
-      "One llama-server for every model here: a program asks for a model by name and llama.cpp loads it, one at a time, so only one is ever in memory."),
+      "One llama-server for every model here: a program asks for a model by name and llama.cpp loads it, one at a time, so only one is ever in memory." + idleText(r)),
       h("div", { class: "actions" }, h("button", { class: "btn small", onclick: startRouter }, icon("layers"), "Serve all my models")),
       h("p", { class: "cmd-label" }, "It runs:"), cmdRow(r.cmd));
   } else if (r && r.why && modelsData && modelsData.models.some((m) => m.kind === "model")) {

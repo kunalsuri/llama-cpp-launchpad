@@ -80,6 +80,14 @@ class TestOllama(unittest.TestCase):
 
 
 class TestLlamaCpp(unittest.TestCase):
+    def test_v1_banner_version_is_the_text_after_the_label(self):
+        """Real `llama-server --version` of b12810 starts with a capital `Version:`."""
+        real = (Path(__file__).resolve().parent / "fixtures" / "llama_server_version_b12810.txt").read_text(encoding="utf-8")
+        exe = "/usr/local/bin/llama-server"
+        p = FakeProbe("Linux", files=[exe], path={"llama-server": exe}, output={exe: real})
+        t = tool(dt.detect(p), "llama-cpp")
+        self.assertEqual((t["status"], t["version"]), ("installed", "1.1.0-dev (build 12810, commit ca123ba76)"))
+
     def test_several_binaries_one_tool_one_version_run(self):
         build = "/home/me/llama.cpp/build/bin/"
         p = FakeProbe("Linux", files=[build + "llama-server", build + "llama-cli"],

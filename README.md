@@ -120,7 +120,8 @@ The setup page (`ui` or `launchpad`, normally at `http://127.0.0.1:8765/`) does 
   Hugging Face publishes, and a speed test.
 - **Choose settings with their cost shown**: presets for short chats, long documents or fastest replies, each with the
   exact command and the memory it needs, worked out from the model file's own header. Settings are remembered per
-  model and used by the serve scripts.
+  model and used by the serve scripts. Two optional extras go with any preset when your llama-server supports them:
+  n-gram speculation (for replies that copy the input) and a thinking limit (for models that think).
 - **Start and stop a chat** from the page, with llama-server's own output when it fails and a free port when 8080 is
   taken.
 - **Get llama.cpp** (`/#llama`): the official build for your GPU (CUDA, Vulkan or CPU) into `bin/`, verified before it
@@ -173,6 +174,10 @@ Each tool has a launcher in `scripts/win` (`.bat`), `scripts/unix` (`.sh`) and `
 python utils/gguf.py models/MODEL.gguf --ctx 32768 --cache-type-k q8_0   # memory needed at that context
 python utils/compare.py models/A.gguf models/B.gguf                      # same prompts, answers side by side
 ```
+
+`gguf.py` sizes the cache for every type llama-server lists for `--cache-type-k/-v` (f32, f16, bf16, f8_e4m3, q8_0,
+q4_0, q4_1, iq4_nl, q5_0, q5_1) and refuses any other name. "Serve all my models" adds `--sleep-idle-seconds 600`
+(llama-server sleeps after 10 idle minutes) only when your llama-server's `--help` lists it.
 
 `--discover` talks only to `huggingface.co` and reads each model's header (the first megabytes, by HTTP Range) to size
 its context cache exactly; when it cannot, the table marks the figure as a rough estimate.

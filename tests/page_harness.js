@@ -179,6 +179,24 @@ const PRESET_PREVIEW = { ...PREVIEW, cmd: "CMD-AUTO", preset: "auto", presets: [
   { id: "long", label: "Long documents", text: "About 24,000 words.", available: true, why: "", cmd: "CMD-LONG", memory: mem(9000, "cpu") },
   { id: "fast", label: "Fastest replies", text: "All on the card.", available: false, why: "This needs a graphics card that llama.cpp can use, and none was found.", memory: mem(5000, "gpu") },
   { id: "auto", label: "Let llama.cpp decide", text: "llama.cpp picks.", available: true, why: "", cmd: "CMD-AUTO", memory: mem(40000, "no", { note: "whole trained context" }) }] };
+// The extras as the server describes them (chat_server.EXTRAS_INFO), and a server that builds each command with them:
+// the page must show what the server returned, never add flags itself.
+const extrasInfo = (over = {}) => ({
+  spec: { label: "Faster replies when the answer repeats the input", text: "Helps when the reply copies from what you gave the model. It does little for open conversation.",
+    available: true, why: "", ...over.spec },
+  think: { label: "Thinking models: think less, answer sooner", text: "Only for models that think before they answer (other models ignore it).", available: true, why: "",
+    options: [{ id: "default", label: "Let the model decide", text: "No limit is set.", available: true, why: "" },
+      { id: "short", label: "Think briefly", text: "At most about 1,000 tokens of thinking.", available: true, why: "" },
+      { id: "off", label: "Skip thinking", text: "The model answers straight away.", available: true, why: "" }], ...over.think } });
+function extrasPreview(full) {
+  const q = new URLSearchParams(full.split("?")[1] || "");
+  const spec = q.get("spec") === "1", think = ["short", "off"].includes(q.get("think")) ? q.get("think") : "default";
+  const suffix = (spec ? "+SPEC" : "") + (think === "default" ? "" : "+THINK-" + think.toUpperCase());
+  const presets = PRESET_PREVIEW.presets.map((x) => (x.cmd ? { ...x, cmd: x.cmd + suffix } : x));
+  const preset = q.get("preset") || "auto";
+  return { ...PRESET_PREVIEW, cmd: ((presets.find((x) => x.id === preset) || {}).cmd) || PRESET_PREVIEW.cmd + suffix, preset, presets,
+    spec, think, extras: extrasInfo() };
+}
 const STARTING = { state: "starting", cmd: PREVIEW.cmd, port: 8080, url: "http://127.0.0.1:8080/", model: "M", log: ["loading"] };
 const RUNNING = { ...STARTING, state: "running" };
 const STOPPED = { ...STARTING, state: "stopped" };
@@ -951,6 +969,112 @@ const scenarios = {
     if (!apply) return "no button to apply the length";
     apply.click(); await p.settle();
     if (!calls.some((c) => /[?&]ctx=12000\b/.test(c))) return "the server was not asked: " + calls.join(" ");
+  },
+
+  // --- Extras (n-gram speculation, thinking limit): they combine with every preset; the server builds the command ---
+  async "the extras are toggled on the server, keep the picked preset, and Start sends them"() {
+    const posts = [], calls = [];
+    const base = chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW, posts });
+    const p = makePage({ routes: (path, opts, full) => {
+      if (path === "/api/chat" && full.includes("id=")) { calls.push(full); return { chat: IDLE_CHAT, preview: extrasPreview(full) }; }
+      return base(path, opts, full);
+    } });
+    await p.start();
+    await p.advance(1000);
+    const t = p.text("done-next");
+    for (const want of ["Faster replies when the answer repeats the input", "Think briefly", "Skip thinking", "only for models that think"])
+      if (!t.toLowerCase().includes(want.toLowerCase())) return `missing "${want}": ` + t;
+    if (/\b(null|undefined)\b/.test(t)) return "null or undefined on screen: " + t;
+    const spec = p.button("done-next", "Faster replies when the answer repeats the input");
+    if (!spec) return "no toggle for speculation";
+    if (spec.getAttribute("aria-pressed") !== "false") return "the toggle starts pressed";
+    if (t.includes("+SPEC")) return "the command has the flag before it was chosen";
+    spec.click(); await p.settle();
+    if (!/[?&]spec=1\b/.test(calls[calls.length - 1])) return "the server was not asked for the new command: " + calls[calls.length - 1];
+    if (!p.text("done-next").includes("CMD-AUTO+SPEC")) return "the command the server built is not shown: " + p.text("done-next");
+    p.button("done-next", "Long documents").click(); await p.settle();
+    if (!p.text("done-next").includes("CMD-LONG+SPEC")) return "picking a preset dropped the extra: " + p.text("done-next");
+    p.button("done-next", "Skip thinking").click(); await p.settle();
+    const last = calls[calls.length - 1];
+    if (!/[?&]think=off\b/.test(last) || !/[?&]spec=1\b/.test(last) || !/[?&]preset=long\b/.test(last))
+      return "a second extra forgot the first or the preset: " + last;
+    if (!p.text("done-next").includes("CMD-LONG+SPEC+THINK-OFF")) return "not shown: " + p.text("done-next");
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    const start = posts.find((x) => x.path === "/api/chat/start");
+    if (!start || start.body.preset !== "long" || start.body.spec !== true || start.body.think !== "off")
+      return "Start did not send the extras: " + JSON.stringify(posts);
+    const again = p.button("done-next", "Faster replies when the answer repeats the input");
+    if (again) { again.click(); await p.settle(); }
+  },
+
+  async "turning an extra off again, and typing a context length, ask the server with the extras kept"() {
+    const calls = [];
+    const base = chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW });
+    const p = makePage({ routes: (path, opts, full) => {
+      if (path === "/api/chat" && full.includes("id=")) { calls.push(full); return { chat: IDLE_CHAT, preview: extrasPreview(full) }; }
+      return base(path, opts, full);
+    } });
+    await p.start();
+    await p.advance(1000);
+    const label = "Faster replies when the answer repeats the input";
+    p.button("done-next", label).click(); await p.settle();
+    const input = findEl(p.el("done-next"), (e) => e.attrs && e.attrs.type === "number");
+    input.value = "12000";
+    p.button("done-next", "Use this length").click(); await p.settle();
+    if (!/[?&]ctx=12000\b/.test(calls[calls.length - 1]) || !/[?&]spec=1\b/.test(calls[calls.length - 1]))
+      return "a typed context forgot the extra: " + calls[calls.length - 1];
+    p.button("done-next", label).click(); await p.settle();
+    if (!/[?&]spec=0\b/.test(calls[calls.length - 1])) return "turning it off did not say so: " + calls[calls.length - 1];
+    if (p.text("done-next").includes("+SPEC")) return "the flag is still in the command: " + p.text("done-next");
+  },
+
+  async "an extra this llama-server cannot run shows why and cannot be picked"() {
+    const preview = { ...PRESET_PREVIEW, spec: false, think: "default", extras: extrasInfo({
+      spec: { available: false, why: "This llama-server lists --spec-type but not its ngram-mod value (it lists: none, ngram-simple); it may be an old build." },
+      think: { available: false, why: "This llama-server does not list --reasoning-budget in its --help (it may be an old build)." } }) };
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT], preview }) });
+    await p.start();
+    await p.advance(1000);
+    const t = p.text("done-next");
+    if (!t.includes("not its ngram-mod value")) return "no reason for the speed-up: " + t;
+    if (!t.includes("--reasoning-budget")) return "no reason for the thinking limit: " + t;
+    if (p.button("done-next", "Faster replies when the answer repeats the input")) return "an unavailable toggle can be clicked";
+    if (p.button("done-next", "Skip thinking") || p.button("done-next", "Think briefly")) return "an unavailable thinking choice can be clicked";
+    p.button("done-next", "Start chatting").click(); await p.settle();
+  },
+
+  async "extras the server remembers are shown as on and sent again by Start"() {
+    const posts = [];
+    const preview = { ...PRESET_PREVIEW, ...extrasPreview("/api/chat?id=x&spec=1&think=short") };
+    const p = makePage({ routes: chatRoutes({ chats: [IDLE_CHAT], preview, posts }) });
+    await p.start();
+    await p.advance(1000);
+    if (p.button("done-next", "Faster replies when the answer repeats the input").getAttribute("aria-pressed") !== "true")
+      return "the remembered toggle is not shown as on";
+    if (p.button("done-next", "Think briefly").getAttribute("aria-pressed") !== "true") return "the remembered limit is not shown";
+    p.button("done-next", "Start chatting").click(); await p.settle();
+    const start = posts.find((x) => x.path === "/api/chat/start");
+    if (!start || start.body.spec !== true || start.body.think !== "short") return "Start lost them: " + JSON.stringify(posts);
+  },
+
+  async "coming back to the done screen does not carry the extras over from before"() {
+    const calls = [];
+    const base = chatRoutes({ chats: [IDLE_CHAT], preview: PRESET_PREVIEW });
+    const p = makePage({ routes: (path, opts, full) => {
+      if (path === "/api/chat" && full.includes("id=")) { calls.push(full); return { chat: IDLE_CHAT, preview: extrasPreview(full) }; }
+      return base(path, opts, full);
+    } });
+    await p.start();
+    await p.advance(1000);
+    p.button("done-next", "Faster replies when the answer repeats the input").click(); await p.settle();
+    p.button("done-next", "Think briefly").click(); await p.settle();
+    await p.click("tools-btn");
+    const before = calls.length;
+    await p.back();
+    if (p.visible() !== "v-done") return "did not come back to the done screen: " + p.visible();
+    const fresh = calls.slice(before);
+    if (!fresh.length) return "the done screen did not ask the server again";
+    if (/[?&](spec|think)=/.test(fresh[0])) return "extras from before were sent for what may be another model: " + fresh[0];
   },
 
   // --- Start chatting ------------------------------------------------------------------------------------------
