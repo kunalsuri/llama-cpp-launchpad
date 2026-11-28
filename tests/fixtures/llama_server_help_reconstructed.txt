@@ -1,0 +1,11 @@
+-c,    --ctx-size N                     size of the prompt context (default: 0, 0 = loaded from model)
+-ctk,  --cache-type-k TYPE              KV cache data type for K
+                                        allowed values: f32, f16, bf16, f8_e4m3, q8_0, q4_0, q4_1, iq4_nl,
+                                        q5_0, q5_1
+                                        (default: f16)
+-ctv,  --cache-type-v TYPE              KV cache data type for V
+                                        allowed values: f32, f16, bf16, f8_e4m3, q8_0, q4_0, q4_1, iq4_nl,
+                                        q5_0, q5_1
+                                        (default: f16)
+-ngl,  --gpu-layers, --n-gpu-layers N   max. number of layers to store in VRAM, either an exact number,
+                                        'auto', or 'all' (default: auto)

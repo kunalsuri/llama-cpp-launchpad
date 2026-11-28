@@ -199,17 +199,42 @@ FLAG_FOR = {"-c": "--ctx-size", "-ctk": "--cache-type-k", "-ngl": "--n-gpu-layer
 CTX_MIN, CTX_MAX = 256, 1048576
 
 
+VALUED_FLAGS = ("--cache-type-k",)                  # flags whose "allowed values:" list is recorded as "--flag=value"
+
+
 def server_flags(help_text: str) -> set:
     """The long flags a llama-server --help lists. Only the flag column is read (the leading parts of a line, split
     on wide gaps, that start with a dash: "-m,    --model FNAME      model path"), so a flag named in another
-    flag's description does not count."""
-    flags = set()
+    flag's description does not count. For VALUED_FLAGS, the values a recent build lists under the flag
+    ("allowed values: f32, f16, q8_0, ..." on indented lines that may wrap) are added as "--cache-type-k=q8_0";
+    an older build lists none, and then only the flag itself is there."""
+    flags, entry, text = set(), set(), []
+
+    def take_values():
+        found = re.search(r"allowed values:\s*(.*?)\s*(?:\(default|$)", " ".join(text))
+        for f in entry & set(VALUED_FLAGS) if found else ():
+            flags.update(f"{f}={v.strip()}" for v in found.group(1).split(",") if v.strip())
+
     for line in (help_text or "").splitlines():
-        for part in re.split(r"\s{2,}", line.strip()):
+        if line[:1].isspace():                          # a continuation line of the current flag's description
+            text.append(line.strip())
+            continue
+        take_values()
+        entry, text = set(), []
+        parts = re.split(r"\s{2,}", line.strip())
+        for i, part in enumerate(parts):
             if not part.startswith("-"):
+                text = parts[i:]
                 break
-            flags.update(re.findall(r"(?<![\w-])--[a-z][a-z0-9-]*", part))
+            entry.update(re.findall(r"(?<![\w-])--[a-z][a-z0-9-]*", part))
+        flags |= entry
+    take_values()
     return flags
+
+
+def flag_values(flags: set, flag: str) -> set:
+    """The values this llama-server lists for flag (see server_flags); empty when its --help lists none."""
+    return {f.split("=", 1)[1] for f in flags if f.startswith(flag + "=")}
 
 
 def default_preset(flags: set) -> str:
@@ -239,6 +264,10 @@ def settings_args(preset: str, flags: set, ctx=None, gpu: bool = False, train_ct
     missing = [FLAG_FOR[a] for a in args if a in FLAG_FOR and FLAG_FOR[a] not in flags]
     if missing:
         return [], f"This llama-server does not list {', '.join(missing)} in its --help (it may be an old build)."
+    allowed = flag_values(flags, "--cache-type-k")
+    if p.get("type_k") and allowed and p["type_k"] not in allowed:  # no list (older builds): nothing to check
+        return [], (f"This llama-server does not accept {p['type_k']} for --cache-type-k; its --help lists "
+                    f"{', '.join(sorted(allowed))}.")
     return args, ""
 
 

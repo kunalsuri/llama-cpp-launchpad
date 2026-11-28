@@ -134,7 +134,8 @@ class TestCommand(Base):
 
 
 HELP = (HERE / "fixtures" / "llama_server_help.txt").read_text(encoding="utf-8")
-OLD_HELP = "-m,    --model FNAME       model path\n--port PORT                 port to listen\n"
+NEW_HELP = (HERE / "fixtures" / "llama_server_help_reconstructed.txt").read_text(encoding="utf-8")
+OLD_HELP = "-m,   --model FNAME       model path\n--port PORT                 port to listen\n"
 
 
 class TestSettings(Base):
@@ -178,6 +179,38 @@ class TestSettings(Base):
         self.assertIn("graphics card", why)
         _, why = chat_server.settings_args("nonsense", chat_server.server_flags(HELP))
         self.assertIn("Unknown setting", why)
+
+    def test_cache_type_values_are_read_even_when_the_list_wraps(self):
+        """Recent builds print 'allowed values: ...' under -ctk, wrapped at 70 columns (llama.cpp common/arg.cpp,
+        common_arg::to_string). The fixture is rebuilt from that code: q5_1 sits alone on the next line."""
+        flags = chat_server.server_flags(NEW_HELP)
+        for v in ("f32", "f16", "bf16", "f8_e4m3", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"):
+            self.assertIn(f"--cache-type-k={v}", flags)
+        self.assertIn("--cache-type-k", flags)
+        self.assertNotIn("--cache-type-k=(default:", flags, "the default line is not a value")
+        self.assertFalse([f for f in chat_server.server_flags(HELP) if f.startswith("--cache-type-k=")],
+                         "a help with no value list gives no values")
+
+    def test_long_preset_runs_when_this_build_lists_q8_0(self):
+        flags = chat_server.server_flags(NEW_HELP)
+        self.assertEqual(chat_server.settings_args("long", flags), (["-c", "32768", "-ctk", "q8_0"], ""))
+
+    def test_long_preset_is_refused_when_the_value_list_lacks_q8_0(self):
+        """Rule 3: --cache-type-k being listed is not enough; this build must accept q8_0. Say what it accepts."""
+        no_q8 = NEW_HELP.replace("f8_e4m3, q8_0, ", "f8_e4m3, ")
+        self.assertNotIn("q8_0", no_q8, "test setup: q8_0 removed from both lists")
+        args, why = chat_server.settings_args("long", chat_server.server_flags(no_q8))
+        self.assertEqual(args, [])
+        self.assertIn("q8_0", why)
+        self.assertIn("--cache-type-k", why)
+        self.assertIn("f16", why, "the reason names the values this build does accept")
+        self.assertEqual(chat_server.settings_args("short", chat_server.server_flags(no_q8)),
+                         (["-c", "4096"], ""), "presets that do not set a cache type are unaffected")
+
+    def test_long_preset_still_runs_when_help_lists_no_values(self):
+        """Older builds (and the main fixture) name -ctk without values: no list is not a refusal."""
+        self.assertEqual(chat_server.settings_args("long", chat_server.server_flags(HELP)),
+                         (["-c", "32768", "-ctk", "q8_0"], ""))
 
     def test_default_lets_llama_cpp_fit_the_model_only_when_it_can(self):
         """Builds with --fit pick a context that fits memory; older ones load the model's whole trained context
