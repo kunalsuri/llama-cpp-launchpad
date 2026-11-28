@@ -172,6 +172,15 @@ class TestSettings(Base):
         self.assertNotIn("--option", flags, "words in the description column are not flags")
         self.assertEqual(chat_server.server_flags(OLD_HELP), {"--model", "--port"})
 
+    def test_a_wrapped_description_line_that_starts_with_a_flag_is_not_a_flag(self):
+        """b12810 wraps descriptions onto indented lines, and some start with another flag's name
+        ("                --spec-ngram-*-size-n or ..."). Those are description, not this build's flags."""
+        flags = chat_server.server_flags(B12810)
+        self.assertNotIn("--spec-ngram-", flags)
+        self.assertIn("--spec-ngram-mod-n-min", flags, "the real flag of that name is still read")
+        only_described = "--port PORT                 port\n                            --made-up-flag too\n"
+        self.assertEqual(chat_server.server_flags(only_described), {"--port"})
+
     def test_each_preset_maps_to_flags(self):
         flags = chat_server.server_flags(HELP)
         args = lambda p, **kw: chat_server.settings_args(p, flags, **kw)  # noqa: E731
@@ -202,6 +211,39 @@ class TestSettings(Base):
         self.assertIn("graphics card", why)
         _, why = chat_server.settings_args("nonsense", chat_server.server_flags(HELP))
         self.assertIn("Unknown setting", why)
+
+    def test_cache_type_values_are_read_even_when_the_list_wraps(self):
+        """b12810 prints 'allowed values: ...' under -ctk on indented lines wrapped at 70 columns, so q5_1 sits
+        alone on the next line, followed by '(default: f16)' and '(env: ...)'."""
+        flags = chat_server.flag_values(chat_server.server_flags(B12810), "--cache-type-k")
+        self.assertEqual(flags, {"f32", "f16", "bf16", "f8_e4m3", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"})
+        self.assertIn("--cache-type-k", chat_server.server_flags(B12810))
+        self.assertEqual(chat_server.flag_values(chat_server.server_flags(HELP), "--cache-type-k"), set(),
+                         "a help with no value list gives no values")
+
+    def test_long_preset_runs_when_this_build_lists_q8_0(self):
+        flags = chat_server.server_flags(B12810)
+        self.assertEqual(chat_server.settings_args("long", flags), (["-c", "32768", "-ctk", "q8_0"], ""))
+
+    def test_long_preset_is_refused_when_the_value_list_lacks_q8_0(self):
+        """Rule 3: --cache-type-k being listed is not enough; this build must accept q8_0. Say what it accepts.
+        Only the -ctk list is edited: -ctv and the draft model's -ctkd/-ctvd still list q8_0, and must not count."""
+        no_q8 = B12810.replace("f8_e4m3, q8_0, ", "f8_e4m3, ", 1)
+        self.assertNotIn("q8_0", no_q8.split("--cache-type-v")[0].split("--cache-type-k TYPE")[1],
+                         "test setup: q8_0 removed from the -ctk list")
+        self.assertIn("q8_0", no_q8, "test setup: the other lists keep it")
+        args, why = chat_server.settings_args("long", chat_server.server_flags(no_q8))
+        self.assertEqual(args, [])
+        self.assertIn("q8_0", why)
+        self.assertIn("--cache-type-k", why)
+        self.assertIn("f16", why, "the reason names the values this build does accept")
+        self.assertEqual(chat_server.settings_args("short", chat_server.server_flags(no_q8)),
+                         (["-c", "4096"], ""), "presets that do not set a cache type are unaffected")
+
+    def test_long_preset_still_runs_when_help_lists_no_values(self):
+        """Older builds (and the main fixture) name -ctk without values: no list is not a refusal."""
+        self.assertEqual(chat_server.settings_args("long", chat_server.server_flags(HELP)),
+                         (["-c", "32768", "-ctk", "q8_0"], ""))
 
     def test_default_lets_llama_cpp_fit_the_model_only_when_it_can(self):
         """Builds with --fit pick a context that fits memory; older ones load the model's whole trained context
